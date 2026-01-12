@@ -1,0 +1,1341 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>בניית מערכת לסמסטר - Student Planner</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            direction: rtl;
+        }
+        
+        .navbar {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+        
+        .navbar-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .logo {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+            list-style: none;
+            align-items: center;
+        }
+        
+        .nav-links a {
+            text-decoration: none;
+            color: #333;
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+        
+        .nav-links a:hover {
+            color: #667eea;
+        }
+        
+        .chat-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 25px;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+            transition: transform 0.2s;
+        }
+        
+        .chat-btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        .section {
+            background: white;
+            border-radius: 20px;
+            padding: 3rem;
+            margin-bottom: 3rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 3px solid #667eea;
+        }
+        
+        .section-icon {
+            font-size: 2.5em;
+        }
+        
+        .section-title {
+            font-size: 2em;
+            color: #333;
+        }
+        
+        .section-subtitle {
+            color: #666;
+            margin-top: 0.5rem;
+        }
+        
+        /* Constraints Section */
+        .constraints-section {
+            background: #f8f9ff;
+            border-radius: 15px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+        
+        .constraints-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+        
+        .constraints-title {
+            font-size: 1.5em;
+            color: #333;
+            font-weight: bold;
+        }
+        
+        .add-constraint-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 20px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.3s;
+        }
+        
+        .add-constraint-btn:hover {
+            background: #5568d3;
+        }
+        
+        .constraints-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 1rem;
+        }
+        
+        .constraint-item {
+            background: white;
+            padding: 1rem;
+            border-radius: 10px;
+            border-right: 4px solid #667eea;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .constraint-info h4 {
+            color: #333;
+            margin-bottom: 0.25rem;
+        }
+        
+        .constraint-info p {
+            color: #666;
+            font-size: 0.9em;
+        }
+        
+        .constraint-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .btn-icon {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 1.2em;
+            color: #666;
+            transition: color 0.3s;
+        }
+        
+        .btn-icon:hover {
+            color: #667eea;
+        }
+        
+        /* Upload Area */
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 3rem;
+            text-align: center;
+            background: #f8f9ff;
+            transition: all 0.3s;
+            margin-bottom: 2rem;
+        }
+        
+        .upload-area.dragover {
+            border-color: #764ba2;
+            background: #e8ebff;
+        }
+        
+        .upload-icon {
+            font-size: 4em;
+            margin-bottom: 1rem;
+        }
+        
+        .upload-text {
+            font-size: 1.2em;
+            color: #666;
+            margin-bottom: 1rem;
+        }
+        
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+            margin: 20px 0;
+        }
+        
+        .file-input-button {
+            display: inline-block;
+            padding: 15px 40px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 50px;
+            cursor: pointer;
+            font-size: 1.1em;
+            font-weight: bold;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .file-input-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+        
+        .file-name {
+            margin-top: 15px;
+            color: #666;
+            font-weight: bold;
+        }
+        
+        .submit-button {
+            width: 100%;
+            padding: 18px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 50px;
+            font-size: 1.2em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+            margin-top: 20px;
+        }
+        
+        .submit-button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+        
+        .submit-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .result-section {
+            display: none;
+            margin-top: 40px;
+            padding: 30px;
+            background: #f8f9ff;
+            border-radius: 15px;
+            border: 2px solid #667eea;
+        }
+        
+        .student-info-card {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            margin-bottom: 25px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .student-info-card h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+        
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .info-item {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .info-label {
+            font-weight: bold;
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 5px;
+        }
+        
+        .info-value {
+            color: #333;
+            font-size: 1.1em;
+        }
+        
+        .courses-list {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        
+        .courses-list h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+        
+        .course-item {
+            background: #f8f9ff;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border-right: 4px solid #667eea;
+            transition: transform 0.2s, box-shadow 0.2s;
+            position: relative;
+        }
+        
+        .course-item:hover {
+            transform: translateX(-5px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+        }
+        
+        .course-actions {
+            position: absolute;
+            left: 15px;
+            top: 15px;
+            display: flex;
+            gap: 5px;
+        }
+        
+        .btn-edit, .btn-delete {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 5px 10px;
+            cursor: pointer;
+            font-size: 0.85em;
+            transition: all 0.2s;
+        }
+        
+        .btn-edit:hover {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+        
+        .btn-delete:hover {
+            background: #f44336;
+            color: white;
+            border-color: #f44336;
+        }
+        
+        .course-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 10px;
+        }
+        
+        .course-name {
+            font-weight: bold;
+            color: #333;
+            font-size: 1.1em;
+            flex: 1;
+            direction: rtl;
+            unicode-bidi: bidi-override;
+        }
+        
+        .course-number {
+            color: #666;
+            font-size: 0.9em;
+            margin-right: 10px;
+        }
+        
+        .course-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 10px;
+            margin-top: 10px;
+            font-size: 0.95em;
+        }
+        
+        .course-detail {
+            display: flex;
+            align-items: center;
+        }
+        
+        .course-detail-label {
+            color: #666;
+            margin-left: 5px;
+        }
+        
+        .course-detail-value {
+            color: #333;
+            font-weight: 500;
+        }
+        
+        .grade-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 0.9em;
+            direction: ltr;
+            unicode-bidi: embed;
+            text-align: center;
+            min-width: 50px;
+        }
+        
+        .grade-excellent {
+            background: #4caf50;
+            color: white;
+        }
+        
+        .grade-good {
+            background: #8bc34a;
+            color: white;
+        }
+        
+        .grade-average {
+            background: #ffc107;
+            color: #333;
+        }
+        
+        .grade-low {
+            background: #ff9800;
+            color: white;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 15px;
+            font-size: 0.85em;
+            margin-right: 5px;
+        }
+        
+        .status-passed {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        
+        .status-exempt {
+            background: #f3e5f5;
+            color: #7b1fa2;
+        }
+        
+        .stats-summary {
+            display: flex;
+            gap: 20px;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 2px solid #e0e0e0;
+        }
+        
+        .stat-item {
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .stat-label {
+            font-size: 0.85em;
+            color: #666;
+            margin-top: 5px;
+        }
+        
+        .error-message, .success-message {
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        
+        .edit-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            right: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .edit-modal.active {
+            display: flex;
+        }
+        
+        .edit-modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #666;
+            font-weight: bold;
+        }
+        
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 1em;
+        }
+        
+        .modal-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        .btn-save, .btn-cancel {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 5px;
+            font-size: 1em;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        .btn-save {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-cancel {
+            background: #ddd;
+            color: #333;
+        }
+        
+        /* Floating Chat Widget */
+        .chat-widget {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            z-index: 1000;
+        }
+        
+        .chat-toggle {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            font-size: 1.5em;
+            cursor: pointer;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.3);
+            transition: transform 0.3s;
+        }
+        
+        .chat-toggle:hover {
+            transform: scale(1.1);
+        }
+        
+        .chat-popup {
+            position: fixed;
+            bottom: 90px;
+            left: 20px;
+            width: 350px;
+            height: 500px;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            display: none;
+            flex-direction: column;
+            z-index: 1001;
+        }
+        
+        .chat-popup.active {
+            display: flex;
+        }
+        
+        .chat-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem;
+            border-radius: 20px 20px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .chat-header-title {
+            font-weight: bold;
+        }
+        
+        .chat-close {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 1.5em;
+            cursor: pointer;
+        }
+        
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        
+        .message {
+            padding: 0.75rem;
+            border-radius: 10px;
+            max-width: 80%;
+            font-size: 0.9em;
+        }
+        
+        .message.user {
+            background: #667eea;
+            color: white;
+            align-self: flex-end;
+        }
+        
+        .message.assistant {
+            background: #f0f0f0;
+            color: #333;
+            align-self: flex-start;
+        }
+        
+        .chat-input-container {
+            padding: 1rem;
+            border-top: 1px solid #e0e0e0;
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .chat-input {
+            flex: 1;
+            padding: 0.75rem;
+            border: 1px solid #e0e0e0;
+            border-radius: 20px;
+            font-size: 0.9em;
+            outline: none;
+        }
+        
+        .chat-send-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 0.75rem 1rem;
+            border-radius: 20px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        @media (max-width: 768px) {
+            .chat-popup {
+                width: calc(100% - 40px);
+                left: 20px;
+                right: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="logo">🎓 יועץ אקדמי חכם</div>
+            <ul class="nav-links">
+                <li><a href="/">יועץ אקדמי</a></li>
+                <li><a href="/semester">בניית מערכת</a></li>
+                <li><button class="chat-btn" onclick="toggleChat()">💬 צ'אט</button></li>
+            </ul>
+        </div>
+    </nav>
+    
+    <div class="container">
+        <section class="section">
+            <div class="section-header">
+                <div class="section-icon">📚</div>
+                <div>
+                    <h2 class="section-title">בניית מערכת לסמסטר</h2>
+                    <p class="section-subtitle">העלה גליון ציונים ובנה מערכת קורסים מומלצת</p>
+                </div>
+            </div>
+            
+            <!-- Constraints Section -->
+            <div class="constraints-section">
+                <div class="constraints-header">
+                    <h3 class="constraints-title">אילוצים קבועים למערכת</h3>
+                    <button class="add-constraint-btn" onclick="addConstraint()">+ הוסף אילוץ</button>
+                </div>
+                <div class="constraints-list" id="constraintsList">
+                    <div class="constraint-item">
+                        <div class="constraint-info">
+                            <h4>אימון</h4>
+                            <p>ימי ראשון ורביעי, 18:00-20:00</p>
+                        </div>
+                        <div class="constraint-actions">
+                            <button class="btn-icon" onclick="editConstraint(0)">✏️</button>
+                            <button class="btn-icon" onclick="deleteConstraint(0)">🗑️</button>
+                        </div>
+                    </div>
+                    <div class="constraint-item">
+                        <div class="constraint-info">
+                            <h4>עבודה</h4>
+                            <p>ימי שני וחמישי, 16:00-20:00</p>
+                        </div>
+                        <div class="constraint-actions">
+                            <button class="btn-icon" onclick="editConstraint(1)">✏️</button>
+                            <button class="btn-icon" onclick="deleteConstraint(1)">🗑️</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="upload-area" id="uploadSection">
+                <div class="upload-icon">📄</div>
+                <div class="upload-text">העלה גליון ציונים (PDF או תמונה)</div>
+                <div class="file-input-wrapper">
+                    <input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png" style="display: none;">
+                    <label for="fileInput" class="file-input-button">בחר קובץ</label>
+                </div>
+                <div class="file-name" id="fileName"></div>
+                <button class="submit-button" id="submitButton" onclick="uploadFile()" disabled>העלה ונתח</button>
+                <div class="loading" id="loading">
+                    <div class="spinner"></div>
+                    <p>מעבד את הקובץ...</p>
+                </div>
+                <div class="error-message" id="errorMessage" style="display: none; color: #f44336; margin-top: 10px;"></div>
+                <div class="success-message" id="successMessage" style="display: none; color: #4caf50; margin-top: 10px;"></div>
+            </div>
+            
+            <div id="resultSection" class="result-section" style="display: none;">
+                <h2>📊 תוצאות ניתוח</h2>
+                <div id="studentInfoCard"></div>
+                <div id="coursesList"></div>
+                <div id="statsSummary" class="stats-summary"></div>
+                <button class="submit-button" onclick="saveToDatabase()" style="margin-top: 20px;">💾 שמור במאגר (עם דריסה אם קיים)</button>
+            </div>
+        </section>
+    </div>
+    
+    <!-- Floating Chat Widget -->
+    <div class="chat-widget">
+        <button class="chat-toggle" onclick="toggleChat()">💬</button>
+        <div class="chat-popup" id="chatPopup">
+            <div class="chat-header">
+                <div class="chat-header-title">צ'אט מותאם</div>
+                <button class="chat-close" onclick="toggleChat()">×</button>
+            </div>
+            <div class="chat-messages" id="chatMessages">
+                <div class="message assistant">
+                    👋 שלום! אני כאן לעזור לך. שאל אותי על זכויות, נהלים, קורסים ועוד...
+                </div>
+            </div>
+            <div class="chat-input-container">
+                <input type="text" class="chat-input" id="chatInput" placeholder="כתוב שאלה..." onkeypress="handleChatKeyPress(event)">
+                <button class="chat-send-btn" onclick="sendChatMessage()">שלח</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function toggleChat() {
+            const popup = document.getElementById('chatPopup');
+            popup.classList.toggle('active');
+        }
+        
+        function sendChatMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (!message) return;
+            
+            const messagesDiv = document.getElementById('chatMessages');
+            
+            // Add user message
+            const userMsg = document.createElement('div');
+            userMsg.className = 'message user';
+            userMsg.textContent = message;
+            messagesDiv.appendChild(userMsg);
+            
+            input.value = '';
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            
+            // Simulate assistant response (will be replaced with real API call)
+            setTimeout(() => {
+                const assistantMsg = document.createElement('div');
+                assistantMsg.className = 'message assistant';
+                assistantMsg.textContent = 'זהו מקום לתשובה מהצ\'אט. הקישוריות לבאקאנד תתווסף בהמשך.';
+                messagesDiv.appendChild(assistantMsg);
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            }, 500);
+        }
+        
+        function handleChatKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendChatMessage();
+            }
+        }
+        
+        let parsedData = null;
+        let currentEditIndex = -1;
+        
+        const fileInput = document.getElementById('fileInput');
+        const fileName = document.getElementById('fileName');
+        const uploadSection = document.getElementById('uploadSection');
+        const submitButton = document.getElementById('submitButton');
+        const loading = document.getElementById('loading');
+        const errorMessage = document.getElementById('errorMessage');
+        const successMessage = document.getElementById('successMessage');
+        const resultSection = document.getElementById('resultSection');
+        const studentInfoCard = document.getElementById('studentInfoCard');
+        const coursesList = document.getElementById('coursesList');
+        const statsSummary = document.getElementById('statsSummary');
+        
+        // File input change handler
+        fileInput.addEventListener('change', function(e) {
+            if (e.target.files.length > 0) {
+                fileName.textContent = 'קובץ נבחר: ' + e.target.files[0].name;
+                submitButton.disabled = false;
+            }
+        });
+        
+        // Drag and drop handlers
+        uploadSection.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            uploadSection.classList.add('dragover');
+        });
+        
+        uploadSection.addEventListener('dragleave', function(e) {
+            e.preventDefault();
+            uploadSection.classList.remove('dragover');
+        });
+        
+        uploadSection.addEventListener('drop', function(e) {
+            e.preventDefault();
+            uploadSection.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                fileInput.files = e.dataTransfer.files;
+                fileName.textContent = 'קובץ נבחר: ' + e.dataTransfer.files[0].name;
+                submitButton.disabled = false;
+            }
+        });
+        
+        async function uploadFile() {
+            const file = fileInput.files[0];
+            if (!file) {
+                showError('אנא בחר קובץ תחילה');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            // Show loading, hide other elements
+            loading.style.display = 'block';
+            errorMessage.style.display = 'none';
+            successMessage.style.display = 'none';
+            resultSection.style.display = 'none';
+            submitButton.disabled = true;
+            
+            try {
+                const response = await fetch('/api/upload-transcript', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'שגיאה בעיבוד הקובץ');
+                }
+                
+                parsedData = await response.json();
+                displayResult(parsedData);
+                showSuccess('הקובץ עובד בהצלחה!');
+                
+            } catch (error) {
+                showError('שגיאה: ' + error.message);
+            } finally {
+                loading.style.display = 'none';
+                submitButton.disabled = false;
+            }
+        }
+        
+        function displayResult(data) {
+            // Display student info
+            const studentInfo = data.student_info;
+            studentInfoCard.innerHTML = `
+                <div class="student-info-card">
+                    <h3>👤 פרטי סטודנט</h3>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <span class="info-label">שם:</span>
+                            <span class="info-value">${studentInfo.name || 'לא זוהה'}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">תעודת זהות:</span>
+                            <span class="info-value">${studentInfo.id_number || 'לא זוהה'}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">פקולטה:</span>
+                            <span class="info-value">${studentInfo.faculty || 'לא זוהה'}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">מסלול לימודים:</span>
+                            <span class="info-value">${studentInfo.study_track || 'לא זוהה'}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">ממוצע מצטבר:</span>
+                            <span class="info-value">${studentInfo.cumulative_average ? studentInfo.cumulative_average.toFixed(2) : 'לא זוהה'}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">אחוזי הצלחה:</span>
+                            <span class="info-value">${studentInfo.success_rate ? studentInfo.success_rate.toFixed(1) + '%' : 'לא זוהה'}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Display courses
+            const courses = data.courses || [];
+            if (courses.length > 0) {
+                coursesList.innerHTML = `
+                    <div class="courses-list">
+                        <h3>📚 קורסים (${courses.length})</h3>
+                        ${courses.map((course, index) => renderCourse(course, index)).join('')}
+                    </div>
+                `;
+            } else {
+                coursesList.innerHTML = `
+                    <div class="courses-list">
+                        <h3>📚 קורסים</h3>
+                        <p style="color: #666; text-align: center; padding: 20px;">לא נמצאו קורסים</p>
+                    </div>
+                `;
+            }
+            
+            // Display statistics
+            const stats = calculateStats(courses);
+            statsSummary.innerHTML = `
+                <div class="stat-item">
+                    <div class="stat-value">${stats.totalCourses}</div>
+                    <div class="stat-label">סה"כ קורסים</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${stats.totalCredits.toFixed(1)}</div>
+                    <div class="stat-label">נקודות זכות</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${stats.passedCourses}</div>
+                    <div class="stat-label">קורסים שעברו</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${stats.averageGrade ? stats.averageGrade.toFixed(1) : '-'}</div>
+                    <div class="stat-label">ממוצע ציונים</div>
+                </div>
+            `;
+            
+            resultSection.style.display = 'block';
+        }
+        
+        function renderCourse(course, index) {
+            const grade = course.grade;
+            const gradeClass = getGradeClass(grade);
+            let gradeDisplay = '-';
+            
+            // Always show grade if available (including 0)
+            if (grade !== null && grade !== undefined) {
+                if (grade > 0) {
+                    gradeDisplay = `${Math.round(grade)}`;
+                } else if (grade === 0) {
+                    gradeDisplay = '0';
+                }
+            }
+            
+            // If no numeric grade, check for status in notes
+            if (gradeDisplay === '-' && course.notes) {
+                if (course.notes.includes('עובר')) {
+                    gradeDisplay = 'עובר';
+                } else if (course.notes.includes('פטור')) {
+                    gradeDisplay = 'פטור';
+                }
+            }
+            
+            return `
+                <div class="course-item" data-index="${index}" dir="rtl">
+                    <div class="course-actions">
+                        <button class="btn-edit" onclick="editCourse(${index})">✏️ ערוך</button>
+                        <button class="btn-delete" onclick="deleteCourse(${index})">🗑️ מחק</button>
+                    </div>
+                    <div class="course-header">
+                        <div style="direction: rtl; text-align: right;">
+                            <span class="course-name" style="direction: rtl; unicode-bidi: bidi-override;">${course.course_name || 'לא זוהה'}</span>
+                            ${course.course_number ? `<span class="course-number">#${course.course_number}</span>` : ''}
+                        </div>
+                        <span class="grade-badge ${gradeClass || ''}" style="direction: ltr; unicode-bidi: embed;">${gradeDisplay}</span>
+                    </div>
+                    <div class="course-details">
+                        ${course.credit_points !== null && course.credit_points !== undefined ? `
+                            <div class="course-detail">
+                                <span class="course-detail-value">${course.credit_points}</span>
+                                <span class="course-detail-label">נקודות זכות</span>
+                            </div>
+                        ` : ''}
+                        ${course.semester ? `
+                            <div class="course-detail">
+                                <span class="course-detail-value">${course.semester}</span>
+                                <span class="course-detail-label">סמסטר</span>
+                            </div>
+                        ` : ''}
+                        ${course.year ? `
+                            <div class="course-detail">
+                                <span class="course-detail-value">${course.year}</span>
+                                <span class="course-detail-label">שנה</span>
+                            </div>
+                        ` : ''}
+                        ${course.notes ? `
+                            <div class="course-detail">
+                                <span class="status-badge status-${course.notes.includes('פטור') ? 'exempt' : 'passed'}">${course.notes}</span>
+                            </div>
+                        ` : ''}
+                        ${course.retake_count > 0 ? `
+                            <div class="course-detail">
+                                <span class="course-detail-label">מועד ב (${course.retake_count})</span>
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        }
+        
+        function editCourse(index) {
+            if (!parsedData || !parsedData.courses) return;
+            const course = parsedData.courses[index];
+            if (!course) return;
+            
+            currentEditIndex = index;
+            
+            // Create or update edit modal
+            let modal = document.getElementById('editModal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'editModal';
+                modal.className = 'edit-modal';
+                modal.innerHTML = `
+                    <div class="edit-modal-content">
+                        <h3>עריכת קורס</h3>
+                        <form id="editCourseForm">
+                            <div class="form-group">
+                                <label>שם קורס:</label>
+                                <input type="text" id="editCourseName" required>
+                            </div>
+                            <div class="form-group">
+                                <label>מספר קורס:</label>
+                                <input type="text" id="editCourseNumber">
+                            </div>
+                            <div class="form-group">
+                                <label>נקודות זכות:</label>
+                                <input type="number" step="0.5" id="editCreditPoints">
+                            </div>
+                            <div class="form-group">
+                                <label>ציון:</label>
+                                <input type="number" id="editGrade" min="0" max="100">
+                            </div>
+                            <div class="form-group">
+                                <label>סמסטר:</label>
+                                <select id="editSemester">
+                                    <option value="">בחר סמסטר</option>
+                                    <option value="חורף">חורף</option>
+                                    <option value="קיץ">קיץ</option>
+                                    <option value="אביב">אביב</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>שנה:</label>
+                                <input type="number" id="editYear" min="2000" max="2100">
+                            </div>
+                            <div class="form-group">
+                                <label>הערות:</label>
+                                <textarea id="editNotes"></textarea>
+                            </div>
+                            <div class="modal-buttons">
+                                <button type="submit" class="btn-save">שמור</button>
+                                <button type="button" class="btn-cancel" onclick="closeEditModal()">ביטול</button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+                
+                // Handle form submission
+                document.getElementById('editCourseForm').addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    saveEditedCourse();
+                });
+                
+                // Close on background click
+                modal.addEventListener('click', function(e) {
+                    if (e.target === modal) {
+                        closeEditModal();
+                    }
+                });
+            }
+            
+            // Fill form
+            document.getElementById('editCourseName').value = course.course_name || '';
+            document.getElementById('editCourseNumber').value = course.course_number || '';
+            document.getElementById('editCreditPoints').value = course.credit_points || '';
+            document.getElementById('editGrade').value = course.grade || '';
+            document.getElementById('editSemester').value = course.semester || '';
+            document.getElementById('editYear').value = course.year || '';
+            document.getElementById('editNotes').value = course.notes || '';
+            
+            // Show modal
+            modal.classList.add('active');
+        }
+        
+        function deleteCourse(index) {
+            if (!parsedData || !parsedData.courses) return;
+            if (!confirm('האם אתם בטוחים שברצונכם למחוק קורס זה?')) return;
+            
+            parsedData.courses.splice(index, 1);
+            displayResult(parsedData);
+        }
+        
+        function closeEditModal() {
+            const modal = document.getElementById('editModal');
+            if (modal) {
+                modal.classList.remove('active');
+            }
+            currentEditIndex = -1;
+        }
+        
+        function saveEditedCourse() {
+            if (currentEditIndex < 0 || !parsedData || !parsedData.courses) return;
+            
+            const course = parsedData.courses[currentEditIndex];
+            course.course_name = document.getElementById('editCourseName').value;
+            course.course_number = document.getElementById('editCourseNumber').value || null;
+            const creditPoints = document.getElementById('editCreditPoints').value;
+            course.credit_points = creditPoints ? parseFloat(creditPoints) : null;
+            const grade = document.getElementById('editGrade').value;
+            course.grade = grade ? parseFloat(grade) : null;
+            course.semester = document.getElementById('editSemester').value || null;
+            const year = document.getElementById('editYear').value;
+            course.year = year ? parseInt(year) : null;
+            course.notes = document.getElementById('editNotes').value || null;
+            
+            closeEditModal();
+            displayResult(parsedData);
+        }
+        
+        function getGradeClass(grade) {
+            if (!grade) return '';
+            if (grade >= 90) return 'grade-excellent';
+            if (grade >= 80) return 'grade-good';
+            if (grade >= 70) return 'grade-average';
+            return 'grade-low';
+        }
+        
+        function calculateStats(courses) {
+            const stats = {
+                totalCourses: courses.length,
+                totalCredits: 0,
+                passedCourses: 0,
+                averageGrade: null,
+                gradesSum: 0,
+                gradesCount: 0
+            };
+            
+            courses.forEach(course => {
+                if (course.credit_points) {
+                    stats.totalCredits += course.credit_points;
+                }
+                if (course.is_passed) {
+                    stats.passedCourses++;
+                }
+                if (course.grade && course.grade > 0) {
+                    stats.gradesSum += course.grade;
+                    stats.gradesCount++;
+                }
+            });
+            
+            if (stats.gradesCount > 0) {
+                stats.averageGrade = stats.gradesSum / stats.gradesCount;
+            }
+            
+            return stats;
+        }
+        
+        async function saveToDatabase() {
+            if (!parsedData) {
+                showError('אין נתונים לשמירה');
+                return;
+            }
+            
+            loading.style.display = 'block';
+            submitButton.disabled = true;
+            
+            try {
+                const userData = {
+                    name: parsedData.student_info.name || '',
+                    id_number: parsedData.student_info.id_number || '',
+                    faculty: parsedData.student_info.faculty,
+                    study_track: parsedData.student_info.study_track,
+                    cumulative_average: parsedData.student_info.cumulative_average,
+                    success_rate: parsedData.student_info.success_rate,
+                    current_semester: parsedData.student_info.current_semester,
+                    current_year: parsedData.student_info.current_year,
+                    courses: parsedData.courses
+                };
+                
+                const response = await fetch('/api/save-user', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(userData)
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'שגיאה בשמירה');
+                }
+                
+                const result = await response.json();
+                const message = result.is_update 
+                    ? `הנתונים עודכנו בהצלחה במאגר! (משתמש קיים עודכן - דריסה)` 
+                    : `הנתונים נשמרו בהצלחה במאגר! (משתמש חדש נוצר)`;
+                showSuccess(message);
+                
+            } catch (error) {
+                showError('שגיאה בשמירה: ' + error.message);
+            } finally {
+                loading.style.display = 'none';
+                submitButton.disabled = false;
+            }
+        }
+        
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.style.display = 'block';
+            successMessage.style.display = 'none';
+        }
+        
+        function showSuccess(message) {
+            successMessage.textContent = message;
+            successMessage.style.display = 'block';
+            errorMessage.style.display = 'none';
+        }
+        
+        function addConstraint() {
+            alert('פתיחת טופס להוספת אילוץ - יתווסף בהמשך');
+        }
+        
+        function editConstraint(index) {
+            alert('פתיחת טופס לעריכת אילוץ - יתווסף בהמשך');
+        }
+        
+        function deleteConstraint(index) {
+            if (confirm('האם אתה בטוח שברצונך למחוק אילוץ זה?')) {
+                alert('מחיקת אילוץ - יתווסף בהמשך');
+            }
+        }
+    </script>
+</body>
+</html>
+

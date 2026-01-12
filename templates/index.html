@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>יועץ אקדמי חכם - Student Planner</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            direction: rtl;
+        }
+        
+        .navbar {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+        
+        .navbar-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .logo {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+            list-style: none;
+            align-items: center;
+        }
+        
+        .nav-links a {
+            text-decoration: none;
+            color: #333;
+            font-weight: 500;
+            transition: color 0.3s;
+            cursor: pointer;
+        }
+        
+        .nav-links a:hover {
+            color: #667eea;
+        }
+        
+        .chat-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 25px;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+            transition: transform 0.2s;
+        }
+        
+        .chat-btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        .section {
+            background: white;
+            border-radius: 20px;
+            padding: 3rem;
+            margin-bottom: 3rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 3px solid #667eea;
+        }
+        
+        .section-icon {
+            font-size: 2.5em;
+        }
+        
+        .section-title {
+            font-size: 2em;
+            color: #333;
+        }
+        
+        .section-subtitle {
+            color: #666;
+            margin-top: 0.5rem;
+        }
+        
+        /* Constraints Section */
+        .constraints-section {
+            background: #f8f9ff;
+            border-radius: 15px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+        
+        .constraints-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+        
+        .constraints-title {
+            font-size: 1.5em;
+            color: #333;
+            font-weight: bold;
+        }
+        
+        .add-constraint-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 20px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.3s;
+        }
+        
+        .add-constraint-btn:hover {
+            background: #5568d3;
+        }
+        
+        .constraints-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 1rem;
+        }
+        
+        .constraint-item {
+            background: white;
+            padding: 1rem;
+            border-radius: 10px;
+            border-right: 4px solid #667eea;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .constraint-info h4 {
+            color: #333;
+            margin-bottom: 0.25rem;
+        }
+        
+        .constraint-info p {
+            color: #666;
+            font-size: 0.9em;
+        }
+        
+        .constraint-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .btn-icon {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 1.2em;
+            color: #666;
+            transition: color 0.3s;
+        }
+        
+        .btn-icon:hover {
+            color: #667eea;
+        }
+        
+        /* Weekly Schedule */
+        .week-navigation {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding: 1rem;
+            background: #f8f9ff;
+            border-radius: 15px;
+        }
+        
+        .week-nav-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 20px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.3s;
+        }
+        
+        .week-nav-btn:hover {
+            background: #5568d3;
+        }
+        
+        .week-title {
+            font-size: 1.5em;
+            color: #333;
+            font-weight: bold;
+        }
+        
+        .week-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 1rem;
+        }
+        
+        .day-column {
+            background: #f8f9ff;
+            border-radius: 10px;
+            padding: 1rem;
+            min-height: 400px;
+        }
+        
+        .day-header {
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid #667eea;
+            text-align: center;
+        }
+        
+        .time-block {
+            background: white;
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            border-radius: 8px;
+            border-right: 4px solid #667eea;
+            font-size: 0.9em;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .time-block:hover {
+            transform: translateX(-3px);
+        }
+        
+        .time-block.study {
+            border-right-color: #4caf50;
+        }
+        
+        .time-block.assignment {
+            border-right-color: #ff9800;
+        }
+        
+        .time-block.class {
+            border-right-color: #2196f3;
+        }
+        
+        .time-block.constraint {
+            border-right-color: #9c27b0;
+            background: #f3e5f5;
+        }
+        
+        /* Assignments List */
+        .assignments-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        
+        .assignment-item {
+            background: #f8f9ff;
+            padding: 1.5rem;
+            border-radius: 10px;
+            border-right: 4px solid #ff9800;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .assignment-item.urgent {
+            border-right-color: #f44336;
+        }
+        
+        .assignment-info h4 {
+            color: #333;
+            margin-bottom: 0.5rem;
+        }
+        
+        .assignment-meta {
+            color: #666;
+            font-size: 0.9em;
+        }
+        
+        .assignment-date {
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        /* Grades Overview */
+        .grades-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+        }
+        
+        .grade-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2rem;
+            border-radius: 15px;
+            text-align: center;
+        }
+        
+        .grade-value {
+            font-size: 3em;
+            font-weight: bold;
+            margin: 1rem 0;
+        }
+        
+        .grade-label {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+        
+        /* Tabs */
+        .advisor-tabs {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        
+        .tab {
+            padding: 1rem 2rem;
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            font-size: 1.1em;
+            cursor: pointer;
+            color: #666;
+            transition: all 0.3s;
+        }
+        
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+            font-weight: bold;
+        }
+        
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.3s;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        /* Floating Chat Widget */
+        .chat-widget {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            z-index: 1000;
+        }
+        
+        .chat-toggle {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            font-size: 1.5em;
+            cursor: pointer;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.3);
+            transition: transform 0.3s;
+        }
+        
+        .chat-toggle:hover {
+            transform: scale(1.1);
+        }
+        
+        .chat-popup {
+            position: fixed;
+            bottom: 90px;
+            left: 20px;
+            width: 350px;
+            height: 500px;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            display: none;
+            flex-direction: column;
+            z-index: 1001;
+        }
+        
+        .chat-popup.active {
+            display: flex;
+        }
+        
+        .chat-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem;
+            border-radius: 20px 20px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .chat-header-title {
+            font-weight: bold;
+        }
+        
+        .chat-close {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 1.5em;
+            cursor: pointer;
+        }
+        
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        
+        .message {
+            padding: 0.75rem;
+            border-radius: 10px;
+            max-width: 80%;
+            font-size: 0.9em;
+        }
+        
+        .message.user {
+            background: #667eea;
+            color: white;
+            align-self: flex-end;
+        }
+        
+        .message.assistant {
+            background: #f0f0f0;
+            color: #333;
+            align-self: flex-start;
+        }
+        
+        .chat-input-container {
+            padding: 1rem;
+            border-top: 1px solid #e0e0e0;
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .chat-input {
+            flex: 1;
+            padding: 0.75rem;
+            border: 1px solid #e0e0e0;
+            border-radius: 20px;
+            font-size: 0.9em;
+            outline: none;
+        }
+        
+        .chat-send-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 0.75rem 1rem;
+            border-radius: 20px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        @media (max-width: 768px) {
+            .week-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .chat-popup {
+                width: calc(100% - 40px);
+                left: 20px;
+                right: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="logo">🎓 יועץ אקדמי חכם</div>
+            <ul class="nav-links">
+                <li><a href="/">יועץ אקדמי</a></li>
+                <li><a href="/semester">בניית מערכת</a></li>
+                <li><button class="chat-btn" onclick="toggleChat()">💬 צ'אט</button></li>
+            </ul>
+        </div>
+    </nav>
+    
+    <div class="container">
+        <!-- Constraints Section -->
+        <section class="section">
+            <div class="section-header">
+                <div class="section-icon">⚙️</div>
+                <div>
+                    <h2 class="section-title">אילוצים קבועים</h2>
+                    <p class="section-subtitle">הגדר אילוצים קבועים לתכנון המערכת והלו"ז השבועי</p>
+                </div>
+            </div>
+            
+            <div class="constraints-section">
+                <div class="constraints-header">
+                    <h3 class="constraints-title">האילוצים שלי</h3>
+                    <button class="add-constraint-btn" onclick="addConstraint()">+ הוסף אילוץ</button>
+                </div>
+                <div class="constraints-list" id="constraintsList">
+                    <div class="constraint-item">
+                        <div class="constraint-info">
+                            <h4>אימון</h4>
+                            <p>ימי ראשון ורביעי, 18:00-20:00</p>
+                        </div>
+                        <div class="constraint-actions">
+                            <button class="btn-icon" onclick="editConstraint(0)">✏️</button>
+                            <button class="btn-icon" onclick="deleteConstraint(0)">🗑️</button>
+                        </div>
+                    </div>
+                    <div class="constraint-item">
+                        <div class="constraint-info">
+                            <h4>עבודה</h4>
+                            <p>ימי שני וחמישי, 16:00-20:00</p>
+                        </div>
+                        <div class="constraint-actions">
+                            <button class="btn-icon" onclick="editConstraint(1)">✏️</button>
+                            <button class="btn-icon" onclick="deleteConstraint(1)">🗑️</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Academic Advisor Section -->
+        <section class="section">
+            <div class="section-header">
+                <div class="section-icon">🎯</div>
+                <div>
+                    <h2 class="section-title">יועץ אקדמי</h2>
+                    <p class="section-subtitle">תכנון שבועי, הגשות, ציונים והתקדמות</p>
+                </div>
+            </div>
+            
+            <div class="advisor-tabs">
+                <button class="tab active" onclick="switchTab('schedule')">לו"ז שבועי</button>
+                <button class="tab" onclick="switchTab('assignments')">הגשות</button>
+                <button class="tab" onclick="switchTab('grades')">ציונים</button>
+                <button class="tab" onclick="switchTab('progress')">התקדמות</button>
+            </div>
+            
+            <!-- Weekly Schedule Tab -->
+            <div id="schedule" class="tab-content active">
+                <div class="week-navigation">
+                    <button class="week-nav-btn" onclick="changeWeek(-1)">← שבוע קודם</button>
+                    <div class="week-title" id="weekTitle">שבוע נוכחי: 13-19 בינואר 2025</div>
+                    <button class="week-nav-btn" onclick="changeWeek(1)">שבוע הבא →</button>
+                </div>
+                
+                <div class="week-grid">
+                    <div class="day-column">
+                        <div class="day-header">ראשון</div>
+                        <div class="time-block constraint">אימון<br><small>18:00-20:00</small></div>
+                    </div>
+                    <div class="day-column">
+                        <div class="day-header">שני</div>
+                        <div class="time-block class">הרצאה - מבני נתונים<br><small>09:00-11:00</small></div>
+                        <div class="time-block constraint">עבודה<br><small>16:00-20:00</small></div>
+                    </div>
+                    <div class="day-column">
+                        <div class="day-header">שלישי</div>
+                        <div class="time-block class">תרגול - אלגברה<br><small>08:00-10:00</small></div>
+                        <div class="time-block study">למידה - מבני נתונים<br><small>14:00-16:00</small></div>
+                    </div>
+                    <div class="day-column">
+                        <div class="day-header">רביעי</div>
+                        <div class="time-block constraint">אימון<br><small>18:00-20:00</small></div>
+                    </div>
+                    <div class="day-column">
+                        <div class="day-header">חמישי</div>
+                        <div class="time-block class">מעבדה - מבני נתונים<br><small>10:00-13:00</small></div>
+                        <div class="time-block constraint">עבודה<br><small>16:00-20:00</small></div>
+                    </div>
+                    <div class="day-column">
+                        <div class="day-header">שישי</div>
+                        <div class="time-block study">למידה - אלגברה<br><small>09:00-12:00</small></div>
+                    </div>
+                    <div class="day-column">
+                        <div class="day-header">שבת</div>
+                        <div class="time-block">יום חופשי</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Assignments Tab -->
+            <div id="assignments" class="tab-content">
+                <div class="assignments-list">
+                    <div class="assignment-item urgent">
+                        <div class="assignment-info">
+                            <h4>מטלת בית - מבני נתונים</h4>
+                            <div class="assignment-meta">קורס: מבני נתונים ואלגוריתמים | 4 נקודות זכות</div>
+                        </div>
+                        <div class="assignment-date">דדליין: 15.1.2025</div>
+                    </div>
+                    <div class="assignment-item">
+                        <div class="assignment-info">
+                            <h4>בחינה - אלגברה</h4>
+                            <div class="assignment-meta">קורס: אלגברה ליניארית | 5 נקודות זכות</div>
+                        </div>
+                        <div class="assignment-date">תאריך: 20.1.2025</div>
+                    </div>
+                    <div class="assignment-item">
+                        <div class="assignment-info">
+                            <h4>פרויקט - הנדסת תוכנה</h4>
+                            <div class="assignment-meta">קורס: הנדסת תוכנה | 3.5 נקודות זכות</div>
+                        </div>
+                        <div class="assignment-date">דדליין: 25.1.2025</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Grades Tab -->
+            <div id="grades" class="tab-content">
+                <div class="grades-grid">
+                    <div class="grade-card">
+                        <div class="grade-label">ממוצע מצטבר</div>
+                        <div class="grade-value">85.5</div>
+                    </div>
+                    <div class="grade-card">
+                        <div class="grade-label">ממוצע סמסטר נוכחי</div>
+                        <div class="grade-value">87.2</div>
+                    </div>
+                    <div class="grade-card">
+                        <div class="grade-label">נקודות זכות</div>
+                        <div class="grade-value">120</div>
+                    </div>
+                    <div class="grade-card">
+                        <div class="grade-label">אחוזי הצלחה</div>
+                        <div class="grade-value">95%</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Progress Tab -->
+            <div id="progress" class="tab-content">
+                <p style="text-align: center; color: #666; padding: 3rem;">
+                    כאן תוצג התקדמות בקורסים, זמן למידה, מטרות ועוד...
+                </p>
+            </div>
+        </section>
+    </div>
+    
+    <!-- Floating Chat Widget -->
+    <div class="chat-widget">
+        <button class="chat-toggle" onclick="toggleChat()">💬</button>
+        <div class="chat-popup" id="chatPopup">
+            <div class="chat-header">
+                <div class="chat-header-title">צ'אט מותאם</div>
+                <button class="chat-close" onclick="toggleChat()">×</button>
+            </div>
+            <div class="chat-messages" id="chatMessages">
+                <div class="message assistant">
+                    👋 שלום! אני כאן לעזור לך. שאל אותי על זכויות, נהלים, קורסים ועוד...
+                </div>
+            </div>
+            <div class="chat-input-container">
+                <input type="text" class="chat-input" id="chatInput" placeholder="כתוב שאלה..." onkeypress="handleChatKeyPress(event)">
+                <button class="chat-send-btn" onclick="sendChatMessage()">שלח</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let currentWeek = 0; // 0 = current week, 1 = next week, -1 = previous week
+        
+        function toggleChat() {
+            const popup = document.getElementById('chatPopup');
+            popup.classList.toggle('active');
+        }
+        
+        function sendChatMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (!message) return;
+            
+            const messagesDiv = document.getElementById('chatMessages');
+            
+            // Add user message
+            const userMsg = document.createElement('div');
+            userMsg.className = 'message user';
+            userMsg.textContent = message;
+            messagesDiv.appendChild(userMsg);
+            
+            input.value = '';
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            
+            // Simulate assistant response (will be replaced with real API call)
+            setTimeout(() => {
+                const assistantMsg = document.createElement('div');
+                assistantMsg.className = 'message assistant';
+                assistantMsg.textContent = 'זהו מקום לתשובה מהצ\'אט. הקישוריות לבאקאנד תתווסף בהמשך.';
+                messagesDiv.appendChild(assistantMsg);
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            }, 500);
+        }
+        
+        function handleChatKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendChatMessage();
+            }
+        }
+        
+        function switchTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected tab
+            document.getElementById(tabName).classList.add('active');
+            event.target.classList.add('active');
+        }
+        
+        function changeWeek(delta) {
+            currentWeek += delta;
+            updateWeekTitle();
+            // Here you would load the week's data from backend
+        }
+        
+        function updateWeekTitle() {
+            const titles = {
+                '-1': 'שבוע קודם: 6-12 בינואר 2025',
+                '0': 'שבוע נוכחי: 13-19 בינואר 2025',
+                '1': 'שבוע הבא: 20-26 בינואר 2025'
+            };
+            document.getElementById('weekTitle').textContent = titles[currentWeek] || titles['0'];
+        }
+        
+        function addConstraint() {
+            // This will open a modal/form to add constraint
+            alert('פתיחת טופס להוספת אילוץ - יתווסף בהמשך');
+        }
+        
+        function editConstraint(index) {
+            // This will open a modal/form to edit constraint
+            alert('פתיחת טופס לעריכת אילוץ - יתווסף בהמשך');
+        }
+        
+        function deleteConstraint(index) {
+            if (confirm('האם אתה בטוח שברצונך למחוק אילוץ זה?')) {
+                // Delete constraint logic
+                alert('מחיקת אילוץ - יתווסף בהמשך');
+            }
+        }
+        
+        updateWeekTitle();
+    </script>
+</body>
+</html>
