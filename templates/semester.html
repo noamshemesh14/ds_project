@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>בניית מערכת לסמסטר - Student Planner</title>
+    <title>פרופיל משתמש - Student Planner</title>
     <style>
         * {
             margin: 0;
@@ -342,6 +342,15 @@
             font-size: 1.1em;
         }
         
+        .info-value-text {
+            /* No forced direction - let browser handle RTL naturally */
+        }
+        
+        .info-value-number {
+            direction: ltr;
+            display: inline-block;
+        }
+        
         .courses-list {
             background: white;
             border-radius: 12px;
@@ -439,7 +448,6 @@
         
         .course-detail-label {
             color: #666;
-            margin-left: 5px;
         }
         
         .course-detail-value {
@@ -740,7 +748,12 @@
             <div class="logo">🎓 יועץ אקדמי חכם</div>
             <ul class="nav-links">
                 <li><a href="/">יועץ אקדמי</a></li>
-                <li><a href="/semester">בניית מערכת</a></li>
+                <li><a href="/profile">פרופיל</a></li>
+                <li><a href="/schedule">בניית מערכת</a></li>
+                <li><a href="/my-courses">📚 הקורסים שלי</a></li>
+                <li id="authButton">
+                    <button class="chat-btn" id="loginBtn" onclick="window.location.href='/login'">🔐 התחבר</button>
+                </li>
                 <li><button class="chat-btn" onclick="toggleChat()">💬 צ'אט</button></li>
             </ul>
         </div>
@@ -751,8 +764,8 @@
             <div class="section-header">
                 <div class="section-icon">📚</div>
                 <div>
-                    <h2 class="section-title">בניית מערכת לסמסטר</h2>
-                    <p class="section-subtitle">העלה גליון ציונים ובנה מערכת קורסים מומלצת</p>
+                    <h2 class="section-title">פרופיל משתמש</h2>
+                    <p class="section-subtitle">העלה גליון ציונים כדי לשמור את הנתונים שלך ולבנות מערכת קורסים</p>
                 </div>
             </div>
             
@@ -786,7 +799,7 @@
                 </div>
             </div>
             
-            <div class="upload-area" id="uploadSection">
+            <div class="upload-area" id="uploadSection" style="display: none;">
                 <div class="upload-icon">📄</div>
                 <div class="upload-text">העלה גליון ציונים (PDF או תמונה)</div>
                 <div class="file-input-wrapper">
@@ -804,7 +817,10 @@
             </div>
             
             <div id="resultSection" class="result-section" style="display: none;">
-                <h2>📊 תוצאות ניתוח</h2>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h2>📊 תוצאות ניתוח</h2>
+                    <button class="submit-button" onclick="showUploadSection()" style="background: #4caf50; font-size: 0.9em; padding: 0.5rem 1rem;">📄 העלה גליון מעודכן</button>
+                </div>
                 <div id="studentInfoCard"></div>
                 <div id="coursesList"></div>
                 <div id="statsSummary" class="stats-summary"></div>
@@ -964,27 +980,27 @@
                     <div class="info-grid">
                         <div class="info-item">
                             <span class="info-label">שם:</span>
-                            <span class="info-value">${studentInfo.name || 'לא זוהה'}</span>
+                            <span class="info-value info-value-text">${studentInfo.name || 'לא זוהה'}</span>
                         </div>
                         <div class="info-item">
                             <span class="info-label">תעודת זהות:</span>
-                            <span class="info-value">${studentInfo.id_number || 'לא זוהה'}</span>
+                            <span class="info-value info-value-number">${studentInfo.id_number || 'לא זוהה'}</span>
                         </div>
                         <div class="info-item">
                             <span class="info-label">פקולטה:</span>
-                            <span class="info-value">${studentInfo.faculty || 'לא זוהה'}</span>
+                            <span class="info-value info-value-text">${studentInfo.faculty || 'לא זוהה'}</span>
                         </div>
                         <div class="info-item">
                             <span class="info-label">מסלול לימודים:</span>
-                            <span class="info-value">${studentInfo.study_track || 'לא זוהה'}</span>
+                            <span class="info-value info-value-text">${studentInfo.study_track || 'לא זוהה'}</span>
                         </div>
                         <div class="info-item">
                             <span class="info-label">ממוצע מצטבר:</span>
-                            <span class="info-value">${studentInfo.cumulative_average ? studentInfo.cumulative_average.toFixed(2) : 'לא זוהה'}</span>
+                            <span class="info-value info-value-number">${studentInfo.cumulative_average ? studentInfo.cumulative_average.toFixed(2) : 'לא זוהה'}</span>
                         </div>
                         <div class="info-item">
                             <span class="info-label">אחוזי הצלחה:</span>
-                            <span class="info-value">${studentInfo.success_rate ? studentInfo.success_rate.toFixed(1) + '%' : 'לא זוהה'}</span>
+                            <span class="info-value info-value-number">${studentInfo.success_rate ? studentInfo.success_rate.toFixed(1) + '%' : 'לא זוהה'}</span>
                         </div>
                     </div>
                 </div>
@@ -995,39 +1011,27 @@
             if (courses.length > 0) {
                 coursesList.innerHTML = `
                     <div class="courses-list">
-                        <h3>📚 קורסים (${courses.length})</h3>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                            <h3>📚 קורסים (${courses.length})</h3>
+                            <button class="btn-add-course" onclick="addCourse()" style="background: #4caf50; color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-weight: bold;">➕ הוסף קורס</button>
+                        </div>
                         ${courses.map((course, index) => renderCourse(course, index)).join('')}
                     </div>
                 `;
             } else {
                 coursesList.innerHTML = `
                     <div class="courses-list">
-                        <h3>📚 קורסים</h3>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                            <h3>📚 קורסים</h3>
+                            <button class="btn-add-course" onclick="addCourse()" style="background: #4caf50; color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-weight: bold;">➕ הוסף קורס</button>
+                        </div>
                         <p style="color: #666; text-align: center; padding: 20px;">לא נמצאו קורסים</p>
                     </div>
                 `;
             }
             
-            // Display statistics
-            const stats = calculateStats(courses);
-            statsSummary.innerHTML = `
-                <div class="stat-item">
-                    <div class="stat-value">${stats.totalCourses}</div>
-                    <div class="stat-label">סה"כ קורסים</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value">${stats.totalCredits.toFixed(1)}</div>
-                    <div class="stat-label">נקודות זכות</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value">${stats.passedCourses}</div>
-                    <div class="stat-label">קורסים שעברו</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value">${stats.averageGrade ? stats.averageGrade.toFixed(1) : '-'}</div>
-                    <div class="stat-label">ממוצע ציונים</div>
-                </div>
-            `;
+            // Don't display calculated statistics - use only data from header
+            statsSummary.innerHTML = '';
             
             resultSection.style.display = 'block';
         }
@@ -1062,8 +1066,8 @@
                         <button class="btn-delete" onclick="deleteCourse(${index})">🗑️ מחק</button>
                     </div>
                     <div class="course-header">
-                        <div style="direction: rtl; text-align: right;">
-                            <span class="course-name" style="direction: rtl; unicode-bidi: bidi-override;">${course.course_name || 'לא זוהה'}</span>
+                        <div>
+                            <span class="course-name">${course.course_name || 'לא זוהה'}</span>
                             ${course.course_number ? `<span class="course-number">#${course.course_number}</span>` : ''}
                         </div>
                         <span class="grade-badge ${gradeClass || ''}" style="direction: ltr; unicode-bidi: embed;">${gradeDisplay}</span>
@@ -1071,20 +1075,20 @@
                     <div class="course-details">
                         ${course.credit_points !== null && course.credit_points !== undefined ? `
                             <div class="course-detail">
-                                <span class="course-detail-value">${course.credit_points}</span>
-                                <span class="course-detail-label">נקודות זכות</span>
+                                <span class="course-detail-label">נקודות זכות:</span>
+                                <span class="course-detail-value" style="direction: ltr; display: inline-block;">${course.credit_points}</span>
                             </div>
                         ` : ''}
                         ${course.semester ? `
                             <div class="course-detail">
+                                <span class="course-detail-label">סמסטר:</span>
                                 <span class="course-detail-value">${course.semester}</span>
-                                <span class="course-detail-label">סמסטר</span>
                             </div>
                         ` : ''}
                         ${course.year ? `
                             <div class="course-detail">
-                                <span class="course-detail-value">${course.year}</span>
-                                <span class="course-detail-label">שנה</span>
+                                <span class="course-detail-label">שנה:</span>
+                                <span class="course-detail-value" style="direction: ltr; display: inline-block;">${course.year}</span>
                             </div>
                         ` : ''}
                         ${course.notes ? `
@@ -1102,12 +1106,44 @@
             `;
         }
         
+        function addCourse() {
+            if (!parsedData) {
+                // Initialize parsedData if it doesn't exist
+                parsedData = {
+                    student_info: parsedData?.student_info || {
+                        name: '',
+                        id_number: '',
+                        faculty: '',
+                        study_track: '',
+                        cumulative_average: null,
+                        success_rate: null,
+                        current_semester: null,
+                        current_year: null
+                    },
+                    courses: []
+                };
+            }
+            
+            if (!parsedData.courses) {
+                parsedData.courses = [];
+            }
+            
+            currentEditIndex = -1; // -1 means new course
+            openCourseModal();
+        }
+        
         function editCourse(index) {
             if (!parsedData || !parsedData.courses) return;
             const course = parsedData.courses[index];
             if (!course) return;
             
             currentEditIndex = index;
+            openCourseModal();
+        }
+        
+        function openCourseModal() {
+            const isNewCourse = currentEditIndex < 0;
+            const course = isNewCourse ? null : parsedData.courses[currentEditIndex];
             
             // Create or update edit modal
             let modal = document.getElementById('editModal');
@@ -1115,74 +1151,95 @@
                 modal = document.createElement('div');
                 modal.id = 'editModal';
                 modal.className = 'edit-modal';
-                modal.innerHTML = `
-                    <div class="edit-modal-content">
-                        <h3>עריכת קורס</h3>
-                        <form id="editCourseForm">
-                            <div class="form-group">
-                                <label>שם קורס:</label>
-                                <input type="text" id="editCourseName" required>
-                            </div>
-                            <div class="form-group">
-                                <label>מספר קורס:</label>
-                                <input type="text" id="editCourseNumber">
-                            </div>
-                            <div class="form-group">
-                                <label>נקודות זכות:</label>
-                                <input type="number" step="0.5" id="editCreditPoints">
-                            </div>
-                            <div class="form-group">
-                                <label>ציון:</label>
-                                <input type="number" id="editGrade" min="0" max="100">
-                            </div>
-                            <div class="form-group">
-                                <label>סמסטר:</label>
-                                <select id="editSemester">
-                                    <option value="">בחר סמסטר</option>
-                                    <option value="חורף">חורף</option>
-                                    <option value="קיץ">קיץ</option>
-                                    <option value="אביב">אביב</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>שנה:</label>
-                                <input type="number" id="editYear" min="2000" max="2100">
-                            </div>
-                            <div class="form-group">
-                                <label>הערות:</label>
-                                <textarea id="editNotes"></textarea>
-                            </div>
-                            <div class="modal-buttons">
-                                <button type="submit" class="btn-save">שמור</button>
-                                <button type="button" class="btn-cancel" onclick="closeEditModal()">ביטול</button>
-                            </div>
-                        </form>
-                    </div>
-                `;
                 document.body.appendChild(modal);
-                
-                // Handle form submission
-                document.getElementById('editCourseForm').addEventListener('submit', function(e) {
-                    e.preventDefault();
-                    saveEditedCourse();
-                });
-                
-                // Close on background click
-                modal.addEventListener('click', function(e) {
-                    if (e.target === modal) {
-                        closeEditModal();
-                    }
-                });
             }
             
-            // Fill form
-            document.getElementById('editCourseName').value = course.course_name || '';
-            document.getElementById('editCourseNumber').value = course.course_number || '';
-            document.getElementById('editCreditPoints').value = course.credit_points || '';
-            document.getElementById('editGrade').value = course.grade || '';
-            document.getElementById('editSemester').value = course.semester || '';
-            document.getElementById('editYear').value = course.year || '';
-            document.getElementById('editNotes').value = course.notes || '';
+            modal.innerHTML = `
+                <div class="edit-modal-content">
+                    <h3>${isNewCourse ? 'הוספת קורס חדש' : 'עריכת קורס'}</h3>
+                    <form id="editCourseForm">
+                        <div class="form-group">
+                            <label>שם קורס: *</label>
+                            <input type="text" id="editCourseName" required>
+                        </div>
+                        <div class="form-group">
+                            <label>מספר קורס:</label>
+                            <input type="text" id="editCourseNumber">
+                        </div>
+                        <div class="form-group">
+                            <label>נקודות זכות:</label>
+                            <input type="number" step="0.5" id="editCreditPoints" min="0">
+                        </div>
+                        <div class="form-group">
+                            <label>ציון:</label>
+                            <input type="number" id="editGrade" min="0" max="100">
+                        </div>
+                        <div class="form-group">
+                            <label>אות ציון:</label>
+                            <input type="text" id="editLetterGrade" placeholder="למשל: A, B, C">
+                        </div>
+                        <div class="form-group">
+                            <label>סמסטר:</label>
+                            <select id="editSemester">
+                                <option value="">בחר סמסטר</option>
+                                <option value="חורף">חורף</option>
+                                <option value="קיץ">קיץ</option>
+                                <option value="אביב">אביב</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>שנה:</label>
+                            <input type="number" id="editYear" min="2000" max="2100">
+                        </div>
+                        <div class="form-group">
+                            <label>הערות:</label>
+                            <textarea id="editNotes" rows="3"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="editIsPassed"> עבר את הקורס
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label>מספר נסיונות:</label>
+                            <input type="number" id="editRetakeCount" min="0" value="0">
+                        </div>
+                        <div class="modal-buttons">
+                            <button type="submit" class="btn-save">שמור</button>
+                            <button type="button" class="btn-cancel" onclick="closeEditModal()">ביטול</button>
+                        </div>
+                    </form>
+                </div>
+            `;
+            
+            // Fill form if editing existing course
+            if (!isNewCourse && course) {
+                setTimeout(() => {
+                    document.getElementById('editCourseName').value = course.course_name || '';
+                    document.getElementById('editCourseNumber').value = course.course_number || '';
+                    document.getElementById('editCreditPoints').value = course.credit_points || '';
+                    document.getElementById('editGrade').value = course.grade || '';
+                    document.getElementById('editLetterGrade').value = course.letter_grade || '';
+                    document.getElementById('editSemester').value = course.semester || '';
+                    document.getElementById('editYear').value = course.year || '';
+                    document.getElementById('editNotes').value = course.notes || '';
+                    document.getElementById('editIsPassed').checked = course.is_passed || false;
+                    document.getElementById('editRetakeCount').value = course.retake_count || 0;
+                }, 100);
+            }
+            
+            // Handle form submission
+            document.getElementById('editCourseForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                saveCourse();
+            });
+            
+            // Close on background click
+            modal.addEventListener('click', function(e) {
+                if (e.target === modal) {
+                    closeEditModal();
+                }
+            });
             
             // Show modal
             modal.classList.add('active');
@@ -1194,6 +1251,16 @@
             
             parsedData.courses.splice(index, 1);
             displayResult(parsedData);
+            
+            // Auto-save to database if user is authenticated
+            const token = localStorage.getItem('auth_token');
+            if (token) {
+                console.log('💾 Auto-saving to database after course deletion...');
+                saveToDatabase();
+            } else {
+                console.log('⚠️ User not authenticated - skipping auto-save');
+                showSuccess('הקורס נמחק בהצלחה! לחץ על "שמור במאגר" כדי לשמור את השינויים.');
+            }
         }
         
         function closeEditModal() {
@@ -1204,23 +1271,63 @@
             currentEditIndex = -1;
         }
         
-        function saveEditedCourse() {
-            if (currentEditIndex < 0 || !parsedData || !parsedData.courses) return;
+        function saveCourse() {
+            if (!parsedData) {
+                alert('שגיאה: אין נתונים לשמירה');
+                return;
+            }
             
-            const course = parsedData.courses[currentEditIndex];
-            course.course_name = document.getElementById('editCourseName').value;
-            course.course_number = document.getElementById('editCourseNumber').value || null;
-            const creditPoints = document.getElementById('editCreditPoints').value;
-            course.credit_points = creditPoints ? parseFloat(creditPoints) : null;
-            const grade = document.getElementById('editGrade').value;
-            course.grade = grade ? parseFloat(grade) : null;
-            course.semester = document.getElementById('editSemester').value || null;
-            const year = document.getElementById('editYear').value;
-            course.year = year ? parseInt(year) : null;
-            course.notes = document.getElementById('editNotes').value || null;
+            if (!parsedData.courses) {
+                parsedData.courses = [];
+            }
+            
+            const courseName = document.getElementById('editCourseName').value.trim();
+            if (!courseName) {
+                alert('אנא הזן שם קורס');
+                return;
+            }
+            
+            const courseData = {
+                course_name: courseName,
+                course_number: document.getElementById('editCourseNumber').value.trim() || null,
+                credit_points: document.getElementById('editCreditPoints').value ? parseFloat(document.getElementById('editCreditPoints').value) : null,
+                grade: document.getElementById('editGrade').value ? parseFloat(document.getElementById('editGrade').value) : null,
+                letter_grade: document.getElementById('editLetterGrade').value.trim() || null,
+                semester: document.getElementById('editSemester').value || null,
+                year: document.getElementById('editYear').value ? parseInt(document.getElementById('editYear').value) : null,
+                notes: document.getElementById('editNotes').value.trim() || null,
+                is_passed: document.getElementById('editIsPassed').checked,
+                retake_count: document.getElementById('editRetakeCount').value ? parseInt(document.getElementById('editRetakeCount').value) : 0
+            };
+            
+            if (currentEditIndex >= 0) {
+                // Update existing course
+                Object.assign(parsedData.courses[currentEditIndex], courseData);
+            } else {
+                // Add new course
+                parsedData.courses.push(courseData);
+            }
             
             closeEditModal();
             displayResult(parsedData);
+            
+            // Show result section if hidden
+            if (resultSection) {
+                resultSection.style.display = 'block';
+            }
+            if (uploadSection) {
+                uploadSection.style.display = 'none';
+            }
+            
+            // Auto-save to database if user is authenticated
+            const token = localStorage.getItem('auth_token');
+            if (token) {
+                console.log('💾 Auto-saving to database after course update...');
+                saveToDatabase();
+            } else {
+                console.log('⚠️ User not authenticated - skipping auto-save');
+                showSuccess('הקורס נוסף בהצלחה! לחץ על "שמור במאגר" כדי לשמור את השינויים.');
+            }
         }
         
         function getGradeClass(grade) {
@@ -1262,13 +1369,32 @@
         }
         
         async function saveToDatabase() {
+            console.log('💾 saveToDatabase called');
+            console.log('parsedData:', parsedData ? 'exists' : 'null');
+            
             if (!parsedData) {
-                showError('אין נתונים לשמירה');
+                console.error('❌ No parsedData to save');
+                showError('אין נתונים לשמירה. אנא העלה את הגליון שוב.');
                 return;
             }
             
-            loading.style.display = 'block';
-            submitButton.disabled = true;
+            console.log('✅ parsedData exists, proceeding with save...');
+            
+            // Show loading indicator
+            const saveButton = document.querySelector('button[onclick="saveToDatabase()"]');
+            if (saveButton) {
+                saveButton.disabled = true;
+                saveButton.textContent = '💾 שומר...';
+            }
+            
+            // Show loading if available
+            if (loading) {
+                loading.style.display = 'block';
+            }
+            
+            // Hide previous messages
+            if (errorMessage) errorMessage.style.display = 'none';
+            if (successMessage) successMessage.style.display = 'none';
             
             try {
                 const userData = {
@@ -1283,30 +1409,95 @@
                     courses: parsedData.courses
                 };
                 
+                // Check if user is authenticated
+                const token = localStorage.getItem('auth_token');
+                console.log('🔑 Token:', token ? 'exists' : 'missing');
+                
+                if (!token) {
+                    console.error('❌ No auth token found');
+                    showError('אנא התחבר כדי לשמור נתונים. מעביר לדף ההתחברות...');
+                    setTimeout(() => {
+                        window.location.href = '/login';
+                    }, 2000);
+                    return;
+                }
+                
+                console.log('📤 Sending save request to /api/save-user');
+                console.log('📦 User data:', {
+                    name: userData.name,
+                    id_number: userData.id_number,
+                    courses_count: userData.courses?.length || 0
+                });
+                
                 const response = await fetch('/api/save-user', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
                     },
                     body: JSON.stringify(userData)
                 });
                 
                 if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.detail || 'שגיאה בשמירה');
+                    let errorMessage = 'שגיאה בשמירה';
+                    try {
+                        // Try to get JSON error
+                        const contentType = response.headers.get('content-type');
+                        if (contentType && contentType.includes('application/json')) {
+                            const error = await response.json();
+                            errorMessage = error.detail || error.message || errorMessage;
+                            console.error('Save error (JSON):', error);
+                        } else {
+                            // Not JSON - might be HTML error page
+                            const text = await response.text();
+                            console.error('Save error (non-JSON):', text.substring(0, 200));
+                            errorMessage = `שגיאה בשמירה (קוד: ${response.status}). בדוק את הקונסול לפרטים.`;
+                        }
+                    } catch (e) {
+                        console.error('Could not parse error response:', e);
+                        errorMessage = `שגיאה בשמירה (קוד: ${response.status})`;
+                    }
+                    throw new Error(errorMessage);
                 }
                 
                 const result = await response.json();
+                console.log('✅ Save successful:', result);
+                
                 const message = result.is_update 
                     ? `הנתונים עודכנו בהצלחה במאגר! (משתמש קיים עודכן - דריסה)` 
                     : `הנתונים נשמרו בהצלחה במאגר! (משתמש חדש נוצר)`;
                 showSuccess(message);
                 
             } catch (error) {
-                showError('שגיאה בשמירה: ' + error.message);
+                console.error('❌ Save error details:', error);
+                console.error('Error stack:', error.stack);
+                let errorMsg = error.message || 'שגיאה בשמירה';
+                
+                // Check for specific error types
+                if (errorMsg.includes('401') || errorMsg.includes('Unauthorized') || errorMsg.includes('credentials')) {
+                    errorMsg = 'האימות נכשל. אנא התחבר שוב.';
+                    setTimeout(() => {
+                        window.location.href = '/login';
+                    }, 2000);
+                } else if (errorMsg.includes('500') || errorMsg.includes('Error saving')) {
+                    errorMsg = 'שגיאה בשמירת הנתונים. אנא בדוק את הקונסול לפרטים נוספים.';
+                }
+                
+                showError('שגיאה בשמירה: ' + errorMsg);
             } finally {
-                loading.style.display = 'none';
-                submitButton.disabled = false;
+                // Restore button state
+                const saveButton = document.querySelector('button[onclick="saveToDatabase()"]');
+                if (saveButton) {
+                    saveButton.disabled = false;
+                    saveButton.textContent = '💾 שמור במאגר (עם דריסה אם קיים)';
+                }
+                
+                if (loading) {
+                    loading.style.display = 'none';
+                }
+                if (submitButton) {
+                    submitButton.disabled = false;
+                }
             }
         }
         
@@ -1334,6 +1525,145 @@
             if (confirm('האם אתה בטוח שברצונך למחוק אילוץ זה?')) {
                 alert('מחיקת אילוץ - יתווסף בהמשך');
             }
+        }
+        
+        // Check authentication status on page load
+        function checkAuthStatus() {
+            const token = localStorage.getItem('auth_token');
+            const loginBtn = document.getElementById('loginBtn');
+            
+            if (token && loginBtn) {
+                // User is logged in
+                const userEmail = localStorage.getItem('user_email') || 'משתמש';
+                loginBtn.textContent = `👤 ${userEmail}`;
+                loginBtn.onclick = function() {
+                    if (confirm('האם אתה בטוח שברצונך להתנתק?')) {
+                        logout();
+                    }
+                };
+            } else if (loginBtn) {
+                // User is not logged in
+                loginBtn.textContent = '🔐 התחבר';
+                loginBtn.onclick = function() {
+                    window.location.href = '/login';
+                };
+            }
+        }
+        
+        function logout() {
+            localStorage.removeItem('auth_token');
+            localStorage.removeItem('user_id');
+            localStorage.removeItem('user_email');
+            window.location.href = '/login';
+        }
+        
+        // Show upload section
+        function showUploadSection() {
+            if (uploadSection) uploadSection.style.display = 'block';
+            if (resultSection) resultSection.style.display = 'none';
+            // Reset file input
+            if (fileInput) {
+                fileInput.value = '';
+                if (fileName) fileName.textContent = '';
+                if (submitButton) submitButton.disabled = true;
+            }
+        }
+        
+        // Load user data on page load if authenticated
+        async function loadUserData() {
+            const token = localStorage.getItem('auth_token');
+            
+            // If user is authenticated, hide upload section initially (will show if no data)
+            if (token && uploadSection) {
+                uploadSection.style.display = 'none';
+            }
+            
+            if (!token) {
+                console.log('No auth token - skipping user data load');
+                // Show upload section if not authenticated
+                if (uploadSection) uploadSection.style.display = 'block';
+                return;
+            }
+            
+            try {
+                console.log('📥 Loading user data from server...');
+                const response = await fetch('/api/user-data', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        console.log('Not authenticated - clearing token');
+                        localStorage.removeItem('auth_token');
+                        localStorage.removeItem('user_id');
+                        localStorage.removeItem('user_email');
+                        // Show upload section if not authenticated
+                        if (uploadSection) uploadSection.style.display = 'block';
+                        return;
+                    }
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                console.log('📦 Full response data:', data);
+                
+                if (data.metadata && data.metadata.has_data && data.student_info) {
+                    console.log('✅ User data loaded:', data.metadata.courses_count, 'courses');
+                    // Convert to parsedData format
+                    parsedData = {
+                        student_info: data.student_info,
+                        courses: data.courses || []
+                    };
+                    
+                    console.log('📊 Parsed data:', {
+                        student_name: parsedData.student_info?.name,
+                        courses_count: parsedData.courses?.length
+                    });
+                    
+                    // Make sure DOM elements exist
+                    if (!uploadSection || !resultSection) {
+                        console.error('❌ DOM elements not found! uploadSection:', !!uploadSection, 'resultSection:', !!resultSection);
+                        return;
+                    }
+                    
+                    // Display the data
+                    displayResult(parsedData);
+                    
+                    // Hide upload section, show result section
+                    uploadSection.style.display = 'none';
+                    resultSection.style.display = 'block';
+                    
+                    showSuccess('נתונים נטענו מהמאגר');
+                } else {
+                    console.log('⚠️ No saved data found for user', {
+                        has_metadata: !!data.metadata,
+                        has_data: data.metadata?.has_data,
+                        has_student_info: !!data.student_info,
+                        student_info_value: data.student_info
+                    });
+                    // Show upload section if no data found
+                    if (uploadSection) uploadSection.style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Error loading user data:', error);
+                // Show upload section on error
+                if (uploadSection) uploadSection.style.display = 'block';
+            }
+        }
+        
+        // Run on page load - wait for DOM to be ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', function() {
+                checkAuthStatus();
+                loadUserData();
+            });
+        } else {
+            // DOM is already loaded
+            checkAuthStatus();
+            loadUserData();
         }
     </script>
 </body>

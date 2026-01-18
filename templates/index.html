@@ -503,6 +503,146 @@
             display: none;
         }
         
+        /* Modal styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            direction: rtl;
+        }
+        
+        .modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .modal-content {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 20px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            direction: rtl;
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #667eea;
+            direction: rtl;
+        }
+        
+        .modal-title {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 2em;
+            cursor: pointer;
+            color: #666;
+        }
+        
+        .modal-close:hover {
+            color: #333;
+        }
+        
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: #333;
+        }
+        
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 1em;
+            font-family: inherit;
+        }
+        
+        .form-group textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+        
+        .form-actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: flex-start;
+            margin-top: 2rem;
+            direction: rtl;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 0.75rem 2rem;
+            border-radius: 25px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: transform 0.2s;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+        }
+        
+        .btn-secondary {
+            background: #e0e0e0;
+            color: #333;
+            border: none;
+            padding: 0.75rem 2rem;
+            border-radius: 25px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        .btn-secondary:hover {
+            background: #d0d0d0;
+        }
+        
+        .days-checkboxes {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+        
+        .day-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .day-checkbox input[type="checkbox"] {
+            width: auto;
+        }
+        
         @media (max-width: 768px) {
             .week-grid {
                 grid-template-columns: 1fr;
@@ -515,6 +655,195 @@
             }
         }
     </style>
+    <style>
+        /* Notifications Widget */
+        .notifications-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: white;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            width: 350px;
+            max-height: 500px;
+            overflow-y: auto;
+            z-index: 1000;
+            margin-top: 0.5rem;
+            direction: rtl;
+        }
+        
+        .notifications-header {
+            padding: 1rem;
+            border-bottom: 2px solid #f0f0f0;
+            font-weight: bold;
+            background: #f8f9fa;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .btn-clear-notifications {
+            background: #ff9800;
+            color: white;
+            border: none;
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85em;
+        }
+        
+        .btn-clear-notifications:hover {
+            background: #f57c00;
+        }
+        
+        .notifications-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .notification-item {
+            padding: 1rem;
+            border-bottom: 1px solid #f0f0f0;
+            cursor: pointer;
+            transition: background 0.2s;
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            gap: 0.5rem;
+        }
+        
+        .notification-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .notification-item.unread {
+            background: #e3f2fd;
+            font-weight: bold;
+        }
+        
+        .notification-item.loading {
+            text-align: center;
+            color: #999;
+            cursor: default;
+        }
+        
+        .notification-title {
+            font-weight: bold;
+            margin-bottom: 0.25rem;
+        }
+        
+        .notification-message {
+            color: #666;
+            font-size: 0.9em;
+        }
+        
+        .notification-time {
+            color: #999;
+            font-size: 0.8em;
+            margin-top: 0.25rem;
+        }
+        
+        /* Modal for invitations */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+            overflow: auto;
+        }
+        
+        .modal.active {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: white;
+            border-radius: 15px;
+            padding: 2rem;
+            max-width: 520px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+            position: relative;
+            direction: rtl;
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        
+        .modal-header h3 {
+            margin: 0;
+            color: #333;
+        }
+        
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 2em;
+            cursor: pointer;
+            color: #666;
+            padding: 0;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .close-btn:hover {
+            color: #333;
+        }
+        
+        .modal-actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: flex-end;
+            margin-top: 1.5rem;
+        }
+        
+        .btn-primary {
+            background: #4caf50;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        .btn-primary:hover {
+            background: #45a049;
+        }
+        
+        .btn-secondary {
+            background: #f44336;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        .btn-secondary:hover {
+            background: #da190b;
+        }
+    </style>
 </head>
 <body>
     <nav class="navbar">
@@ -522,7 +851,24 @@
             <div class="logo">🎓 יועץ אקדמי חכם</div>
             <ul class="nav-links">
                 <li><a href="/">יועץ אקדמי</a></li>
-                <li><a href="/semester">בניית מערכת</a></li>
+                <li><a href="/profile">פרופיל</a></li>
+                <li><a href="/schedule">בניית מערכת</a></li>
+                <li><a href="/my-courses">📚 הקורסים שלי</a></li>
+                <li id="notificationsWidget" style="position: relative;">
+                    <button class="chat-btn" onclick="toggleNotifications()" id="notificationsBtn">🔔 התראות <span id="notificationBadge" style="display: none; background: #f44336; color: white; border-radius: 50%; padding: 0.2rem 0.5rem; font-size: 0.8em; margin-right: 0.5rem;">0</span></button>
+                    <div id="notificationsDropdown" class="notifications-dropdown" style="display: none;">
+                        <div class="notifications-header">
+                            <span>התראות</span>
+                            <button class="btn-clear-notifications" onclick="clearNotifications()" title="נקה התראות נקראות">🧹 נקה נקראות</button>
+                        </div>
+                        <div id="notificationsList" class="notifications-list">
+                            <div class="notification-item loading">טוען התראות...</div>
+                        </div>
+                    </div>
+                </li>
+                <li id="authButton">
+                    <button class="chat-btn" id="loginBtn" onclick="window.location.href='/login'">🔐 התחבר</button>
+                </li>
                 <li><button class="chat-btn" onclick="toggleChat()">💬 צ'אט</button></li>
             </ul>
         </div>
@@ -545,26 +891,7 @@
                     <button class="add-constraint-btn" onclick="addConstraint()">+ הוסף אילוץ</button>
                 </div>
                 <div class="constraints-list" id="constraintsList">
-                    <div class="constraint-item">
-                        <div class="constraint-info">
-                            <h4>אימון</h4>
-                            <p>ימי ראשון ורביעי, 18:00-20:00</p>
-                        </div>
-                        <div class="constraint-actions">
-                            <button class="btn-icon" onclick="editConstraint(0)">✏️</button>
-                            <button class="btn-icon" onclick="deleteConstraint(0)">🗑️</button>
-                        </div>
-                    </div>
-                    <div class="constraint-item">
-                        <div class="constraint-info">
-                            <h4>עבודה</h4>
-                            <p>ימי שני וחמישי, 16:00-20:00</p>
-                        </div>
-                        <div class="constraint-actions">
-                            <button class="btn-icon" onclick="editConstraint(1)">✏️</button>
-                            <button class="btn-icon" onclick="deleteConstraint(1)">🗑️</button>
-                        </div>
-                    </div>
+                    <p style="text-align: center; color: #666; padding: 2rem;">טוען אילוצים...</p>
                 </div>
             </div>
         </section>
@@ -715,32 +1042,6 @@
             popup.classList.toggle('active');
         }
         
-        function sendChatMessage() {
-            const input = document.getElementById('chatInput');
-            const message = input.value.trim();
-            if (!message) return;
-            
-            const messagesDiv = document.getElementById('chatMessages');
-            
-            // Add user message
-            const userMsg = document.createElement('div');
-            userMsg.className = 'message user';
-            userMsg.textContent = message;
-            messagesDiv.appendChild(userMsg);
-            
-            input.value = '';
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
-            
-            // Simulate assistant response (will be replaced with real API call)
-            setTimeout(() => {
-                const assistantMsg = document.createElement('div');
-                assistantMsg.className = 'message assistant';
-                assistantMsg.textContent = 'זהו מקום לתשובה מהצ\'אט. הקישוריות לבאקאנד תתווסף בהמשך.';
-                messagesDiv.appendChild(assistantMsg);
-                messagesDiv.scrollTop = messagesDiv.scrollHeight;
-            }, 500);
-        }
-        
         function handleChatKeyPress(event) {
             if (event.key === 'Enter') {
                 sendChatMessage();
@@ -776,24 +1077,760 @@
             document.getElementById('weekTitle').textContent = titles[currentWeek] || titles['0'];
         }
         
-        function addConstraint() {
-            // This will open a modal/form to add constraint
-            alert('פתיחת טופס להוספת אילוץ - יתווסף בהמשך');
-        }
+        updateWeekTitle();
         
-        function editConstraint(index) {
-            // This will open a modal/form to edit constraint
-            alert('פתיחת טופס לעריכת אילוץ - יתווסף בהמשך');
-        }
+        // Check authentication status
+        checkAuthStatus();
         
-        function deleteConstraint(index) {
-            if (confirm('האם אתה בטוח שברצונך למחוק אילוץ זה?')) {
-                // Delete constraint logic
-                alert('מחיקת אילוץ - יתווסף בהמשך');
+        // Load constraints on page load
+        loadConstraints();
+        
+        function checkAuthStatus() {
+            const token = localStorage.getItem('auth_token');
+            const authButton = document.getElementById('authButton');
+            const loginBtn = document.getElementById('loginBtn');
+            
+            if (token) {
+                // User is logged in
+                const userEmail = localStorage.getItem('user_email') || 'משתמש';
+                loginBtn.textContent = `👤 ${userEmail}`;
+                loginBtn.onclick = function() {
+                    if (confirm('האם אתה בטוח שברצונך להתנתק?')) {
+                        logout();
+                    }
+                };
+            } else {
+                // User is not logged in
+                loginBtn.textContent = '🔐 התחבר';
+                loginBtn.onclick = function() {
+                    window.location.href = '/login';
+                };
             }
         }
         
-        updateWeekTitle();
+        function logout() {
+            localStorage.removeItem('auth_token');
+            localStorage.removeItem('user_id');
+            localStorage.removeItem('user_email');
+            window.location.href = '/login';
+        }
+        
+        // Chat functionality with API
+        async function sendChatMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (!message) return;
+            
+            const messagesDiv = document.getElementById('chatMessages');
+            
+            // Add user message
+            const userMsg = document.createElement('div');
+            userMsg.className = 'message user';
+            userMsg.textContent = message;
+            messagesDiv.appendChild(userMsg);
+            
+            input.value = '';
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            
+            // Show loading indicator
+            const loadingMsg = document.createElement('div');
+            loadingMsg.className = 'message assistant';
+            loadingMsg.textContent = 'מחשב...';
+            loadingMsg.id = 'loadingMsg';
+            messagesDiv.appendChild(loadingMsg);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            
+            try {
+                // Get auth token from localStorage (if available)
+                const token = localStorage.getItem('auth_token');
+                const headers = {
+                    'Content-Type': 'application/json'
+                };
+                if (token) {
+                    headers['Authorization'] = `Bearer ${token}`;
+                }
+                
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({ message: message })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('שגיאה בשליחת הודעה');
+                }
+                
+                const data = await response.json();
+                
+                // Remove loading message
+                loadingMsg.remove();
+                
+                // Add assistant response
+                const assistantMsg = document.createElement('div');
+                assistantMsg.className = 'message assistant';
+                assistantMsg.textContent = data.response;
+                messagesDiv.appendChild(assistantMsg);
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            } catch (error) {
+                loadingMsg.remove();
+                const errorMsg = document.createElement('div');
+                errorMsg.className = 'message assistant';
+                errorMsg.textContent = 'שגיאה בשליחת ההודעה. אנא נסה שוב.';
+                messagesDiv.appendChild(errorMsg);
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                console.error('Chat error:', error);
+            }
+        }
+        
+        // Constraints management
+        let constraints = [];
+        let editingConstraintId = null;
+        
+        async function loadConstraints() {
+            try {
+                const token = localStorage.getItem('auth_token');
+                const headers = {
+                    'Content-Type': 'application/json'
+                };
+                if (token) {
+                    headers['Authorization'] = `Bearer ${token}`;
+                }
+                
+                const response = await fetch('/api/constraints', {
+                    headers: headers
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    constraints = data.constraints || [];
+                    renderConstraints();
+                } else if (response.status === 401) {
+                    // Not authenticated - show empty list
+                    constraints = [];
+                    renderConstraints();
+                }
+            } catch (error) {
+                console.error('Error loading constraints:', error);
+                // If not authenticated, just show empty list
+                constraints = [];
+                renderConstraints();
+            }
+        }
+        
+        function renderConstraints() {
+            const constraintsList = document.getElementById('constraintsList');
+            if (!constraintsList) return;
+            
+            if (constraints.length === 0) {
+                constraintsList.innerHTML = '<p style="text-align: center; color: #666; padding: 2rem;">אין אילוצים. לחץ על "הוסף אילוץ" כדי להתחיל.</p>';
+                return;
+            }
+            
+            constraintsList.innerHTML = constraints.map((constraint, index) => {
+                const daysList = constraint.days.split(',').map(d => d.trim()).join(', ');
+                return `
+                    <div class="constraint-item">
+                        <div class="constraint-info">
+                            <h4>${constraint.title}</h4>
+                            <p>${daysList}, ${constraint.start_time}-${constraint.end_time}${constraint.description ? '<br>' + constraint.description : ''}</p>
+                        </div>
+                        <div class="constraint-actions">
+                            <button class="btn-icon" onclick="editConstraint('${constraint.id}')">✏️</button>
+                            <button class="btn-icon" onclick="deleteConstraint('${constraint.id}')">🗑️</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        function addConstraint() {
+            editingConstraintId = null;
+            openConstraintModal();
+        }
+        
+        function editConstraint(constraintId) {
+            editingConstraintId = constraintId;
+            const constraint = constraints.find(c => c.id === constraintId);
+            if (!constraint) return;
+            
+            openConstraintModal(constraint);
+        }
+        
+        function openConstraintModal(constraint = null) {
+            const modal = document.getElementById('constraintModal');
+            const form = document.getElementById('constraintForm');
+            
+            if (constraint) {
+                document.getElementById('constraintTitle').value = constraint.title;
+                document.getElementById('constraintDescription').value = constraint.description || '';
+                document.getElementById('constraintStartTime').value = constraint.start_time;
+                document.getElementById('constraintEndTime').value = constraint.end_time;
+                
+                // Set checkboxes for days
+                const days = constraint.days.split(',').map(d => d.trim());
+                const dayNames = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+                dayNames.forEach((day, index) => {
+                    const checkbox = document.getElementById(`day${index}`);
+                    if (checkbox) {
+                        checkbox.checked = days.includes(day);
+                    }
+                });
+            } else {
+                form.reset();
+            }
+            
+            modal.classList.add('active');
+        }
+        
+        function closeConstraintModal() {
+            const modal = document.getElementById('constraintModal');
+            modal.classList.remove('active');
+            editingConstraintId = null;
+        }
+        
+        async function saveConstraint() {
+            const title = document.getElementById('constraintTitle').value.trim();
+            const description = document.getElementById('constraintDescription').value.trim();
+            const startTime = document.getElementById('constraintStartTime').value;
+            const endTime = document.getElementById('constraintEndTime').value;
+            
+            if (!title || !startTime || !endTime) {
+                alert('אנא מלא את כל השדות הנדרשים');
+                return;
+            }
+            
+            // Get selected days
+            const dayNames = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+            const selectedDays = [];
+            dayNames.forEach((day, index) => {
+                const checkbox = document.getElementById(`day${index}`);
+                if (checkbox && checkbox.checked) {
+                    selectedDays.push(day);
+                }
+            });
+            
+            if (selectedDays.length === 0) {
+                alert('אנא בחר לפחות יום אחד');
+                return;
+            }
+            
+            const constraintData = {
+                title: title,
+                description: description || null,
+                days: selectedDays.join(','),
+                start_time: startTime,
+                end_time: endTime
+            };
+            
+            try {
+                const token = localStorage.getItem('auth_token');
+                const headers = {
+                    'Content-Type': 'application/json'
+                };
+                if (token) {
+                    headers['Authorization'] = `Bearer ${token}`;
+                }
+                
+                let response;
+                if (editingConstraintId) {
+                    response = await fetch(`/api/constraints/${editingConstraintId}`, {
+                        method: 'PUT',
+                        headers: headers,
+                        body: JSON.stringify(constraintData)
+                    });
+                } else {
+                    response = await fetch('/api/constraints', {
+                        method: 'POST',
+                        headers: headers,
+                        body: JSON.stringify(constraintData)
+                    });
+                }
+                
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        alert('אנא התחבר כדי לשמור אילוצים');
+                        return;
+                    }
+                    throw new Error('שגיאה בשמירת האילוץ');
+                }
+                
+                closeConstraintModal();
+                await loadConstraints();
+            } catch (error) {
+                console.error('Error saving constraint:', error);
+                alert('שגיאה בשמירת האילוץ. אנא נסה שוב.');
+            }
+        }
+        
+        async function deleteConstraint(constraintId) {
+            if (!confirm('האם אתה בטוח שברצונך למחוק אילוץ זה?')) {
+                return;
+            }
+            
+            try {
+                const token = localStorage.getItem('auth_token');
+                const headers = {
+                    'Content-Type': 'application/json'
+                };
+                if (token) {
+                    headers['Authorization'] = `Bearer ${token}`;
+                }
+                
+                const response = await fetch(`/api/constraints/${constraintId}`, {
+                    method: 'DELETE',
+                    headers: headers
+                });
+                
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        alert('אנא התחבר כדי למחוק אילוצים');
+                        return;
+                    }
+                    throw new Error('שגיאה במחיקת האילוץ');
+                }
+                
+                await loadConstraints();
+            } catch (error) {
+                console.error('Error deleting constraint:', error);
+                alert('שגיאה במחיקת האילוץ. אנא נסה שוב.');
+            }
+        }
     </script>
+    
+    <script>
+        // Notifications functionality for index.html
+        let notifications = [];
+        let currentInvitationId = null;
+        
+        async function loadNotifications() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            
+            try {
+                const response = await fetch('/api/notifications', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    notifications = data.notifications || [];
+                    updateNotificationsUI();
+                }
+            } catch (error) {
+                console.error('Error loading notifications:', error);
+            }
+        }
+        
+        function updateNotificationsUI() {
+            const badge = document.getElementById('notificationBadge');
+            const unreadCount = notifications.filter(n => !n.read).length;
+            
+            if (badge) {
+                if (unreadCount > 0) {
+                    badge.textContent = unreadCount;
+                    badge.style.display = 'inline-block';
+                } else {
+                    badge.style.display = 'none';
+                }
+            }
+            
+            const list = document.getElementById('notificationsList');
+            if (list) {
+                if (notifications.length === 0) {
+                    list.innerHTML = '<div class="notification-item loading">אין התראות</div>';
+                } else {
+                    list.innerHTML = notifications.map(notif => {
+                        const time = new Date(notif.created_at).toLocaleString('he-IL');
+                        return `
+                            <div class="notification-item ${!notif.read ? 'unread' : ''}" style="display: flex; justify-content: space-between; align-items: start; gap: 0.5rem;">
+                                <div onclick="handleNotificationClick('${notif.id}', '${notif.type}', '${notif.link || ''}')" style="flex: 1; cursor: pointer;">
+                                    <div class="notification-title">${notif.title}</div>
+                                    <div class="notification-message">${notif.message}</div>
+                                    <div class="notification-time">${time}</div>
+                                </div>
+                                <button onclick="event.stopPropagation(); if(confirm('האם אתה בטוח שברצונך למחוק התראה זו?')) deleteNotification('${notif.id}')" style="background: #f44336; color: white; border: none; padding: 0.3rem 0.6rem; border-radius: 4px; cursor: pointer; font-size: 0.8em; flex-shrink: 0;" title="מחק התראה">×</button>
+                            </div>
+                        `;
+                    }).join('');
+                }
+            }
+        }
+        
+        function toggleNotifications() {
+            const dropdown = document.getElementById('notificationsDropdown');
+            if (dropdown) {
+                if (dropdown.style.display === 'none') {
+                    dropdown.style.display = 'block';
+                    loadNotifications();
+                } else {
+                    dropdown.style.display = 'none';
+                }
+            }
+        }
+        
+        async function handleNotificationClick(notificationId, type, link) {
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            
+            // Handle based on type FIRST (before marking as read)
+            // This way if there's an error, the notification stays visible
+            if (type === 'group_invitation') {
+                // Try to get invitation_id by notification_id (most reliable)
+                let invitationId = null;
+                
+                try {
+                    const invResponse = await fetch(`/api/groups/invitations/by-notification/${notificationId}`, {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    });
+                    if (invResponse.ok) {
+                        const invData = await invResponse.json();
+                        invitationId = invData.invitation_id;
+                        console.log('✅ Found invitation_id:', invitationId);
+                    } else {
+                        const errorText = await invResponse.text();
+                        console.error('❌ Failed to get invitation by notification:', invResponse.status, errorText);
+                    }
+                } catch (error) {
+                    console.error('Error getting invitation by notification:', error);
+                }
+                
+                // Fallback: try to extract from link
+                if (!invitationId && link) {
+                    const invitationMatch = link.match(/invitation=([^&]+)/);
+                    if (invitationMatch) {
+                        invitationId = invitationMatch[1];
+                    } else {
+                        // If no invitation_id in link, try to get it by group_id
+                        const groupMatch = link.match(/group=([^&]+)/);
+                        if (groupMatch) {
+                            const groupId = groupMatch[1];
+                            try {
+                                const invResponse = await fetch(`/api/groups/invitations/by-group/${groupId}`, {
+                                    headers: {
+                                        'Authorization': `Bearer ${token}`
+                                    }
+                                });
+                                if (invResponse.ok) {
+                                    const invData = await invResponse.json();
+                                    invitationId = invData.invitation_id;
+                                } else {
+                                    console.error('Failed to get invitation by group:', await invResponse.text());
+                                }
+                            } catch (error) {
+                                console.error('Error getting invitation by group:', error);
+                            }
+                        }
+                    }
+                }
+                
+                if (invitationId) {
+                    showInvitationDialog(invitationId);
+                } else {
+                    console.error('❌ Could not find invitation_id for notification:', notificationId);
+                    alert('לא נמצאה הזמנה. ייתכן שההזמנה כבר טופלה או נמחקה. אנא רענן את הדף.');
+                }
+            } else if (link) {
+                window.location.href = link;
+            }
+            
+            // Mark as read when clicked (but don't delete - user can delete manually)
+            // This updates the unread count badge
+            try {
+                await fetch(`/api/notifications/${notificationId}/read`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                // Reload notifications to update the badge count
+                await loadNotifications();
+            } catch (error) {
+                console.error('Error marking notification as read:', error);
+            }
+        }
+        
+        async function showInvitationDialog(invitationId) {
+            currentInvitationId = invitationId;
+            
+            // Get invitation details
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            
+            try {
+                // Get notification details to show message
+                const notifResponse = await fetch('/api/notifications', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (notifResponse.ok) {
+                    const notifData = await notifResponse.json();
+                    const notification = notifData.notifications.find(n => {
+                        if (n.link) {
+                            const match = n.link.match(/invitation=([^&]+)/);
+                            return match && match[1] === invitationId;
+                        }
+                        return false;
+                    });
+                    
+                    if (notification) {
+                        document.getElementById('invitationMessage').textContent = notification.message;
+                    } else {
+                        document.getElementById('invitationMessage').textContent = 'התקבלה הזמנה להצטרף לקבוצת לימוד';
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading invitation details:', error);
+                document.getElementById('invitationMessage').textContent = 'התקבלה הזמנה להצטרף לקבוצת לימוד';
+            }
+            
+            // Show modal
+            const modal = document.getElementById('invitationModal');
+            if (modal) {
+                modal.classList.add('active');
+            }
+        }
+        
+        function closeInvitationModal() {
+            const modal = document.getElementById('invitationModal');
+            if (modal) {
+                modal.classList.remove('active');
+            }
+            currentInvitationId = null;
+        }
+        
+        async function acceptInvitationFromModal() {
+            if (currentInvitationId) {
+                // Save the ID before closing the modal (which sets it to null)
+                const invitationId = currentInvitationId;
+                closeInvitationModal();
+                await acceptInvitation(invitationId);
+            } else {
+                console.error('No invitation ID available');
+                alert('שגיאה: לא נמצא מזהה הזמנה');
+            }
+        }
+        
+        async function rejectInvitationFromModal() {
+            if (currentInvitationId) {
+                // Save the ID before closing the modal (which sets it to null)
+                const invitationId = currentInvitationId;
+                closeInvitationModal();
+                await rejectInvitation(invitationId);
+            } else {
+                console.error('No invitation ID available');
+            }
+        }
+        
+        async function acceptInvitation(invitationId) {
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                alert('אנא התחבר כדי להצטרף לקבוצה');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/groups/invitations/${invitationId}/accept`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    alert('✅ הצטרפת בהצלחה לקבוצה!');
+                    // Reload notifications - notification stays visible until user deletes it
+                    await loadNotifications();
+                    // Close modal
+                    closeInvitationModal();
+                } else {
+                    const errorData = await response.json();
+                    const errorMsg = errorData.detail || 'לא ניתן להצטרף לקבוצה';
+                    console.error('Error accepting invitation:', errorMsg);
+                    alert('שגיאה: ' + errorMsg);
+                    // Reload notifications to make sure it's still visible
+                    await loadNotifications();
+                }
+            } catch (error) {
+                console.error('Error accepting invitation:', error);
+                alert('שגיאה בהצטרפות לקבוצה. אנא נסה שוב או רענן את הדף.');
+            }
+        }
+        
+        async function rejectInvitation(invitationId) {
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            
+            try {
+                const response = await fetch(`/api/groups/invitations/${invitationId}/reject`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    alert('הזמנה נדחתה');
+                    await loadNotifications();
+                }
+            } catch (error) {
+                console.error('Error rejecting invitation:', error);
+            }
+        }
+        
+        async function deleteNotification(notificationId) {
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            
+            try {
+                const response = await fetch(`/api/notifications/${notificationId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    await loadNotifications();
+                } else {
+                    const error = await response.json();
+                    alert('שגיאה: ' + (error.detail || 'לא ניתן למחוק התראה'));
+                }
+            } catch (error) {
+                console.error('Error deleting notification:', error);
+                alert('שגיאה במחיקת התראה');
+            }
+        }
+        
+        async function clearNotifications() {
+            if (!confirm('האם אתה בטוח שברצונך למחוק את כל ההתראות הנקראות?')) {
+                return;
+            }
+            
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                alert('אנא התחבר כדי לנקות התראות');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/notifications?read_only=true', {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    alert('✅ ההתראות הנקראות נמחקו');
+                    await loadNotifications();
+                } else {
+                    const error = await response.json();
+                    alert('שגיאה: ' + (error.detail || 'לא ניתן למחוק התראות'));
+                }
+            } catch (error) {
+                console.error('Error clearing notifications:', error);
+                alert('שגיאה במחיקת התראות');
+            }
+        }
+        
+        // Load notifications on page load
+        if (localStorage.getItem('auth_token')) {
+            loadNotifications();
+            // Load notifications every 60 seconds (reduced frequency to avoid issues)
+            setInterval(() => {
+                if (localStorage.getItem('auth_token')) {
+                    loadNotifications();
+                }
+            }, 60000);
+        }
+    </script>
+    
+    <!-- Constraint Modal -->
+    <div id="constraintModal" class="modal" onclick="if(event.target.id === 'constraintModal') closeConstraintModal()">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h2 class="modal-title" id="modalTitle">הוסף אילוץ</h2>
+                <button class="modal-close" onclick="closeConstraintModal()">×</button>
+            </div>
+            <form id="constraintForm" onsubmit="event.preventDefault(); saveConstraint();">
+                <div class="form-group">
+                    <label for="constraintTitle">שם האילוץ *</label>
+                    <input type="text" id="constraintTitle" required placeholder="למשל: עבודה, אימון">
+                </div>
+                <div class="form-group">
+                    <label for="constraintDescription">תיאור (אופציונלי)</label>
+                    <textarea id="constraintDescription" placeholder="תיאור נוסף של האילוץ"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>ימים בשבוע *</label>
+                    <div class="days-checkboxes">
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="day0" value="ראשון">
+                            <label for="day0">ראשון</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="day1" value="שני">
+                            <label for="day1">שני</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="day2" value="שלישי">
+                            <label for="day2">שלישי</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="day3" value="רביעי">
+                            <label for="day3">רביעי</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="day4" value="חמישי">
+                            <label for="day4">חמישי</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="day5" value="שישי">
+                            <label for="day5">שישי</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="day6" value="שבת">
+                            <label for="day6">שבת</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="constraintStartTime">שעת התחלה *</label>
+                    <input type="time" id="constraintStartTime" required>
+                </div>
+                <div class="form-group">
+                    <label for="constraintEndTime">שעת סיום *</label>
+                    <input type="time" id="constraintEndTime" required>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn-secondary" onclick="closeConstraintModal()">ביטול</button>
+                    <button type="submit" class="btn-primary">שמור</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Invitation Dialog Modal -->
+    <div id="invitationModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>הזמנה לקבוצת לימוד</h3>
+                <button class="close-btn" onclick="closeInvitationModal()">×</button>
+            </div>
+            <div id="invitationModalBody" style="padding: 1.5rem 0;">
+                <p id="invitationMessage"></p>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-primary" onclick="acceptInvitationFromModal()" id="acceptInvitationBtn">✅ קבל הזמנה</button>
+                <button class="btn-secondary" onclick="rejectInvitationFromModal()" id="rejectInvitationBtn">❌ דחה הזמנה</button>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

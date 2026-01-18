@@ -1,0 +1,1879 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>הקורסים שלי - Student Planner</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            direction: rtl;
+        }
+        
+        .navbar {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+        
+        .navbar-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .logo {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+            list-style: none;
+            align-items: center;
+        }
+        
+        .nav-links a {
+            text-decoration: none;
+            color: #333;
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+        
+        .nav-links a:hover {
+            color: #667eea;
+        }
+        
+        .chat-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 25px;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+            transition: transform 0.2s;
+        }
+        
+        .chat-btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        .section {
+            background: white;
+            border-radius: 20px;
+            padding: 3rem;
+            margin-bottom: 3rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 3px solid #667eea;
+        }
+        
+        .section-icon {
+            font-size: 2.5em;
+        }
+        
+        .section-title {
+            font-size: 2em;
+            color: #333;
+        }
+        
+        .section-subtitle {
+            color: #666;
+            margin-top: 0.5rem;
+        }
+        
+        /* Course Tabs */
+        .course-tabs-container {
+            margin-top: 2rem;
+        }
+        
+        .course-tabs {
+            display: flex;
+            gap: 0.5rem;
+            border-bottom: 2px solid #e0e0e0;
+            margin-bottom: 2rem;
+            overflow-x: auto;
+            padding-bottom: 0.5rem;
+        }
+        
+        .course-tab {
+            padding: 0.75rem 1.5rem;
+            background: #f5f5f5;
+            border: 2px solid transparent;
+            border-radius: 8px 8px 0 0;
+            cursor: pointer;
+            font-weight: 500;
+            color: #666;
+            transition: all 0.3s;
+            white-space: nowrap;
+        }
+        
+        .course-tab:hover {
+            background: #e8e8e8;
+        }
+        
+        .course-tab.active {
+            background: white;
+            border-color: #667eea;
+            border-bottom-color: white;
+            color: #667eea;
+            font-weight: bold;
+        }
+        
+        .course-tab-content {
+            background: white;
+            border: 2px solid #e0e0e0;
+            border-radius: 15px;
+            padding: 2rem;
+            min-height: 400px;
+        }
+        
+        .course-tab-panel {
+            display: none;
+        }
+        
+        .course-tab-panel.active {
+            display: block;
+        }
+        
+        /* My Courses Section */
+        .my-course-card {
+            background: white;
+            border: 2px solid #e0e0e0;
+            border-radius: 15px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: all 0.3s;
+        }
+        
+        .my-course-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            border-color: #667eea;
+        }
+        
+        .my-course-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        
+        .my-course-title {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #333;
+        }
+        
+        .my-course-number {
+            color: #666;
+            font-size: 0.9em;
+            margin-right: 0.5rem;
+        }
+        
+        .my-course-content {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .my-course-field {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+        
+        .my-course-field-label {
+            font-size: 0.85em;
+            color: #666;
+            font-weight: 500;
+        }
+        
+        .my-course-field-value {
+            font-size: 1em;
+            color: #333;
+        }
+        
+        .semester-selector {
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 2px solid #f0f0f0;
+        }
+        
+        .semester-selector label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: #333;
+        }
+        
+        .semester-selector select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 1em;
+            direction: rtl;
+            cursor: pointer;
+            transition: border-color 0.3s;
+        }
+        
+        .semester-selector select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .semester-selector select:hover {
+            border-color: #667eea;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: #666;
+        }
+        
+        .empty-state-icon {
+            font-size: 4em;
+            margin-bottom: 1rem;
+        }
+        
+        .grade-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 0.9em;
+            direction: ltr;
+            unicode-bidi: embed;
+            text-align: center;
+            min-width: 50px;
+        }
+        
+        .grade-excellent {
+            background: #4caf50;
+            color: white;
+        }
+        
+        .grade-good {
+            background: #8bc34a;
+            color: white;
+        }
+        
+        .grade-average {
+            background: #ffc107;
+            color: #333;
+        }
+        
+        .grade-low {
+            background: #ff9800;
+            color: white;
+        }
+        
+        /* Modal positioning */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+            overflow: auto;
+        }
+        
+        .modal.active {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: white;
+            border-radius: 15px;
+            padding: 2rem;
+            max-width: 560px;
+            width: 92%;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+            position: relative;
+            direction: rtl;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        
+        .modal-header h3 {
+            margin: 0;
+            color: #333;
+        }
+        
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 2em;
+            cursor: pointer;
+            color: #666;
+            padding: 0;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .close-btn:hover {
+            color: #333;
+        }
+        
+        /* Form layout */
+        .modal form {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        
+        .form-group {
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+        
+        .form-group label {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 1em;
+            direction: rtl;
+        }
+        
+        .form-group input:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .invite-emails {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        
+        .email-input-row {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .email-input-row input {
+            flex: 1;
+        }
+
+        .btn-remove-email {
+            background: #f44336;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        .btn-add-email {
+            background: #4caf50;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-top: 0.5rem;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: flex-end;
+            margin-top: 0.5rem;
+        }
+        
+        .days {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        
+        .day-tag {
+            background: #e3f2fd;
+            color: #1976d2;
+            padding: 0.25rem 0.75rem;
+            border-radius: 15px;
+            font-size: 0.85em;
+        }
+        
+        .time-info {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+        
+        /* Groups */
+        .groups-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .group-card {
+            background: #f8f9fa;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 1rem;
+            transition: all 0.3s;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .group-card:hover {
+            border-color: #667eea;
+            background: #f0f4ff;
+        }
+        
+        .btn-delete-group {
+            flex-shrink: 0;
+        }
+        
+        .btn-delete-group:hover {
+            background: #d32f2f !important;
+        }
+        
+        .group-name {
+            font-weight: bold;
+            font-size: 1.1em;
+            color: #333;
+            margin-bottom: 0.5rem;
+        }
+        
+        .group-meta {
+            display: flex;
+            gap: 1rem;
+            font-size: 0.9em;
+            color: #666;
+        }
+        
+        /* Notifications Widget */
+        .notifications-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: white;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            width: 350px;
+            max-height: 500px;
+            overflow-y: auto;
+            z-index: 1000;
+            margin-top: 0.5rem;
+            direction: rtl;
+        }
+        
+        .notifications-header {
+            padding: 1rem;
+            border-bottom: 2px solid #f0f0f0;
+            font-weight: bold;
+            background: #f8f9fa;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .btn-clear-notifications {
+            background: #ff9800;
+            color: white;
+            border: none;
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85em;
+        }
+        
+        .btn-clear-notifications:hover {
+            background: #f57c00;
+        }
+        
+        .notifications-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .notification-item {
+            padding: 1rem;
+            border-bottom: 1px solid #f0f0f0;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .notification-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .notification-item.unread {
+            background: #e3f2fd;
+            font-weight: bold;
+        }
+        
+        .notification-item.loading {
+            text-align: center;
+            color: #999;
+            cursor: default;
+        }
+        
+        .notification-title {
+            font-weight: bold;
+            margin-bottom: 0.25rem;
+        }
+        
+        .notification-message {
+            color: #666;
+            font-size: 0.9em;
+        }
+        
+        .notification-time {
+            color: #999;
+            font-size: 0.8em;
+            margin-top: 0.25rem;
+        }
+        
+        /* Assignments Section */
+        .assignments-section {
+            margin-top: 2rem;
+            padding-top: 2rem;
+            border-top: 2px solid #f0f0f0;
+        }
+        
+        .assignments-header {
+            margin-bottom: 1.5rem;
+        }
+        
+        .assignments-header h3 {
+            margin-bottom: 0.5rem;
+            color: #333;
+        }
+        
+        .assignment-card {
+            background: #f8f9fa;
+            border-right: 4px solid;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            transition: all 0.3s;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 1rem;
+        }
+        
+        .assignment-card:hover {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transform: translateX(-2px);
+        }
+        
+        .assignment-card.high-priority {
+            border-right-color: #f44336;
+            background: #ffebee;
+        }
+        
+        .assignment-card.medium-priority {
+            border-right-color: #ff9800;
+            background: #fff3e0;
+        }
+        
+        .assignment-card.low-priority {
+            border-right-color: #4caf50;
+            background: #f1f8e9;
+        }
+        
+        .assignment-card.completed {
+            opacity: 0.6;
+            text-decoration: line-through;
+        }
+        
+        .assignment-info {
+            flex: 1;
+        }
+        
+        .assignment-title {
+            font-weight: bold;
+            font-size: 1em;
+            margin-bottom: 0.3rem;
+            color: #333;
+        }
+        
+        .assignment-description {
+            font-size: 0.9em;
+            color: #666;
+            margin-bottom: 0.5rem;
+        }
+        
+        .assignment-meta {
+            display: flex;
+            gap: 1rem;
+            font-size: 0.85em;
+            flex-wrap: wrap;
+        }
+        
+        .assignment-due-date {
+            color: #666;
+        }
+        
+        .days-remaining {
+            font-weight: bold;
+            padding: 0.2rem 0.6rem;
+            border-radius: 4px;
+            white-space: nowrap;
+        }
+        
+        .days-urgent {
+            background: #f44336;
+            color: white;
+        }
+        
+        .days-soon {
+            background: #ff9800;
+            color: white;
+        }
+        
+        .days-plenty {
+            background: #4caf50;
+            color: white;
+        }
+        
+        .days-overdue {
+            background: #d32f2f;
+            color: white;
+            animation: pulse 1.5s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.7;
+            }
+        }
+        
+        .assignment-priority {
+            padding: 0.2rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.8em;
+            font-weight: bold;
+            white-space: nowrap;
+        }
+        
+        .priority-high {
+            background: #f44336;
+            color: white;
+        }
+        
+        .priority-medium {
+            background: #ff9800;
+            color: white;
+        }
+        
+        .priority-low {
+            background: #4caf50;
+            color: white;
+        }
+        
+        .assignment-status {
+            flex-shrink: 0;
+        }
+        
+        .assignment-checkbox {
+            width: 24px;
+            height: 24px;
+            cursor: pointer;
+            accent-color: #667eea;
+        }
+        
+        .empty-assignments {
+            text-align: center;
+            padding: 2rem;
+            color: #999;
+            background: #f5f5f5;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="logo">🎓 יועץ אקדמי חכם</div>
+            <ul class="nav-links">
+                <li><a href="/">יועץ אקדמי</a></li>
+                <li><a href="/profile">פרופיל</a></li>
+                <li><a href="/schedule">בניית מערכת</a></li>
+                <li><a href="/my-courses" style="color: #667eea; font-weight: bold;">📚 הקורסים שלי</a></li>
+                <li id="notificationsWidget" style="position: relative;">
+                    <button class="chat-btn" onclick="toggleNotifications()" id="notificationsBtn">🔔 התראות <span id="notificationBadge" style="display: none; background: #f44336; color: white; border-radius: 50%; padding: 0.2rem 0.5rem; font-size: 0.8em; margin-right: 0.5rem;">0</span></button>
+                    <div id="notificationsDropdown" class="notifications-dropdown" style="display: none;">
+                        <div class="notifications-header">
+                            <span>התראות</span>
+                            <button class="btn-clear-notifications" onclick="clearNotifications()" title="נקה התראות נקראות">🧹 נקה נקראות</button>
+                        </div>
+                        <div id="notificationsList" class="notifications-list">
+                            <div class="notification-item loading">טוען התראות...</div>
+                        </div>
+                    </div>
+                </li>
+                <li id="authButton">
+                    <button class="chat-btn" id="loginBtn" onclick="window.location.href='/login'">🔐 התחבר</button>
+                </li>
+                <li><button class="chat-btn" onclick="toggleChat()">💬 צ'אט</button></li>
+            </ul>
+        </div>
+    </nav>
+    
+    <div class="container">
+        <section class="section">
+            <div class="section-header">
+                <div class="section-icon">📚</div>
+                <div>
+                    <h2 class="section-title">הקורסים שלי</h2>
+                    <p class="section-subtitle">נהל את הקורסים שלך ובחר סמסטר לכל קורס</p>
+                </div>
+            </div>
+            
+            <!-- Course Tabs -->
+            <div class="course-tabs-container">
+                <div class="course-tabs" id="courseTabs">
+                    <!-- Will be populated by JavaScript -->
+                </div>
+                <div class="course-tab-content" id="courseTabContent">
+                    <!-- Will be populated by JavaScript -->
+                </div>
+            </div>
+        </section>
+    </div>
+    
+    <!-- Invitation Dialog Modal -->
+    <div id="invitationModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>הזמנה לקבוצת לימוד</h3>
+                <button class="close-btn" onclick="closeInvitationModal()">×</button>
+            </div>
+            <div id="invitationModalBody" style="padding: 1.5rem 0;">
+                <p id="invitationMessage"></p>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-primary" onclick="acceptInvitationFromModal()" id="acceptInvitationBtn">✅ קבל הזמנה</button>
+                <button class="btn-secondary" onclick="rejectInvitationFromModal()" id="rejectInvitationBtn">❌ דחה הזמנה</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Create Group Modal -->
+    <div id="createGroupModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>צור קבוצת לימוד</h3>
+                <button class="close-btn" onclick="closeCreateGroupModal()">×</button>
+            </div>
+            <form id="createGroupForm" onsubmit="createGroup(event)">
+                <input type="hidden" id="groupCourseId" />
+                <input type="hidden" id="groupCourseName" />
+                
+                <div class="form-group">
+                    <label>שם הקבוצה</label>
+                    <input type="text" id="groupName" required placeholder="למשל: קבוצת לימוד - מבוא למדעי המחשב" />
+                </div>
+                
+                <div class="form-group">
+                    <label>תיאור (אופציונלי)</label>
+                    <textarea id="groupDescription" rows="3" placeholder="תיאור קצר של הקבוצה..."></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label>הזמן חברים לפי מייל</label>
+                    <div id="inviteEmails" class="invite-emails">
+                        <div class="email-input-row">
+                            <input type="email" class="email-input" placeholder="email@example.com" />
+                            <button type="button" class="btn-remove-email" onclick="removeEmailInput(this)" style="display: none;">×</button>
+                        </div>
+                    </div>
+                    <button type="button" class="btn-add-email" onclick="addEmailInput()">+ הוסף מייל נוסף</button>
+                </div>
+                
+                <div class="modal-actions">
+                    <button type="submit" class="btn-primary">צור קבוצה</button>
+                    <button type="button" class="btn-secondary" onclick="closeCreateGroupModal()">ביטול</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <script>
+        // Debug logging
+        console.log('🔍 [DEBUG] my_courses.html script started');
+        console.log('🔍 [DEBUG] document.readyState:', document.readyState);
+        
+        // Check authentication - simple check like in schedule.html
+        const token = localStorage.getItem('auth_token');
+        console.log('🔍 [DEBUG] Token from localStorage:', token ? `Found (length: ${token.length})` : 'NOT FOUND');
+        
+        const loginBtn = document.getElementById('loginBtn');
+        console.log('🔍 [DEBUG] loginBtn element:', loginBtn ? 'Found' : 'NOT FOUND');
+        
+        if (!token) {
+            console.log('🔍 [DEBUG] No token - showing login button');
+            if (loginBtn) {
+                loginBtn.style.display = 'block';
+            }
+        } else {
+            console.log('🔍 [DEBUG] Token found - updating button');
+            const userEmail = localStorage.getItem('user_email') || 'משתמש';
+            console.log('🔍 [DEBUG] User email:', userEmail);
+            if (loginBtn) {
+                loginBtn.textContent = `👤 ${userEmail}`;
+                loginBtn.onclick = () => {
+                    if (confirm('האם אתה בטוח שברצונך להתנתק?')) {
+                        console.log('🔍 [DEBUG] User clicked logout - removing token');
+                        localStorage.removeItem('auth_token');
+                        localStorage.removeItem('user_id');
+                        localStorage.removeItem('user_email');
+                        window.location.href = '/login';
+                    }
+                };
+                console.log('🔍 [DEBUG] Button updated successfully');
+            } else {
+                console.error('🔍 [DEBUG] ERROR: loginBtn not found!');
+            }
+        }
+        
+        // Days array
+        const days = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+        
+        // Courses array - demo courses (will be loaded from schedule or profile later)
+        const courses = [
+            {
+                id: '1',
+                course_name: 'מבוא למדעי המחשב',
+                course_number: '10401',
+                credit_points: 4,
+                semester: 'חורף'
+            },
+            {
+                id: '2',
+                course_name: 'מבני נתונים',
+                course_number: '10402',
+                credit_points: 5,
+                semester: 'חורף'
+            },
+            {
+                id: '3',
+                course_name: 'אלגוריתמים',
+                course_number: '10403',
+                credit_points: 5,
+                semester: 'אביב'
+            },
+            {
+                id: '4',
+                course_name: 'מסדי נתונים',
+                course_number: '10404',
+                credit_points: 4,
+                semester: 'אביב'
+            },
+            {
+                id: '5',
+                course_name: 'תכנות מונחה עצמים',
+                course_number: '10405',
+                credit_points: 4,
+                semester: 'קיץ'
+            },
+            {
+                id: '6',
+                course_name: 'רשתות מחשבים',
+                course_number: '10406',
+                credit_points: 3,
+                semester: 'קיץ'
+            }
+        ];
+        
+        // Store groups data
+        let userGroups = {};
+        let notifications = [];
+        let assignmentsData = {};  // Store assignments for each course
+        
+        // Notifications functions
+        async function loadNotifications() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            
+            try {
+                const response = await fetch('/api/notifications', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    notifications = data.notifications || [];
+                    updateNotificationsUI();
+                } else if (response.status === 401) {
+                    // Token expired or invalid - don't redirect automatically, just skip
+                    console.log('Not authenticated - skipping notifications');
+                    return;
+                }
+            } catch (error) {
+                console.error('Error loading notifications:', error);
+            }
+        }
+        
+        function updateNotificationsUI() {
+            const badge = document.getElementById('notificationBadge');
+            const unreadCount = notifications.filter(n => !n.read).length;
+            
+            if (badge) {
+                if (unreadCount > 0) {
+                    badge.textContent = unreadCount;
+                    badge.style.display = 'inline-block';
+                } else {
+                    badge.style.display = 'none';
+                }
+            }
+            
+            const list = document.getElementById('notificationsList');
+            if (list) {
+                if (notifications.length === 0) {
+                    list.innerHTML = '<div class="notification-item loading">אין התראות</div>';
+                } else {
+                    list.innerHTML = notifications.map(notif => {
+                        const time = new Date(notif.created_at).toLocaleString('he-IL');
+                        return `
+                            <div class="notification-item ${!notif.read ? 'unread' : ''}" style="display: flex; justify-content: space-between; align-items: start; gap: 0.5rem;">
+                                <div onclick="handleNotificationClick('${notif.id}', '${notif.type}', '${notif.link || ''}')" style="flex: 1; cursor: pointer;">
+                                    <div class="notification-title">${notif.title}</div>
+                                    <div class="notification-message">${notif.message}</div>
+                                    <div class="notification-time">${time}</div>
+                                </div>
+                                <button onclick="event.stopPropagation(); if(confirm('האם אתה בטוח שברצונך למחוק התראה זו?')) deleteNotification('${notif.id}')" style="background: #f44336; color: white; border: none; padding: 0.3rem 0.6rem; border-radius: 4px; cursor: pointer; font-size: 0.8em; flex-shrink: 0;" title="מחק התראה">×</button>
+                            </div>
+                        `;
+                    }).join('');
+                }
+            }
+        }
+        
+        function toggleNotifications() {
+            const dropdown = document.getElementById('notificationsDropdown');
+            if (dropdown) {
+                if (dropdown.style.display === 'none') {
+                    dropdown.style.display = 'block';
+                    loadNotifications();
+                } else {
+                    dropdown.style.display = 'none';
+                }
+            }
+        }
+        
+        async function handleNotificationClick(notificationId, type, link) {
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            
+            // Handle based on type FIRST (before marking as read)
+            // This way if there's an error, the notification stays visible
+            if (type === 'group_invitation') {
+                // Try to get invitation_id by notification_id (most reliable)
+                let invitationId = null;
+                
+                try {
+                    const invResponse = await fetch(`/api/groups/invitations/by-notification/${notificationId}`, {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    });
+                    if (invResponse.ok) {
+                        const invData = await invResponse.json();
+                        invitationId = invData.invitation_id;
+                    } else {
+                        console.error('Failed to get invitation by notification:', await invResponse.text());
+                    }
+                } catch (error) {
+                    console.error('Error getting invitation by notification:', error);
+                }
+                
+                // Fallback: try to extract from link
+                if (!invitationId && link) {
+                    const invitationMatch = link.match(/invitation=([^&]+)/);
+                    if (invitationMatch) {
+                        invitationId = invitationMatch[1];
+                    } else {
+                        // If no invitation_id in link, try to get it by group_id
+                        const groupMatch = link.match(/group=([^&]+)/);
+                        if (groupMatch) {
+                            const groupId = groupMatch[1];
+                            try {
+                                const invResponse = await fetch(`/api/groups/invitations/by-group/${groupId}`, {
+                                    headers: {
+                                        'Authorization': `Bearer ${token}`
+                                    }
+                                });
+                                if (invResponse.ok) {
+                                    const invData = await invResponse.json();
+                                    invitationId = invData.invitation_id;
+                                } else {
+                                    console.error('Failed to get invitation by group:', await invResponse.text());
+                                }
+                            } catch (error) {
+                                console.error('Error getting invitation by group:', error);
+                            }
+                        }
+                    }
+                }
+                
+                if (invitationId) {
+                    showInvitationDialog(invitationId);
+                } else {
+                    alert('לא נמצאה הזמנה. אנא נסה שוב.');
+                }
+            } else if (link) {
+                window.location.href = link;
+            }
+            
+            // Mark as read when clicked (but don't delete - user can delete manually)
+            // This updates the unread count badge
+            try {
+                await fetch(`/api/notifications/${notificationId}/read`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                // Reload notifications to update the badge count
+                await loadNotifications();
+            } catch (error) {
+                console.error('Error marking notification as read:', error);
+            }
+        }
+        
+        let currentInvitationId = null;
+        
+        async function showInvitationDialog(invitationId) {
+            currentInvitationId = invitationId;
+            
+            // Get invitation details
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            
+            try {
+                // Get notification details to show message
+                const notifResponse = await fetch('/api/notifications', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (notifResponse.ok) {
+                    const notifData = await notifResponse.json();
+                    const notification = notifData.notifications.find(n => {
+                        if (n.link) {
+                            const match = n.link.match(/invitation=([^&]+)/);
+                            return match && match[1] === invitationId;
+                        }
+                        return false;
+                    });
+                    
+                    if (notification) {
+                        document.getElementById('invitationMessage').textContent = notification.message;
+                    } else {
+                        document.getElementById('invitationMessage').textContent = 'התקבלה הזמנה להצטרף לקבוצת לימוד';
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading invitation details:', error);
+                document.getElementById('invitationMessage').textContent = 'התקבלה הזמנה להצטרף לקבוצת לימוד';
+            }
+            
+            // Show modal
+            const modal = document.getElementById('invitationModal');
+            if (modal) {
+                modal.classList.add('active');
+            }
+        }
+        
+        function closeInvitationModal() {
+            const modal = document.getElementById('invitationModal');
+            if (modal) {
+                modal.classList.remove('active');
+            }
+            currentInvitationId = null;
+        }
+        
+        async function acceptInvitationFromModal() {
+            if (currentInvitationId) {
+                // Save the ID before closing the modal (which sets it to null)
+                const invitationId = currentInvitationId;
+                closeInvitationModal();
+                await acceptInvitation(invitationId);
+            } else {
+                console.error('No invitation ID available');
+                alert('שגיאה: לא נמצא מזהה הזמנה');
+            }
+        }
+        
+        async function rejectInvitationFromModal() {
+            if (currentInvitationId) {
+                // Save the ID before closing the modal (which sets it to null)
+                const invitationId = currentInvitationId;
+                closeInvitationModal();
+                await rejectInvitation(invitationId);
+            } else {
+                console.error('No invitation ID available');
+            }
+        }
+        
+        async function acceptInvitation(invitationId) {
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            
+            try {
+                const response = await fetch(`/api/groups/invitations/${invitationId}/accept`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    alert('✅ הצטרפת בהצלחה לקבוצה!');
+                    // Reload everything - notification will be marked as read by backend
+                    await loadNotifications();
+                    await loadUserGroups();
+                    await displayMyCourses();
+                } else {
+                    const error = await response.json();
+                    const errorMsg = error.detail || 'לא ניתן להצטרף לקבוצה';
+                    alert('שגיאה: ' + errorMsg);
+                    console.error('Error accepting invitation:', error);
+                    // Reload notifications to make sure it's still visible
+                    await loadNotifications();
+                }
+            } catch (error) {
+                console.error('Error accepting invitation:', error);
+                alert('שגיאה בהצטרפות לקבוצה');
+            }
+        }
+        
+        async function rejectInvitation(invitationId) {
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            
+            try {
+                const response = await fetch(`/api/groups/invitations/${invitationId}/reject`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    alert('הזמנה נדחתה');
+                    await loadNotifications();
+                }
+            } catch (error) {
+                console.error('Error rejecting invitation:', error);
+            }
+        }
+        
+        // Delete single notification
+        async function deleteNotification(notificationId) {
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            
+            try {
+                const response = await fetch(`/api/notifications/${notificationId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    await loadNotifications();
+                } else {
+                    const error = await response.json();
+                    alert('שגיאה: ' + (error.detail || 'לא ניתן למחוק התראה'));
+                }
+            } catch (error) {
+                console.error('Error deleting notification:', error);
+                alert('שגיאה במחיקת התראה');
+            }
+        }
+        
+        // Clear notifications
+        async function clearNotifications() {
+            if (!confirm('האם אתה בטוח שברצונך למחוק את כל ההתראות הנקראות?')) {
+                return;
+            }
+            
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                alert('אנא התחבר כדי לנקות התראות');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/notifications?read_only=true', {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    alert('✅ ההתראות הנקראות נמחקו');
+                    await loadNotifications();
+                } else {
+                    const error = await response.json();
+                    alert('שגיאה: ' + (error.detail || 'לא ניתן למחוק התראות'));
+                }
+            } catch (error) {
+                console.error('Error clearing notifications:', error);
+                alert('שגיאה במחיקת התראות');
+            }
+        }
+        
+        // Delete group
+        async function deleteGroup(groupId, groupName) {
+            if (!confirm(`האם אתה בטוח שברצונך למחוק את הקבוצה "${groupName}"?\n\nפעולה זו לא ניתנת לביטול!`)) {
+                return;
+            }
+            
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                alert('אנא התחבר כדי למחוק קבוצה');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/groups/${groupId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    alert('✅ הקבוצה נמחקה בהצלחה!');
+                    await loadUserGroups();
+                    await displayMyCourses();
+                } else {
+                    const error = await response.json();
+                    alert('שגיאה: ' + (error.detail || 'לא ניתן למחוק את הקבוצה'));
+                }
+            } catch (error) {
+                console.error('Error deleting group:', error);
+                alert('שגיאה במחיקת הקבוצה');
+            }
+        }
+        
+        // Display My Courses with Tabs
+        async function displayMyCourses() {
+            console.log('🔍 [DEBUG] displayMyCourses() called');
+            console.log('🔍 [DEBUG] courses.length:', courses.length);
+            
+            const courseTabs = document.getElementById('courseTabs');
+            const courseTabContent = document.getElementById('courseTabContent');
+            
+            console.log('🔍 [DEBUG] courseTabs:', courseTabs ? 'Found' : 'NOT FOUND');
+            console.log('🔍 [DEBUG] courseTabContent:', courseTabContent ? 'Found' : 'NOT FOUND');
+            
+            if (!courseTabs || !courseTabContent) {
+                console.error('🔍 [DEBUG] ERROR: Missing DOM elements!');
+                return;
+            }
+            
+            if (courses.length === 0) {
+                console.warn('🔍 [DEBUG] WARNING: courses array is empty!');
+                courseTabContent.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📚</div>
+                        <p>הקורסים שלך יופיעו כאן</p>
+                        <p style="font-size: 0.9em; color: #999; margin-top: 0.5rem;">לאחר שתשבץ קורסים במערכת השבועית, הם יופיעו כאן עם אפשרות לבחור סמסטר לכל קורס</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            // Load user groups
+            await loadUserGroups();
+            
+            // Create tabs
+            courseTabs.innerHTML = courses.map((course, index) => {
+                const courseId = course.id || course.course_number || index;
+                const courseName = course.course_name || course.name || 'קורס ללא שם';
+                const hasGroup = userGroups[courseId] && userGroups[courseId].length > 0;
+                return `
+                    <div class="course-tab ${index === 0 ? 'active' : ''}" onclick="switchCourseTab(${index})" data-course-index="${index}">
+                        ${courseName} ${hasGroup ? '👥' : ''}
+                    </div>
+                `;
+            }).join('');
+            
+            // Create tab content
+            courseTabContent.innerHTML = courses.map((course, index) => {
+                const courseId = course.id || course.course_number || index;
+                const courseName = course.course_name || course.name || 'קורס ללא שם';
+                const courseGroups = userGroups[courseId] || [];
+                const courseAssignments = (typeof getCourseAssignments === 'function') ? getCourseAssignments(courseId) || [] : [];
+                
+                // Render assignments HTML
+                let assignmentsHTML = '';
+                
+                // Only show assignments if they exist
+                if (courseAssignments && courseAssignments.length > 0) {
+                    assignmentsHTML = `
+                        <div class="assignments-section">
+                            <div class="assignments-header">
+                                <h3>📝 מטלות (${courseAssignments.length})</h3>
+                            </div>
+                            <div>
+                                ${courseAssignments.map(assignment => {
+                                    const daysRemaining = assignment.days_remaining || 0;
+                                    const isOverdue = daysRemaining < 0;
+                                    const isUrgent = daysRemaining <= 3 && daysRemaining >= 0;
+                                    const priorityClass = `${assignment.priority}-priority`;
+                                    const completedClass = assignment.is_completed ? 'completed' : '';
+                                    
+                                    let daysClass = 'days-plenty';
+                                    let daysText = daysRemaining + ' ימים';
+                                    
+                                    if (isOverdue) {
+                                        daysClass = 'days-overdue';
+                                        daysText = '⚠️ ' + Math.abs(daysRemaining) + ' ימים עברו';
+                                    } else if (daysRemaining === 0) {
+                                        daysClass = 'days-urgent';
+                                        daysText = 'היום!';
+                                    } else if (daysRemaining === 1) {
+                                        daysClass = 'days-urgent';
+                                        daysText = 'מחר!';
+                                    } else if (isUrgent) {
+                                        daysClass = 'days-soon';
+                                        daysText = daysRemaining + ' ימים';
+                                    }
+                                    
+                                    return '<div class="assignment-card ' + priorityClass + ' ' + completedClass + '">' +
+                                        '<div class="assignment-info">' +
+                                        '<div class="assignment-title">' + assignment.title + '</div>' +
+                                        '<div class="assignment-description">' + assignment.description + '</div>' +
+                                        '<div class="assignment-meta">' +
+                                        '<span class="assignment-due-date">📅 ' + assignment.due_date + '</span>' +
+                                        '<span class="days-remaining ' + daysClass + '">' + daysText + '</span>' +
+                                        '<span class="assignment-priority priority-' + assignment.priority + '">' + 
+                                        (assignment.priority === 'high' ? '🔴 גבוהה' : assignment.priority === 'medium' ? '🟡 בינונית' : '🟢 נמוכה') + 
+                                        '</span>' +
+                                        '</div>' +
+                                        '</div>' +
+                                        '<div class="assignment-status">' +
+                                        '<input type="checkbox" class="assignment-checkbox" ' + (assignment.is_completed ? 'checked' : '') + ' onchange="updateAssignmentStatus(\'' + assignment.id + '\', this.checked)" title="סמן כהושלם">' +
+                                        '</div>' +
+                                        '</div>';
+                                }).join('')}
+                            </div>
+                        </div>
+                    `;
+                }
+                
+                return `
+                    <div class="course-tab-panel ${index === 0 ? 'active' : ''}" data-course-index="${index}">
+                        <div class="my-course-header">
+                            <div>
+                                <div class="my-course-title">
+                                    ${courseName}
+                                    ${course.course_number ? `<span class="my-course-number">(${course.course_number})</span>` : ''}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="my-course-content">
+                            ${course.credit_points ? `
+                                <div class="my-course-field">
+                                    <span class="my-course-field-label">נקודות זכות</span>
+                                    <span class="my-course-field-value">${course.credit_points}</span>
+                                </div>
+                            ` : ''}
+                            ${course.semester ? `
+                                <div class="my-course-field">
+                                    <span class="my-course-field-label">סמסטר</span>
+                                    <span class="my-course-field-value">${course.semester}</span>
+                                </div>
+                            ` : ''}
+                        </div>
+                        <div class="semester-selector">
+                            <label>בחר סמסטר:</label>
+                            <select id="semester-${index}" onchange="updateCourseSemester(${index}, this.value)">
+                                <option value="">לא נבחר</option>
+                                <option value="חורף" ${course.semester === 'חורף' ? 'selected' : ''}>חורף</option>
+                                <option value="קיץ" ${course.semester === 'קיץ' ? 'selected' : ''}>קיץ</option>
+                                <option value="אביב" ${course.semester === 'אביב' ? 'selected' : ''}>אביב</option>
+                            </select>
+                        </div>
+                        
+                        <!-- Assignments Section -->
+                        ${assignmentsHTML}
+                        
+                        <!-- Groups Section -->
+                        <div style="margin-top: 2rem; padding-top: 2rem; border-top: 2px solid #f0f0f0;">
+                            <h3 style="margin-bottom: 1rem; color: #333;">קבוצות לימוד</h3>
+                            ${courseGroups.length > 0 ? `
+                                <div class="groups-list">
+                                    ${courseGroups.map(group => `
+                                        <div class="group-card">
+                                            <div onclick="viewGroup('${group.id}')" style="flex: 1; cursor: pointer;">
+                                                <div class="group-name">${group.group_name}</div>
+                                                <div class="group-meta">
+                                                    <span>👥 ${group.members_count || 0} חברים</span>
+                                                    ${group.description ? `<span>📝 ${group.description}</span>` : ''}
+                                                </div>
+                                                ${group.members && group.members.length > 0 ? `
+                                                    <div class="group-members" style="margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid #e0e0e0;">
+                                                        <div style="font-size: 0.85em; color: #666; margin-bottom: 0.3rem;">חברים בקבוצה:</div>
+                                                        <div style="display: flex; flex-wrap: wrap; gap: 0.3rem;">
+                                                            ${group.members.map(m => `<span style="background: #f0f0f0; padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.8em;">${m.email || 'Unknown'}</span>`).join('')}
+                                                        </div>
+                                                    </div>
+                                                ` : ''}
+                                            </div>
+                                            <button class="btn-delete-group" onclick="event.stopPropagation(); deleteGroup('${group.id}', '${group.group_name}')" title="מחק קבוצה" style="background: #f44336; color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.9em; margin-right: 0.5rem;">
+                                                🗑️ מחק
+                                            </button>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            ` : `
+                                <p style="color: #666; margin-bottom: 1rem;">אין קבוצות לימוד עבור קורס זה</p>
+                            `}
+                            <button class="btn-create-group" onclick="openCreateGroupModal('${courseId}', '${courseName}')" style="background: #667eea; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 8px; cursor: pointer; font-weight: bold; width: 100%; margin-top: 1rem;">
+                                👥 צור קבוצת לימוד חדשה
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // Switch course tab
+        function switchCourseTab(index) {
+            // Update tabs
+            document.querySelectorAll('.course-tab').forEach((tab, i) => {
+                if (i === index) {
+                    tab.classList.add('active');
+                } else {
+                    tab.classList.remove('active');
+                }
+            });
+            
+            // Update panels
+            document.querySelectorAll('.course-tab-panel').forEach((panel, i) => {
+                if (i === index) {
+                    panel.classList.add('active');
+                } else {
+                    panel.classList.remove('active');
+                }
+            });
+            
+            // Keep notifications widget visible and updated when switching tabs
+            // Reload notifications to ensure they stay visible
+            if (localStorage.getItem('auth_token')) {
+                loadNotifications();
+            }
+        }
+        
+        // Load user groups
+        async function loadUserGroups() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            
+            try {
+                const response = await fetch('/api/groups/my-groups', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    // Group groups by course_id
+                    userGroups = {};
+                    (data.groups || []).forEach(group => {
+                        if (!userGroups[group.course_id]) {
+                            userGroups[group.course_id] = [];
+                        }
+                        userGroups[group.course_id].push(group);
+                    });
+                } else if (response.status === 401) {
+                    // Token expired or invalid - don't redirect automatically, just skip
+                    console.log('Not authenticated - skipping groups');
+                    return;
+                }
+            } catch (error) {
+                console.error('Error loading groups:', error);
+            }
+        }
+        
+        // Load assignments for all courses
+        async function loadAllAssignments() {
+            try {
+                const response = await fetch('/api/assignments/sample');
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    assignmentsData = data.assignments || {};
+                    console.log('✅ Loaded assignments for all courses:', Object.keys(assignmentsData).length, 'courses');
+                } else {
+                    console.error('Error loading assignments:', response.status);
+                }
+            } catch (error) {
+                console.error('Error loading assignments:', error);
+            }
+        }
+        
+        // Get assignments for a specific course
+        function getCourseAssignments(courseId) {
+            return assignmentsData[courseId] || [];
+        }
+        
+        // View group details
+        function viewGroup(groupId) {
+            // Open group chat page
+            window.location.href = `/group/${groupId}`;
+        }
+        
+        // Update course semester
+        function updateCourseSemester(courseIndex, semester) {
+            if (!courses || !courses[courseIndex]) {
+                console.error('Invalid course index:', courseIndex);
+                return;
+            }
+            
+            courses[courseIndex].semester = semester || null;
+            
+            // Auto-save to database if user is authenticated
+            const token = localStorage.getItem('auth_token');
+            if (token) {
+                console.log('💾 Auto-saving semester update to database...');
+                // TODO: Save to Supabase when schedule planning is implemented
+                // saveScheduleToDatabase();
+            } else {
+                console.log('⚠️ User not authenticated - skipping auto-save');
+            }
+        }
+        
+        // Update assignment status
+        function updateAssignmentStatus(assignmentId, isCompleted) {
+            // Find and update the assignment in our data
+            for (const courseId in assignmentsData) {
+                const assignments = assignmentsData[courseId];
+                const assignment = assignments.find(a => a.id === assignmentId);
+                if (assignment) {
+                    assignment.is_completed = isCompleted;
+                    console.log(`✅ Assignment "${assignment.title}" marked as ${isCompleted ? 'completed' : 'incomplete'}`);
+                    break;
+                }
+            }
+            
+            // Refresh the display
+            displayMyCourses();
+        }
+        
+        // Create Group Modal Functions
+        function openCreateGroupModal(courseId, courseName) {
+            const modal = document.getElementById('createGroupModal');
+            document.getElementById('groupCourseId').value = courseId;
+            document.getElementById('groupCourseName').value = courseName;
+            document.getElementById('groupName').value = `קבוצת לימוד - ${courseName}`;
+            modal.classList.add('active');
+        }
+        
+        function closeCreateGroupModal() {
+            const modal = document.getElementById('createGroupModal');
+            modal.classList.remove('active');
+            document.getElementById('createGroupForm').reset();
+            // Reset email inputs
+            const emailContainer = document.getElementById('inviteEmails');
+            emailContainer.innerHTML = `
+                <div class="email-input-row">
+                    <input type="email" class="email-input" placeholder="email@example.com" />
+                    <button type="button" class="btn-remove-email" onclick="removeEmailInput(this)" style="display: none;">×</button>
+                </div>
+            `;
+        }
+        
+        function addEmailInput() {
+            const container = document.getElementById('inviteEmails');
+            const newRow = document.createElement('div');
+            newRow.className = 'email-input-row';
+            newRow.innerHTML = `
+                <input type="email" class="email-input" placeholder="email@example.com" />
+                <button type="button" class="btn-remove-email" onclick="removeEmailInput(this)">×</button>
+            `;
+            container.appendChild(newRow);
+        }
+        
+        function removeEmailInput(btn) {
+            btn.parentElement.remove();
+            // Show/hide remove buttons
+            const rows = document.querySelectorAll('.email-input-row');
+            rows.forEach((row, index) => {
+                const removeBtn = row.querySelector('.btn-remove-email');
+                if (rows.length > 1) {
+                    removeBtn.style.display = 'block';
+                } else {
+                    removeBtn.style.display = 'none';
+                }
+            });
+        }
+        
+        async function createGroup(event) {
+            event.preventDefault();
+            
+            const token = localStorage.getItem('auth_token');
+            console.log('🔐 Token from localStorage:', token ? `Found (length: ${token.length})` : 'NOT FOUND');
+            
+            if (!token) {
+                alert('אנא התחבר כדי ליצור קבוצה');
+                window.location.href = '/login';
+                return;
+            }
+            
+            // Check if token looks like a JWT
+            if (!token.includes('.')) {
+                console.error('❌ Token does not look like a JWT token');
+                alert('שגיאה: טוקן לא תקין. אנא התחבר מחדש.');
+                window.location.href = '/login';
+                return;
+            }
+            
+            const courseId = document.getElementById('groupCourseId').value;
+            const courseName = document.getElementById('groupCourseName').value;
+            const groupName = document.getElementById('groupName').value;
+            const description = document.getElementById('groupDescription').value;
+            
+            // Get all email inputs
+            const emailInputs = document.querySelectorAll('.email-input');
+            const emails = Array.from(emailInputs)
+                .map(input => input.value.trim())
+                .filter(email => email.length > 0);
+            
+            // Get current user's email from localStorage
+            const currentUserEmail = localStorage.getItem('user_email');
+            
+            // Filter out current user's email (can't invite yourself)
+            const filteredEmails = emails.filter(email => {
+                const emailLower = email.toLowerCase().trim();
+                const userEmailLower = currentUserEmail ? currentUserEmail.toLowerCase().trim() : '';
+                if (emailLower === userEmailLower) {
+                    console.warn(`⚠️ Skipping ${email} - cannot invite yourself`);
+                    return false;
+                }
+                return true;
+            });
+            
+            if (filteredEmails.length !== emails.length) {
+                alert('⚠️ שים לב: לא ניתן להזמין את עצמך לקבוצה. המייל שלך הוסר מהרשימה.');
+            }
+            
+            if (filteredEmails.length === 0) {
+                alert('❌ עליך להזמין לפחות משתמש רשום אחד (לא את עצמך)');
+                return;
+            }
+            
+            console.log('📤 Sending request to /api/groups/create with:', {
+                course_id: courseId,
+                course_name: courseName,
+                group_name: groupName,
+                emails_count: filteredEmails.length,
+                original_emails_count: emails.length
+            });
+            
+            try {
+                const response = await fetch('/api/groups/create', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        course_id: courseId,
+                        course_name: courseName,
+                        group_name: groupName,
+                        description: description,
+                        invite_emails: filteredEmails
+                    })
+                });
+                
+                console.log('📥 Response status:', response.status, response.statusText);
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    console.error('❌ Error response:', error);
+                    // Show user-friendly error message
+                    const errorMsg = error.detail || 'שגיאה ביצירת הקבוצה';
+                    alert('❌ ' + errorMsg);
+                    throw new Error(errorMsg);
+                }
+                
+                const result = await response.json();
+                console.log('✅ Success:', result);
+                
+                // Build success message
+                let message = '✅ הקבוצה נוצרה בהצלחה!';
+                if (result.invitations_created && result.invitations_created.length > 0) {
+                    message += `\n${result.invitations_created.length} הזמנות נשלחו בהצלחה.`;
+                }
+                
+                // Show info if user tried to invite themselves
+                if (result.info) {
+                    message += `\n\nℹ️ ${result.info}`;
+                }
+                
+                // Show warning if there are failed invitations
+                if (result.warning) {
+                    message += `\n\n⚠️ ${result.warning}`;
+                }
+                
+                alert(message);
+                closeCreateGroupModal();
+                // TODO: Refresh groups list
+                
+            } catch (error) {
+                console.error('❌ Error creating group:', error);
+                alert('שגיאה ביצירת הקבוצה: ' + error.message);
+            }
+        }
+        
+        // Chat toggle (placeholder)
+        function toggleChat() {
+            alert('צ\'אט יותאם בהמשך');
+        }
+        
+        // Initialize - display courses and notifications
+        async function initializePage() {
+            console.log('🔍 [DEBUG] initializePage() called');
+            console.log('🔍 [DEBUG] courses array length:', courses.length);
+            console.log('🔍 [DEBUG] Token at initializePage:', localStorage.getItem('auth_token') ? 'EXISTS' : 'MISSING');
+            
+            try {
+                // Load assignments
+                if (typeof loadAllAssignments === 'function') {
+                    console.log('🔍 [DEBUG] Loading assignments...');
+                    await loadAllAssignments();
+                }
+            } catch (e) {
+                console.error('🔍 [DEBUG] Error in initializePage:', e);
+            }
+            
+            // Display courses and load notifications
+            console.log('🔍 [DEBUG] Calling displayMyCourses()...');
+            displayMyCourses();
+            console.log('🔍 [DEBUG] Calling loadNotifications()...');
+            loadNotifications();
+            console.log('🔍 [DEBUG] initializePage() completed');
+        }
+        
+        // Wait for DOM to be ready before initializing
+        console.log('🔍 [DEBUG] Setting up DOM ready handler');
+        console.log('🔍 [DEBUG] Token check at script end:', localStorage.getItem('auth_token') ? 'EXISTS' : 'MISSING');
+        
+        // Also check token periodically to detect if it's being cleared
+        let lastTokenCheck = localStorage.getItem('auth_token');
+        setInterval(() => {
+            const currentToken = localStorage.getItem('auth_token');
+            if (lastTokenCheck && !currentToken) {
+                console.error('🔍 [DEBUG] ⚠️⚠️⚠️ TOKEN WAS CLEARED! ⚠️⚠️⚠️');
+                console.error('🔍 [DEBUG] Previous token:', lastTokenCheck ? 'EXISTED' : 'MISSING');
+                console.error('🔍 [DEBUG] Current token:', currentToken ? 'EXISTS' : 'MISSING');
+                console.trace('🔍 [DEBUG] Stack trace:');
+            }
+            lastTokenCheck = currentToken;
+        }, 1000);
+        
+        if (document.readyState === 'loading') {
+            console.log('🔍 [DEBUG] DOM is loading - waiting for DOMContentLoaded');
+            document.addEventListener('DOMContentLoaded', function() {
+                console.log('🔍 [DEBUG] DOMContentLoaded fired - calling initializePage');
+                console.log('🔍 [DEBUG] Token at DOMContentLoaded:', localStorage.getItem('auth_token') ? 'EXISTS' : 'MISSING');
+                initializePage();
+            });
+        } else {
+            // DOM is already ready
+            console.log('🔍 [DEBUG] DOM already ready - calling initializePage immediately');
+            console.log('🔍 [DEBUG] Token at script end:', localStorage.getItem('auth_token') ? 'EXISTS' : 'MISSING');
+            initializePage();
+        }
+        
+        // Load notifications every 60 seconds
+        setInterval(() => {
+            if (localStorage.getItem('auth_token')) {
+                loadNotifications();
+            }
+        }, 60000);
+    </script>
+</body>
+</html>

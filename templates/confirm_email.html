@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>אישור אימייל - Student Planner</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            direction: rtl;
+        }
+        
+        .confirm-container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 60px 40px;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+        }
+        
+        .confirm-icon {
+            font-size: 5em;
+            margin-bottom: 20px;
+        }
+        
+        .confirm-title {
+            color: #667eea;
+            font-size: 2em;
+            margin-bottom: 15px;
+        }
+        
+        .confirm-message {
+            color: #666;
+            font-size: 1.1em;
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }
+        
+        .confirm-button {
+            display: inline-block;
+            padding: 15px 40px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 50px;
+            font-size: 1.1em;
+            font-weight: bold;
+            cursor: pointer;
+            text-decoration: none;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .confirm-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+    </style>
+</head>
+<body>
+    <div class="confirm-container">
+        <div class="confirm-icon" id="confirmIcon">⏳</div>
+        <h1 class="confirm-title" id="confirmTitle">מאשר את האימייל שלך...</h1>
+        <p class="confirm-message" id="confirmMessage">
+            אנא המתן...
+        </p>
+        <div id="loadingSpinner" style="display: none; margin: 20px 0;">
+            <div style="border: 4px solid #f3f3f3; border-top: 4px solid #667eea; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto;"></div>
+        </div>
+        <a href="/login" class="confirm-button" id="confirmButton" style="display: none;">התחבר עכשיו</a>
+        <a href="/" class="confirm-button" id="goHomeButton" style="display: none; margin-top: 10px; background: #4CAF50;">חזור לאפליקציה</a>
+    </div>
+    
+    <style>
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+    
+    <script>
+        // Get URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const hashParams = new URLSearchParams(window.location.hash.substring(1));
+        
+        // Check for access_token in both query params and hash
+        const accessToken = urlParams.get('access_token') || hashParams.get('access_token');
+        const tokenType = urlParams.get('type') || hashParams.get('type');
+        const error = urlParams.get('error') || hashParams.get('error');
+        const errorDescription = urlParams.get('error_description') || hashParams.get('error_description');
+        
+        const confirmIcon = document.getElementById('confirmIcon');
+        const confirmTitle = document.getElementById('confirmTitle');
+        const confirmMessage = document.getElementById('confirmMessage');
+        const confirmButton = document.getElementById('confirmButton');
+        const goHomeButton = document.getElementById('goHomeButton');
+        const loadingSpinner = document.getElementById('loadingSpinner');
+        
+        // Handle the confirmation
+        if (error) {
+            // Error occurred
+            confirmIcon.textContent = '❌';
+            confirmIcon.style.color = '#f44336';
+            confirmTitle.textContent = 'שגיאה באישור האימייל';
+            confirmMessage.textContent = errorDescription || error || 'אירעה שגיאה באישור האימייל. אנא נסה שוב או פנה לתמיכה.';
+            confirmButton.style.display = 'inline-block';
+            confirmButton.textContent = 'חזור לדף ההתחברות';
+        } else if (accessToken && tokenType === 'email') {
+            // Success - save token and redirect
+            confirmIcon.textContent = '✅';
+            confirmIcon.style.color = '#4CAF50';
+            confirmTitle.textContent = 'האימייל אושר בהצלחה!';
+            confirmMessage.textContent = 'תודה על אישור האימייל שלך. מעביר אותך לאפליקציה...';
+            loadingSpinner.style.display = 'block';
+            
+            // Save token to localStorage
+            localStorage.setItem('auth_token', accessToken);
+            
+            // Get user info from token (basic - just decode the payload)
+            try {
+                const tokenParts = accessToken.split('.');
+                if (tokenParts.length === 3) {
+                    const payload = JSON.parse(atob(tokenParts[1]));
+                    if (payload.sub) {
+                        localStorage.setItem('user_id', payload.sub);
+                    }
+                    if (payload.email) {
+                        localStorage.setItem('user_email', payload.email);
+                    }
+                }
+            } catch (e) {
+                console.warn('Could not decode token:', e);
+            }
+            
+            // Redirect to home page after 2 seconds
+            setTimeout(() => {
+                window.location.href = '/';
+            }, 2000);
+        } else {
+            // No token - might be already confirmed or invalid link
+            confirmIcon.textContent = '✅';
+            confirmIcon.style.color = '#4CAF50';
+            confirmTitle.textContent = 'האימייל אושר בהצלחה!';
+            confirmMessage.textContent = 'תודה על אישור האימייל שלך. כעת תוכל להתחבר למערכת ולהשתמש בכל הפיצ\'רים.';
+            confirmButton.style.display = 'inline-block';
+            goHomeButton.style.display = 'inline-block';
+        }
+    </script>
+</body>
+</html>
+

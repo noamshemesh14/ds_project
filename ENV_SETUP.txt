@@ -1,0 +1,13 @@
+Create a file named .env in the ds_project directory with the following content:
+
+SUPABASE_URL=https://ncvchkyncwdeysqzkssk.supabase.co
+SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jdmNoa3luY3dkZXlzcXprc3NrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzNjg2MzksImV4cCI6MjA4Mzk0NDYzOX0.vtCcTRawzWbdZ7bEIK4sA-F4upGwMAI1HQwu6syLgaM
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
+GEMINI_API_KEY=AIzaSyBq5j_h0Sxep-AxIV0jyliAAv7seiYgx2o
+
+Notes:
+- SUPABASE_ANON_KEY: This is the anon/public key (publishable key) - the correct JWT token format for Supabase
+- SUPABASE_SERVICE_ROLE_KEY: (Optional but recommended) Get this from Supabase Dashboard > Settings > API > service_role key
+  This key bypasses RLS, which is safe for backend operations since we already authenticate users.
+  See RLS_SOLUTION.md for more details.
+

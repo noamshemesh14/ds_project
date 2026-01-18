@@ -204,6 +204,15 @@
             font-size: 1.1em;
         }
         
+        .info-value-text {
+            /* No forced direction - let browser handle RTL naturally */
+        }
+        
+        .info-value-number {
+            direction: ltr;
+            display: inline-block;
+        }
+        
         .courses-list {
             background: white;
             border-radius: 12px;
@@ -391,7 +400,6 @@
         
         .course-detail-label {
             color: #666;
-            margin-left: 5px;
         }
         
         .course-detail-value {
@@ -697,27 +705,27 @@
                     <div class="info-grid">
                         <div class="info-item">
                             <span class="info-label">שם:</span>
-                            <span class="info-value">${studentInfo.name || 'לא זוהה'}</span>
+                            <span class="info-value info-value-text">${studentInfo.name || 'לא זוהה'}</span>
                         </div>
                         <div class="info-item">
                             <span class="info-label">תעודת זהות:</span>
-                            <span class="info-value">${studentInfo.id_number || 'לא זוהה'}</span>
+                            <span class="info-value info-value-number">${studentInfo.id_number || 'לא זוהה'}</span>
                         </div>
                         <div class="info-item">
                             <span class="info-label">פקולטה:</span>
-                            <span class="info-value">${studentInfo.faculty || 'לא זוהה'}</span>
+                            <span class="info-value info-value-text">${studentInfo.faculty || 'לא זוהה'}</span>
                         </div>
                         <div class="info-item">
                             <span class="info-label">מסלול לימודים:</span>
-                            <span class="info-value">${studentInfo.study_track || 'לא זוהה'}</span>
+                            <span class="info-value info-value-text">${studentInfo.study_track || 'לא זוהה'}</span>
                         </div>
                         <div class="info-item">
                             <span class="info-label">ממוצע מצטבר:</span>
-                            <span class="info-value">${studentInfo.cumulative_average ? studentInfo.cumulative_average.toFixed(2) : 'לא זוהה'}</span>
+                            <span class="info-value info-value-number">${studentInfo.cumulative_average ? studentInfo.cumulative_average.toFixed(2) : 'לא זוהה'}</span>
                         </div>
                         <div class="info-item">
                             <span class="info-label">אחוזי הצלחה:</span>
-                            <span class="info-value">${studentInfo.success_rate ? studentInfo.success_rate.toFixed(1) + '%' : 'לא זוהה'}</span>
+                            <span class="info-value info-value-number">${studentInfo.success_rate ? studentInfo.success_rate.toFixed(1) + '%' : 'לא זוהה'}</span>
                         </div>
                     </div>
                 </div>
@@ -741,26 +749,8 @@
                 `;
             }
             
-            // Display statistics
-            const stats = calculateStats(courses);
-            statsSummary.innerHTML = `
-                <div class="stat-item">
-                    <div class="stat-value">${stats.totalCourses}</div>
-                    <div class="stat-label">סה"כ קורסים</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value">${stats.totalCredits.toFixed(1)}</div>
-                    <div class="stat-label">נקודות זכות</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value">${stats.passedCourses}</div>
-                    <div class="stat-label">קורסים שעברו</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value">${stats.averageGrade ? stats.averageGrade.toFixed(1) : '-'}</div>
-                    <div class="stat-label">ממוצע ציונים</div>
-                </div>
-            `;
+            // Don't display calculated statistics - use only data from header
+            statsSummary.innerHTML = '';
             
             resultSection.style.display = 'block';
         }
@@ -782,7 +772,7 @@
             }
             
             return `
-                <div class="course-item" data-index="${index}">
+                <div class="course-item" data-index="${index}" dir="rtl">
                     <div class="course-actions">
                         <button class="btn-edit" onclick="editCourse(${index})">✏️ ערוך</button>
                         <button class="btn-delete" onclick="deleteCourse(${index})">🗑️ מחק</button>
@@ -792,25 +782,25 @@
                             <span class="course-name">${course.course_name || 'לא זוהה'}</span>
                             ${course.course_number ? `<span class="course-number">#${course.course_number}</span>` : ''}
                         </div>
-                        <span class="grade-badge ${gradeClass || ''}">${gradeDisplay}</span>
+                        <span class="grade-badge ${gradeClass || ''}" style="direction: ltr; unicode-bidi: embed;">${gradeDisplay}</span>
                     </div>
                     <div class="course-details">
                         ${course.credit_points !== null && course.credit_points !== undefined ? `
                             <div class="course-detail">
-                                <span class="course-detail-value">${course.credit_points}</span>
-                                <span class="course-detail-label">נקודות זכות</span>
+                                <span class="course-detail-label">נקודות זכות:</span>
+                                <span class="course-detail-value" style="direction: ltr; display: inline-block;">${course.credit_points}</span>
                             </div>
                         ` : ''}
                         ${course.semester ? `
                             <div class="course-detail">
+                                <span class="course-detail-label">סמסטר:</span>
                                 <span class="course-detail-value">${course.semester}</span>
-                                <span class="course-detail-label">סמסטר</span>
                             </div>
                         ` : ''}
                         ${course.year ? `
                             <div class="course-detail">
-                                <span class="course-detail-value">${course.year}</span>
-                                <span class="course-detail-label">שנה</span>
+                                <span class="course-detail-label">שנה:</span>
+                                <span class="course-detail-value" style="direction: ltr; display: inline-block;">${course.year}</span>
                             </div>
                         ` : ''}
                         ${course.notes ? `
@@ -961,17 +951,45 @@
                     courses: parsedData.courses
                 };
                 
+                // Check if user is authenticated
+                const token = localStorage.getItem('auth_token');
+                if (!token) {
+                    showError('אנא התחבר כדי לשמור נתונים. מעביר לדף ההתחברות...');
+                    setTimeout(() => {
+                        window.location.href = '/login';
+                    }, 2000);
+                    return;
+                }
+                
                 const response = await fetch('/api/save-user', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
                     },
                     body: JSON.stringify(userData)
                 });
                 
                 if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.detail || 'שגיאה בשמירה');
+                    let errorMessage = 'שגיאה בשמירה';
+                    try {
+                        // Try to get JSON error
+                        const contentType = response.headers.get('content-type');
+                        if (contentType && contentType.includes('application/json')) {
+                            const error = await response.json();
+                            errorMessage = error.detail || error.message || errorMessage;
+                            console.error('Save error (JSON):', error);
+                        } else {
+                            // Not JSON - might be HTML error page
+                            const text = await response.text();
+                            console.error('Save error (non-JSON):', text.substring(0, 200));
+                            errorMessage = `שגיאה בשמירה (קוד: ${response.status}). בדוק את הקונסול לפרטים.`;
+                        }
+                    } catch (e) {
+                        console.error('Could not parse error response:', e);
+                        errorMessage = `שגיאה בשמירה (קוד: ${response.status})`;
+                    }
+                    throw new Error(errorMessage);
                 }
                 
                 const result = await response.json();
@@ -981,7 +999,20 @@
                 showSuccess(message);
                 
             } catch (error) {
-                showError('שגיאה בשמירה: ' + error.message);
+                console.error('Save error details:', error);
+                let errorMsg = error.message || 'שגיאה בשמירה';
+                
+                // Check for specific error types
+                if (errorMsg.includes('401') || errorMsg.includes('Unauthorized') || errorMsg.includes('credentials')) {
+                    errorMsg = 'האימות נכשל. אנא התחבר שוב.';
+                    setTimeout(() => {
+                        window.location.href = '/login';
+                    }, 2000);
+                } else if (errorMsg.includes('500') || errorMsg.includes('Error saving')) {
+                    errorMsg = 'שגיאה בשמירת הנתונים. אנא בדוק את הקונסול לפרטים נוספים.';
+                }
+                
+                showError('שגיאה בשמירה: ' + errorMsg);
             } finally {
                 loading.style.display = 'none';
                 submitButton.disabled = false;

@@ -1,0 +1,1281 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>בניית מערכת - Student Planner</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            direction: rtl;
+        }
+        
+        .navbar {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+        
+        .navbar-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .logo {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+            list-style: none;
+            align-items: center;
+        }
+        
+        .nav-links a {
+            text-decoration: none;
+            color: #333;
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+        
+        .nav-links a:hover {
+            color: #667eea;
+        }
+        
+        .chat-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 25px;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+            transition: transform 0.2s;
+        }
+        
+        .chat-btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        .section {
+            background: white;
+            border-radius: 20px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 3px solid #667eea;
+        }
+        
+        .section-icon {
+            font-size: 2em;
+        }
+        
+        .section-title {
+            font-size: 1.8em;
+            color: #333;
+            margin: 0;
+        }
+        
+        .tabs {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        
+        .tab {
+            padding: 1rem 2rem;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 1.1em;
+            color: #666;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+        }
+        
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+            font-weight: bold;
+        }
+        
+        .tab:hover {
+            color: #667eea;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        /* Weekly Schedule */
+        .schedule-container {
+            overflow-x: auto;
+        }
+        
+        .schedule-table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 800px;
+        }
+        
+        .schedule-table th,
+        .schedule-table td {
+            border: 1px solid #e0e0e0;
+            padding: 0.75rem;
+            text-align: center;
+        }
+        
+        .schedule-table th {
+            background: #667eea;
+            color: white;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+        }
+        
+        .time-slot {
+            background: #f5f5f5;
+            font-weight: bold;
+            width: 100px;
+        }
+        
+        .schedule-cell {
+            min-height: 60px;
+            position: relative;
+            background: #fafafa;
+        }
+        
+        .schedule-cell.has-constraint {
+            background: #ffe0e0;
+            border: 2px solid #ff6b6b;
+        }
+        
+        .schedule-cell.has-course {
+            background: #e0f0ff;
+            border: 2px solid #4dabf7;
+        }
+        
+        .schedule-cell.available {
+            background: #f0f9ff;
+        }
+        
+        .schedule-cell:hover {
+            background: #e8f4f8;
+            cursor: pointer;
+        }
+        
+        .constraint-badge {
+            background: #ff6b6b;
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.85em;
+            margin: 0.25rem;
+            display: inline-block;
+        }
+        
+        .course-badge {
+            background: #4dabf7;
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.85em;
+            margin: 0.25rem;
+            display: inline-block;
+        }
+        
+        /* Constraints Management */
+        .constraints-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        
+        .constraint-card {
+            background: #fff5f5;
+            border: 2px solid #ff6b6b;
+            border-radius: 10px;
+            padding: 1rem;
+        }
+        
+        .constraint-card h4 {
+            color: #c92a2a;
+            margin-bottom: 0.5rem;
+        }
+        
+        .constraint-card p {
+            color: #666;
+            font-size: 0.9em;
+            margin: 0.25rem 0;
+        }
+        
+        /* My Courses Section */
+        .my-course-card {
+            background: white;
+            border: 2px solid #e0e0e0;
+            border-radius: 15px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: all 0.3s;
+        }
+        
+        .my-course-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            border-color: #667eea;
+        }
+        
+        .my-course-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        
+        .my-course-title {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #333;
+        }
+        
+        .my-course-number {
+            color: #666;
+            font-size: 0.9em;
+            margin-right: 0.5rem;
+        }
+        
+        .my-course-content {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        .my-course-field {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+        
+        .my-course-field-label {
+            font-size: 0.85em;
+            color: #666;
+            font-weight: 500;
+        }
+        
+        .my-course-field-value {
+            font-size: 1em;
+            color: #333;
+        }
+        
+        .semester-selector {
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 2px solid #f0f0f0;
+        }
+        
+        .semester-selector label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: #333;
+        }
+        
+        .semester-selector select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 1em;
+            direction: rtl;
+            cursor: pointer;
+            transition: border-color 0.3s;
+        }
+        
+        .semester-selector select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .semester-selector select:hover {
+            border-color: #667eea;
+        }
+        
+        .constraint-actions {
+            margin-top: 0.5rem;
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #5568d3;
+        }
+        
+        .btn-danger {
+            background: #ff6b6b;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #ee5a5a;
+        }
+        
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            direction: rtl;
+        }
+        
+        .modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .modal-content {
+            background: white;
+            padding: 2rem;
+            border-radius: 15px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+            direction: rtl;
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        
+        .modal-header h3 {
+            margin: 0;
+            color: #333;
+        }
+        
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 1.5em;
+            cursor: pointer;
+            color: #666;
+        }
+        
+        .close-btn:hover {
+            color: #333;
+        }
+        
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: #333;
+            font-weight: 500;
+        }
+        
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 1em;
+            direction: rtl;
+        }
+        
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .form-actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: flex-start;
+            margin-top: 1.5rem;
+        }
+        
+        .days-checkboxes {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+        
+        .day-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .day-checkbox input[type="checkbox"] {
+            width: auto;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: #666;
+        }
+        
+        .empty-state-icon {
+            font-size: 4em;
+            margin-bottom: 1rem;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 1rem;
+            }
+            
+            .section {
+                padding: 1.5rem;
+            }
+            
+            .tabs {
+                flex-wrap: wrap;
+            }
+            
+            .tab {
+                padding: 0.75rem 1rem;
+                font-size: 1em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="logo">🎓 יועץ אקדמי חכם</div>
+            <ul class="nav-links">
+                <li><a href="/">יועץ אקדמי</a></li>
+                <li><a href="/profile">פרופיל</a></li>
+                <li><a href="/schedule" style="color: #667eea; font-weight: bold;">בניית מערכת</a></li>
+                <li><a href="/my-courses">📚 הקורסים שלי</a></li>
+                <li id="authButton">
+                    <button class="chat-btn" id="loginBtn" onclick="window.location.href='/login'">🔐 התחבר</button>
+                </li>
+                <li><button class="chat-btn" onclick="toggleChat()">💬 צ'אט</button></li>
+            </ul>
+        </div>
+    </nav>
+    
+    <div class="container">
+        <section class="section">
+            <div class="section-header">
+                <div class="section-icon">📅</div>
+                <div>
+                    <h2 class="section-title">בניית מערכת לסמסטר</h2>
+                    <p style="color: #666; margin-top: 0.5rem;">בנה את מערכת השעות שלך עם אילוצים קבועים ובחירת קורסים</p>
+                </div>
+            </div>
+            
+            <div class="tabs">
+                <button class="tab active" onclick="switchTab('schedule', this)">📅 מערכת שבועית</button>
+                <button class="tab" onclick="switchTab('constraints', this)">🚫 אילוצים קבועים</button>
+            </div>
+            
+            <!-- Weekly Schedule Tab -->
+            <div id="schedule-tab" class="tab-content active">
+                <div class="schedule-container">
+                    <table class="schedule-table">
+                        <thead>
+                            <tr>
+                                <th>שעה</th>
+                                <th>ראשון</th>
+                                <th>שני</th>
+                                <th>שלישי</th>
+                                <th>רביעי</th>
+                                <th>חמישי</th>
+                                <th>שישי</th>
+                                <th>שבת</th>
+                            </tr>
+                        </thead>
+                        <tbody id="schedule-body">
+                            <!-- Will be populated by JavaScript -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- Constraints Tab -->
+            <div id="constraints-tab" class="tab-content">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h3 style="margin: 0;">אילוצים קבועים</h3>
+                    <button class="btn btn-primary" onclick="openConstraintModal()">➕ הוסף אילוץ</button>
+                </div>
+                <div id="constraints-list" class="constraints-list">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">🚫</div>
+                        <p>אין אילוצים קבועים עדיין</p>
+                        <p style="font-size: 0.9em; color: #999; margin-top: 0.5rem;">הוסף אילוצים כדי לסמן חלונות זמן לא זמינים</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- My Courses Tab -->
+            <div id="courses-tab" class="tab-content">
+                <div id="myCoursesList">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📚</div>
+                        <p>הקורסים שלך יופיעו כאן</p>
+                        <p style="font-size: 0.9em; color: #999; margin-top: 0.5rem;">לאחר שתשבץ קורסים במערכת השבועית, הם יופיעו כאן עם אפשרות לבחור סמסטר לכל קורס</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+    
+    <!-- Constraint Modal -->
+    <div id="constraintModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>הוסף אילוץ קבוע</h3>
+                <button class="close-btn" onclick="closeConstraintModal()">×</button>
+            </div>
+            <form id="constraintForm" onsubmit="saveConstraint(event)">
+                <div class="form-group">
+                    <label>כותרת האילוץ</label>
+                    <input type="text" id="constraintTitle" required placeholder="למשל: עבודה, ספורט, וכו'">
+                </div>
+                <div class="form-group">
+                    <label>תיאור (אופציונלי)</label>
+                    <textarea id="constraintDescription" rows="3" placeholder="פרטים נוספים על האילוץ"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>ימים</label>
+                    <div class="days-checkboxes">
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="day0" value="0">
+                            <label for="day0">ראשון</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="day1" value="1">
+                            <label for="day1">שני</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="day2" value="2">
+                            <label for="day2">שלישי</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="day3" value="3">
+                            <label for="day3">רביעי</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="day4" value="4">
+                            <label for="day4">חמישי</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="day5" value="5">
+                            <label for="day5">שישי</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="day6" value="6">
+                            <label for="day6">שבת</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>שעת התחלה</label>
+                    <input type="time" id="constraintStartTime" required>
+                </div>
+                <div class="form-group">
+                    <label>שעת סיום</label>
+                    <input type="time" id="constraintEndTime" required>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">שמור</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeConstraintModal()">ביטול</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <script>
+        // Check authentication
+        const token = localStorage.getItem('auth_token');
+        if (!token) {
+            document.getElementById('loginBtn').style.display = 'block';
+        } else {
+            document.getElementById('loginBtn').textContent = '🚪 התנתק';
+            document.getElementById('loginBtn').onclick = () => {
+                localStorage.removeItem('auth_token');
+                localStorage.removeItem('user_id');
+                localStorage.removeItem('user_email');
+                window.location.href = '/login';
+            };
+        }
+        
+        // Tab switching
+        function switchTab(tabName, tabElement) {
+            // Update tabs
+            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            
+            // Activate selected tab
+            if (tabElement) {
+                tabElement.classList.add('active');
+            } else {
+                // Find the tab button and activate it
+                const tabButtons = document.querySelectorAll('.tab');
+                tabButtons.forEach(btn => {
+                    if (btn.getAttribute('onclick') && btn.getAttribute('onclick').includes(tabName)) {
+                        btn.classList.add('active');
+                    }
+                });
+            }
+            document.getElementById(tabName + '-tab').classList.add('active');
+        }
+        
+        // Check if URL has hash for tab switching
+        window.addEventListener('load', function() {
+            const hash = window.location.hash;
+            if (hash === '#courses') {
+                switchTab('courses');
+            }
+        });
+        
+        // Also check on hash change
+        window.addEventListener('hashchange', function() {
+            const hash = window.location.hash;
+            if (hash === '#courses') {
+                switchTab('courses');
+            }
+        });
+        
+        // Schedule data
+        const timeSlots = [];
+        for (let hour = 8; hour <= 20; hour++) {
+            timeSlots.push(`${hour.toString().padStart(2, '0')}:00`);
+        }
+        
+        const days = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+        const constraints = [];
+        const courses = [];
+        
+        // Initialize schedule
+        function initSchedule() {
+            const tbody = document.getElementById('schedule-body');
+            tbody.innerHTML = '';
+            
+            timeSlots.forEach(time => {
+                const row = document.createElement('tr');
+                const timeCell = document.createElement('td');
+                timeCell.className = 'time-slot';
+                timeCell.textContent = time;
+                row.appendChild(timeCell);
+                
+                for (let day = 0; day < 7; day++) {
+                    const cell = document.createElement('td');
+                    cell.className = 'schedule-cell available';
+                    cell.dataset.day = day;
+                    cell.dataset.time = time;
+                    cell.onclick = () => handleCellClick(day, time);
+                    row.appendChild(cell);
+                }
+                
+                tbody.appendChild(row);
+            });
+            
+            updateScheduleDisplay();
+        }
+        
+        // Update schedule display based on constraints and courses
+        function updateScheduleDisplay() {
+            document.querySelectorAll('.schedule-cell').forEach(cell => {
+                cell.className = 'schedule-cell';
+                cell.innerHTML = '';
+                
+                const day = parseInt(cell.dataset.day);
+                const time = cell.dataset.time;
+                
+                // Check for constraints
+                const constraint = constraints.find(c => {
+                    // Ensure days is an array
+                    let daysArray = c.days;
+                    if (!Array.isArray(daysArray)) {
+                        if (typeof daysArray === 'string') {
+                            try {
+                                daysArray = JSON.parse(daysArray);
+                            } catch {
+                                daysArray = daysArray.split(',').map(d => parseInt(d.trim())).filter(d => !isNaN(d));
+                            }
+                        } else {
+                            daysArray = [];
+                        }
+                    }
+                    return daysArray.includes(day) && isTimeInRange(time, c.start_time, c.end_time);
+                });
+                
+                if (constraint) {
+                    cell.classList.add('has-constraint');
+                    const badge = document.createElement('span');
+                    badge.className = 'constraint-badge';
+                    badge.textContent = constraint.title;
+                    cell.appendChild(badge);
+                } else {
+                    cell.classList.add('available');
+                }
+                
+                // Check for courses (will be implemented later)
+                const course = courses.find(c => 
+                    c.day === day && 
+                    isTimeInRange(time, c.start_time, c.end_time)
+                );
+                
+                if (course) {
+                    cell.classList.remove('available');
+                    cell.classList.add('has-course');
+                    const badge = document.createElement('span');
+                    badge.className = 'course-badge';
+                    badge.textContent = course.name;
+                    cell.appendChild(badge);
+                }
+            });
+        }
+        
+        // Check if time is in range
+        function isTimeInRange(time, start, end) {
+            const [timeHour, timeMin] = time.split(':').map(Number);
+            const [startHour, startMin] = start.split(':').map(Number);
+            const [endHour, endMin] = end.split(':').map(Number);
+            
+            const timeMinutes = timeHour * 60 + timeMin;
+            const startMinutes = startHour * 60 + startMin;
+            const endMinutes = endHour * 60 + endMin;
+            
+            return timeMinutes >= startMinutes && timeMinutes < endMinutes;
+        }
+        
+        // Handle cell click
+        function handleCellClick(day, time) {
+            // Will be used for adding courses later
+            console.log(`Clicked: ${days[day]} ${time}`);
+        }
+        
+        let editingConstraintId = null;
+        
+        // Constraint Modal
+        function openConstraintModal(constraintId = null) {
+            if (!token) {
+                alert('אנא התחבר כדי להוסיף אילוצים');
+                return;
+            }
+            
+            editingConstraintId = constraintId;
+            const modal = document.getElementById('constraintModal');
+            const formTitle = modal.querySelector('.modal-header h3');
+            
+            if (constraintId) {
+                // Editing existing constraint
+                formTitle.textContent = 'עריכת אילוץ';
+                const constraint = constraints.find(c => c.id === constraintId);
+                if (constraint) {
+                    // Fill form with existing data
+                    document.getElementById('constraintTitle').value = constraint.title || '';
+                    document.getElementById('constraintDescription').value = constraint.description || '';
+                    
+                    // Ensure days is an array
+                    let daysArray = constraint.days;
+                    if (!Array.isArray(daysArray)) {
+                        if (typeof daysArray === 'string') {
+                            try {
+                                daysArray = JSON.parse(daysArray);
+                            } catch {
+                                daysArray = daysArray.split(',').map(d => parseInt(d.trim())).filter(d => !isNaN(d));
+                            }
+                        } else {
+                            daysArray = [];
+                        }
+                    }
+                    
+                    // Check the selected days
+                    for (let i = 0; i < 7; i++) {
+                        document.getElementById(`day${i}`).checked = daysArray.includes(i);
+                    }
+                    
+                    document.getElementById('constraintStartTime').value = constraint.start_time || '';
+                    document.getElementById('constraintEndTime').value = constraint.end_time || '';
+                }
+            } else {
+                // Adding new constraint
+                formTitle.textContent = 'הוסף אילוץ קבוע';
+                document.getElementById('constraintForm').reset();
+            }
+            
+            modal.classList.add('active');
+        }
+        
+        function closeConstraintModal() {
+            document.getElementById('constraintModal').classList.remove('active');
+            document.getElementById('constraintForm').reset();
+            editingConstraintId = null;
+        }
+        
+        // Save constraint
+        async function saveConstraint(event) {
+            event.preventDefault();
+            
+            if (!token) {
+                alert('אנא התחבר כדי לשמור אילוצים');
+                return;
+            }
+            
+            const selectedDays = [];
+            for (let i = 0; i < 7; i++) {
+                if (document.getElementById(`day${i}`).checked) {
+                    selectedDays.push(i);
+                }
+            }
+            
+            if (selectedDays.length === 0) {
+                alert('אנא בחר לפחות יום אחד');
+                return;
+            }
+            
+            const constraintData = {
+                title: document.getElementById('constraintTitle').value.trim(),
+                description: document.getElementById('constraintDescription').value.trim() || null,
+                days: selectedDays,
+                start_time: document.getElementById('constraintStartTime').value,
+                end_time: document.getElementById('constraintEndTime').value
+            };
+            
+            if (!constraintData.title) {
+                alert('אנא הזן כותרת לאילוץ');
+                return;
+            }
+            
+            try {
+                let response;
+                if (editingConstraintId) {
+                    // Update existing constraint
+                    response = await fetch(`/api/constraints/${editingConstraintId}`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify(constraintData)
+                    });
+                } else {
+                    // Create new constraint
+                    response = await fetch('/api/constraints', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify(constraintData)
+                    });
+                }
+                
+                if (!response.ok) {
+                    let errorMessage = 'שגיאה בשמירת האילוץ';
+                    try {
+                        const error = await response.json();
+                        errorMessage = error.detail || errorMessage;
+                        
+                        // Check if token is expired
+                        if (response.status === 401 || errorMessage.includes('expired') || errorMessage.includes('invalid JWT') || errorMessage.includes('token')) {
+                            alert('ההתחברות פגה. אנא התחבר שוב.');
+                            localStorage.removeItem('auth_token');
+                            localStorage.removeItem('user_id');
+                            localStorage.removeItem('user_email');
+                            window.location.href = '/login';
+                            return;
+                        }
+                    } catch (e) {
+                        if (response.status === 401) {
+                            alert('ההתחברות פגה. אנא התחבר שוב.');
+                            localStorage.removeItem('auth_token');
+                            localStorage.removeItem('user_id');
+                            localStorage.removeItem('user_email');
+                            window.location.href = '/login';
+                            return;
+                        }
+                    }
+                    throw new Error(errorMessage);
+                }
+                
+                const result = await response.json();
+                // Handle both old format (with constraint property) and new format
+                const constraint = result.constraint || result;
+                if (constraint && constraint.id) {
+                    if (editingConstraintId) {
+                        // Update existing constraint in array
+                        const index = constraints.findIndex(c => c.id === editingConstraintId || String(c.id) === String(editingConstraintId));
+                        if (index > -1) {
+                            constraints[index] = constraint;
+                        }
+                        console.log('✅ Constraint updated successfully in Supabase');
+                    } else {
+                        // Add new constraint
+                        constraints.push(constraint);
+                        console.log('✅ Constraint created successfully in Supabase');
+                    }
+                    updateScheduleDisplay();
+                    updateConstraintsList();
+                    closeConstraintModal();
+                } else {
+                    throw new Error('No constraint returned from server');
+                }
+                
+            } catch (error) {
+                alert('שגיאה בשמירת האילוץ: ' + error.message);
+                console.error('Error saving constraint:', error);
+            }
+        }
+        
+        // Load constraints
+        async function loadConstraints() {
+            if (!token) return;
+            
+            try {
+                const response = await fetch('/api/constraints', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    constraints.length = 0;
+                    constraints.push(...data);
+                    updateScheduleDisplay();
+                    updateConstraintsList();
+                }
+            } catch (error) {
+                console.error('Error loading constraints:', error);
+            }
+        }
+        
+        // Update constraints list display
+        function updateConstraintsList() {
+            const list = document.getElementById('constraints-list');
+            
+            if (constraints.length === 0) {
+                list.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">🚫</div>
+                        <p>אין אילוצים קבועים עדיין</p>
+                        <p style="font-size: 0.9em; color: #999; margin-top: 0.5rem;">הוסף אילוצים כדי לסמן חלונות זמן לא זמינים</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            list.innerHTML = constraints.map((constraint, index) => {
+                // Ensure days is an array
+                let daysArray = constraint.days;
+                if (!Array.isArray(daysArray)) {
+                    // Try to parse if it's a string
+                    if (typeof daysArray === 'string') {
+                        try {
+                            daysArray = JSON.parse(daysArray);
+                        } catch {
+                            // If JSON parse fails, try comma-separated
+                            daysArray = daysArray.split(',').map(d => parseInt(d.trim())).filter(d => !isNaN(d));
+                        }
+                    } else {
+                        daysArray = [];
+                    }
+                }
+                const dayNames = daysArray.map(d => days[d] || `יום ${d}`).join(', ');
+                return `
+                    <div class="constraint-card">
+                        <h4>${constraint.title}</h4>
+                        ${constraint.description ? `<p>${constraint.description}</p>` : ''}
+                        <p><strong>ימים:</strong> ${dayNames}</p>
+                        <p><strong>שעות:</strong> ${constraint.start_time} - ${constraint.end_time}</p>
+                        <div class="constraint-actions">
+                            <button class="btn btn-primary" onclick="openConstraintModal('${constraint.id}')">✏️ ערוך</button>
+                            <button class="btn btn-danger" onclick="deleteConstraint('${constraint.id || ''}')">🗑️ מחק</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // Delete constraint
+        async function deleteConstraint(id) {
+            console.log('🗑️ Attempting to delete constraint:', id, 'Type:', typeof id);
+            
+            if (!id || id === 'undefined' || id === 'null') {
+                alert('שגיאה: לא ניתן למחוק אילוץ ללא מזהה');
+                console.error('Invalid constraint ID:', id);
+                return;
+            }
+            
+            if (!confirm('האם אתה בטוח שברצונך למחוק את האילוץ הזה?')) {
+                return;
+            }
+            
+            if (!token) {
+                alert('אנא התחבר כדי למחוק אילוצים');
+                return;
+            }
+            
+            try {
+                console.log('📤 Sending DELETE request to:', `/api/constraints/${id}`);
+                const response = await fetch(`/api/constraints/${id}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                console.log('📥 Response status:', response.status);
+                
+                if (!response.ok) {
+                    let errorMessage = 'שגיאה במחיקת האילוץ';
+                    try {
+                        const errorData = await response.json();
+                        errorMessage = errorData.detail || errorMessage;
+                        console.error('Error response:', errorData);
+                        
+                        // Check if token is expired
+                        if (response.status === 401 || errorMessage.includes('expired') || errorMessage.includes('invalid JWT') || errorMessage.includes('token')) {
+                            alert('ההתחברות פגה. אנא התחבר שוב.');
+                            localStorage.removeItem('auth_token');
+                            localStorage.removeItem('user_id');
+                            localStorage.removeItem('user_email');
+                            window.location.href = '/login';
+                            return;
+                        }
+                    } catch (e) {
+                        const errorText = await response.text();
+                        console.error('Error response (text):', errorText);
+                        errorMessage = `שגיאה במחיקת האילוץ (קוד: ${response.status})`;
+                        
+                        if (response.status === 401) {
+                            alert('ההתחברות פגה. אנא התחבר שוב.');
+                            localStorage.removeItem('auth_token');
+                            localStorage.removeItem('user_id');
+                            localStorage.removeItem('user_email');
+                            window.location.href = '/login';
+                            return;
+                        }
+                    }
+                    throw new Error(errorMessage);
+                }
+                
+                // Parse response
+                let result;
+                try {
+                    result = await response.json();
+                    console.log('✅ Delete response:', result);
+                } catch (e) {
+                    console.log('No JSON response, assuming success');
+                }
+                
+                // Remove from local array
+                const index = constraints.findIndex(c => {
+                    const cId = String(c.id || '');
+                    const searchId = String(id || '');
+                    return cId === searchId;
+                });
+                
+                console.log('Found constraint at index:', index);
+                
+                if (index > -1) {
+                    constraints.splice(index, 1);
+                    console.log('✅ Removed constraint from local array');
+                } else {
+                    console.warn('⚠️ Constraint not found in local array, but deletion succeeded');
+                }
+                
+                updateScheduleDisplay();
+                updateConstraintsList();
+                
+                console.log('✅ Constraint deleted successfully from Supabase');
+                
+            } catch (error) {
+                console.error('❌ Error deleting constraint:', error);
+                alert('שגיאה במחיקת האילוץ: ' + error.message);
+            }
+        }
+        
+        // Display My Courses - MOVED TO /my-courses PAGE
+        // This function has been moved to my_courses.html
+        function displayMyCourses_DEPRECATED() {
+            const myCoursesList = document.getElementById('myCoursesList');
+            if (!myCoursesList) return;
+            
+            // For now, show empty state - will be populated after schedule planning
+            if (courses.length === 0) {
+                myCoursesList.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📚</div>
+                        <p>הקורסים שלך יופיעו כאן</p>
+                        <p style="font-size: 0.9em; color: #999; margin-top: 0.5rem;">לאחר שתשבץ קורסים במערכת השבועית, הם יופיעו כאן עם אפשרות לבחור סמסטר לכל קורס</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            // Display courses with semester selector
+            myCoursesList.innerHTML = courses.map((course, index) => {
+                return `
+                    <div class="my-course-card" data-course-index="${index}">
+                        <div class="my-course-header">
+                            <div>
+                                <div class="my-course-title">
+                                    ${course.name || course.course_name || 'קורס ללא שם'}
+                                    ${course.number || course.course_number ? `<span class="my-course-number">(${course.number || course.course_number})</span>` : ''}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="my-course-content">
+                            ${course.credit_points ? `
+                                <div class="my-course-field">
+                                    <span class="my-course-field-label">נקודות זכות</span>
+                                    <span class="my-course-field-value">${course.credit_points}</span>
+                                </div>
+                            ` : ''}
+                            ${course.day !== undefined ? `
+                                <div class="my-course-field">
+                                    <span class="my-course-field-label">יום</span>
+                                    <span class="my-course-field-value">${days[course.day] || `יום ${course.day}`}</span>
+                                </div>
+                            ` : ''}
+                            ${course.start_time ? `
+                                <div class="my-course-field">
+                                    <span class="my-course-field-label">שעת התחלה</span>
+                                    <span class="my-course-field-value">${course.start_time}</span>
+                                </div>
+                            ` : ''}
+                            ${course.end_time ? `
+                                <div class="my-course-field">
+                                    <span class="my-course-field-label">שעת סיום</span>
+                                    <span class="my-course-field-value">${course.end_time}</span>
+                                </div>
+                            ` : ''}
+                        </div>
+                        <div class="semester-selector">
+                            <label>בחר סמסטר:</label>
+                            <select id="semester-${index}" onchange="updateCourseSemester(${index}, this.value)">
+                                <option value="">לא נבחר</option>
+                                <option value="חורף" ${course.semester === 'חורף' ? 'selected' : ''}>חורף</option>
+                                <option value="קיץ" ${course.semester === 'קיץ' ? 'selected' : ''}>קיץ</option>
+                                <option value="אביב" ${course.semester === 'אביב' ? 'selected' : ''}>אביב</option>
+                            </select>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // Update course semester - MOVED TO /my-courses PAGE
+        // This function has been moved to my_courses.html
+        function updateCourseSemester_DEPRECATED(courseIndex, semester) {
+            if (!courses || !courses[courseIndex]) {
+                console.error('Invalid course index:', courseIndex);
+                return;
+            }
+            
+            courses[courseIndex].semester = semester || null;
+            
+            // Auto-save to database if user is authenticated
+            const token = localStorage.getItem('auth_token');
+            if (token) {
+                console.log('💾 Auto-saving semester update to database...');
+                // TODO: Save to Supabase when schedule planning is implemented
+                // saveScheduleToDatabase();
+            } else {
+                console.log('⚠️ User not authenticated - skipping auto-save');
+            }
+        }
+        
+        // Initialize
+        initSchedule();
+        loadConstraints();
+        
+        // Chat toggle (placeholder)
+        function toggleChat() {
+            alert('צ\'אט יותאם בהמשך');
+        }
+    </script>
+</body>
+</html>
+

@@ -56,6 +56,25 @@ class Course(Base):
     user = relationship("User", back_populates="courses")
 
 
+class Constraint(Base):
+    __tablename__ = "constraints"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    
+    title = Column(String, nullable=False)  # שם האילוץ (אימון, עבודה, etc.)
+    description = Column(Text, nullable=True)  # תיאור האילוץ
+    days = Column(String, nullable=False)  # ימים בשבוע (JSON array או מחרוזת מופרדת בפסיקים)
+    start_time = Column(String, nullable=False)  # שעת התחלה (HH:MM)
+    end_time = Column(String, nullable=False)  # שעת סיום (HH:MM)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User")
+
+
 def init_db():
     """Initialize database - create all tables"""
     Base.metadata.create_all(bind=engine)

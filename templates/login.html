@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>התחברות / הרשמה - Student Planner</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            direction: rtl;
+        }
+        
+        .auth-container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 450px;
+            width: 100%;
+        }
+        
+        .auth-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .auth-header h1 {
+            color: #667eea;
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        
+        .auth-header p {
+            color: #666;
+            font-size: 1em;
+        }
+        
+        .auth-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        
+        .auth-tab {
+            flex: 1;
+            padding: 15px;
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #666;
+            transition: all 0.3s;
+        }
+        
+        .auth-tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+        
+        .auth-tab:hover {
+            color: #667eea;
+        }
+        
+        .auth-form {
+            display: none;
+        }
+        
+        .auth-form.active {
+            display: block;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+        }
+        
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 1em;
+            font-family: inherit;
+            transition: border-color 0.3s;
+        }
+        
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .submit-btn {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 1.1em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+            margin-top: 10px;
+        }
+        
+        .submit-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+        
+        .submit-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .error-message {
+            background: #fee;
+            color: #c33;
+            padding: 12px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: none;
+            border: 1px solid #fcc;
+        }
+        
+        .error-message.show {
+            display: block;
+        }
+        
+        .success-message {
+            background: #efe;
+            color: #3c3;
+            padding: 12px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: none;
+            border: 1px solid #cfc;
+        }
+        
+        .success-message.show {
+            display: block;
+        }
+        
+        .loading {
+            text-align: center;
+            color: #666;
+            margin-top: 10px;
+            display: none;
+        }
+        
+        .loading.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-container">
+        <div class="auth-header">
+            <h1>🎓 יועץ אקדמי חכם</h1>
+            <p>התחבר או הירשם כדי להתחיל</p>
+        </div>
+        
+        <div class="auth-tabs">
+            <button class="auth-tab active" onclick="switchTab('login')">התחברות</button>
+            <button class="auth-tab" onclick="switchTab('signup')">הרשמה</button>
+        </div>
+        
+        <div id="errorMessage" class="error-message"></div>
+        <div id="successMessage" class="success-message"></div>
+        
+        <!-- Login Form -->
+        <form id="loginForm" class="auth-form active" onsubmit="handleLogin(event)">
+            <div class="form-group">
+                <label for="loginEmail">אימייל:</label>
+                <input type="email" id="loginEmail" required placeholder="your@email.com">
+            </div>
+            <div class="form-group">
+                <label for="loginPassword">סיסמה:</label>
+                <input type="password" id="loginPassword" required placeholder="הזן סיסמה">
+            </div>
+            <button type="submit" class="submit-btn" id="loginBtn">התחבר</button>
+            <div class="loading" id="loginLoading">מתחבר...</div>
+        </form>
+        
+        <!-- Signup Form -->
+        <form id="signupForm" class="auth-form" onsubmit="handleSignup(event)">
+            <div class="form-group">
+                <label for="signupName">שם:</label>
+                <input type="text" id="signupName" required placeholder="הזן שם מלא">
+            </div>
+            <div class="form-group">
+                <label for="signupEmail">אימייל:</label>
+                <input type="email" id="signupEmail" required placeholder="your@email.com">
+            </div>
+            <div class="form-group">
+                <label for="signupPassword">סיסמה:</label>
+                <input type="password" id="signupPassword" required placeholder="מינימום 6 תווים" minlength="6">
+            </div>
+            <button type="submit" class="submit-btn" id="signupBtn">הירשם</button>
+            <div class="loading" id="signupLoading">נרשם...</div>
+        </form>
+    </div>
+    
+    <script>
+        function switchTab(tab) {
+            // Update tabs
+            document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            // Update forms
+            document.getElementById('loginForm').classList.toggle('active', tab === 'login');
+            document.getElementById('signupForm').classList.toggle('active', tab === 'signup');
+            
+            // Clear messages
+            hideMessages();
+        }
+        
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.classList.add('show');
+            document.getElementById('successMessage').classList.remove('show');
+        }
+        
+        function showSuccess(message) {
+            const successDiv = document.getElementById('successMessage');
+            successDiv.textContent = message;
+            successDiv.classList.add('show');
+            document.getElementById('errorMessage').classList.remove('show');
+        }
+        
+        function hideMessages() {
+            document.getElementById('errorMessage').classList.remove('show');
+            document.getElementById('successMessage').classList.remove('show');
+        }
+        
+        async function handleLogin(event) {
+            event.preventDefault();
+            hideMessages();
+            
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            const loginBtn = document.getElementById('loginBtn');
+            const loading = document.getElementById('loginLoading');
+            
+            loginBtn.disabled = true;
+            loading.classList.add('show');
+            
+            try {
+                const response = await fetch('/api/auth/signin', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    // Check for specific error types
+                    const errorMsg = data.detail || 'שגיאה בהתחברות';
+                    
+                    // Check if email is not confirmed
+                    if (errorMsg.toLowerCase().includes('email') && 
+                        (errorMsg.toLowerCase().includes('confirm') || 
+                         errorMsg.toLowerCase().includes('verify') ||
+                         errorMsg.toLowerCase().includes('not confirmed'))) {
+                        throw new Error('האימייל שלך לא אושר. אנא בדוק את תיבת הדואר שלך ולחץ על הקישור לאישור האימייל, ואז נסה להתחבר שוב.');
+                    }
+                    
+                    // Check for invalid credentials
+                    if (errorMsg.toLowerCase().includes('invalid') || 
+                        errorMsg.toLowerCase().includes('credentials') ||
+                        errorMsg.toLowerCase().includes('password')) {
+                        throw new Error('אימייל או סיסמה שגויים. אנא נסה שוב.');
+                    }
+                    
+                    throw new Error(errorMsg);
+                }
+                
+                // Save token to localStorage
+                if (data.access_token) {
+                    localStorage.setItem('auth_token', data.access_token);
+                    localStorage.setItem('user_id', data.user.id);
+                    localStorage.setItem('user_email', data.user.email);
+                    
+                    showSuccess('התחברת בהצלחה! מעביר...');
+                    
+                    // Redirect after 1 second
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 1000);
+                } else {
+                    throw new Error('לא התקבל token אימות');
+                }
+                
+            } catch (error) {
+                showError('שגיאה בהתחברות: ' + error.message);
+            } finally {
+                loginBtn.disabled = false;
+                loading.classList.remove('show');
+            }
+        }
+        
+        async function handleSignup(event) {
+            event.preventDefault();
+            hideMessages();
+            
+            const name = document.getElementById('signupName').value;
+            const email = document.getElementById('signupEmail').value;
+            const password = document.getElementById('signupPassword').value;
+            const signupBtn = document.getElementById('signupBtn');
+            const loading = document.getElementById('signupLoading');
+            
+            if (password.length < 6) {
+                showError('הסיסמה חייבת להכיל לפחות 6 תווים');
+                return;
+            }
+            
+            signupBtn.disabled = true;
+            loading.classList.add('show');
+            
+            try {
+                const response = await fetch('/api/auth/signup', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ email, password, name })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    const errorMsg = data.detail || 'שגיאה בהרשמה';
+                    
+                    // Check if email already exists
+                    if (errorMsg.includes('כבר רשומה') || 
+                        errorMsg.includes('already') || 
+                        errorMsg.includes('exists') ||
+                        errorMsg.includes('registered') ||
+                        errorMsg.includes('רשומה במערכת')) {
+                        showError('כתובת האימייל כבר רשומה במערכת. אנא התחבר במקום להירשם.');
+                        // Switch to login tab after 2 seconds
+                        setTimeout(() => {
+                            switchTab('login');
+                            document.getElementById('loginEmail').value = email;
+                        }, 2000);
+                        return;
+                    }
+                    
+                    throw new Error(errorMsg);
+                }
+                
+                // If session includes access_token, save it (email already confirmed)
+                if (data.session && data.session.access_token) {
+                    localStorage.setItem('auth_token', data.session.access_token);
+                    localStorage.setItem('user_id', data.user.id);
+                    localStorage.setItem('user_email', data.user.email);
+                    
+                    showSuccess('נרשמת בהצלחה! מעביר...');
+                    
+                    // Redirect after 1 second
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 1000);
+                } else if (data.requires_email_confirmation || !data.user.email_confirmed) {
+                    // Check if this is a new user or existing user
+                    if (data.hasOwnProperty('is_new_user') && data.is_new_user === false) {
+                        // User already exists - don't send email again
+                        showError('כתובת האימייל כבר רשומה במערכת. אנא התחבר במקום להירשם.');
+                        setTimeout(() => {
+                            switchTab('login');
+                            document.getElementById('loginEmail').value = email;
+                        }, 2000);
+                    } else {
+                        // New user - send confirmation email
+                        showSuccess('נרשמת בהצלחה! נשלחה אליך הודעת אימייל לאישור. אנא בדוק את תיבת הדואר שלך (גם בתיקיית הספאם) ולחץ על הקישור לאישור. אחרי האישור תוכל להתחבר.');
+                        setTimeout(() => {
+                            switchTab('login');
+                            document.getElementById('loginEmail').value = email;
+                        }, 4000);
+                    }
+                } else {
+                    // Fallback
+                    if (data.hasOwnProperty('is_new_user') && data.is_new_user === false) {
+                        showError('כתובת האימייל כבר רשומה במערכת. אנא התחבר במקום להירשם.');
+                        setTimeout(() => {
+                            switchTab('login');
+                            document.getElementById('loginEmail').value = email;
+                        }, 2000);
+                    } else {
+                        showSuccess('נרשמת בהצלחה! אנא התחבר עם האימייל והסיסמה שלך.');
+                        setTimeout(() => {
+                            switchTab('login');
+                            document.getElementById('loginEmail').value = email;
+                        }, 2000);
+                    }
+                }
+                
+            } catch (error) {
+                showError('שגיאה בהרשמה: ' + error.message);
+            } finally {
+                signupBtn.disabled = false;
+                loading.classList.remove('show');
+            }
+        }
+        
+        // Check if already logged in
+        if (localStorage.getItem('auth_token')) {
+            window.location.href = '/';
+        }
+    </script>
+</body>
+</html>
+

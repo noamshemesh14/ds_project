@@ -21,8 +21,8 @@ class CourseCreate(CourseBase):
 
 
 class Course(CourseBase):
-    id: int
-    user_id: int
+    id: str
+    user_id: str
     created_at: datetime
     updated_at: datetime
     
@@ -46,7 +46,7 @@ class UserCreate(UserBase):
 
 
 class User(UserBase):
-    id: int
+    id: str
     created_at: datetime
     updated_at: datetime
     courses: List[Course] = []
@@ -61,3 +61,145 @@ class TranscriptData(BaseModel):
     courses: List[CourseBase]
     metadata: Optional[dict] = Field(default_factory=dict, description="מטא-דאטה נוסף")
 
+
+# Auth models
+class SignUpRequest(BaseModel):
+    email: str
+    password: str
+    name: Optional[str] = None
+
+
+class SignInRequest(BaseModel):
+    email: str
+    password: str
+
+
+# Constraint models
+class ConstraintBase(BaseModel):
+    title: str = Field(..., description="שם האילוץ")
+    description: Optional[str] = Field(None, description="תיאור האילוץ")
+    days: List[int] = Field(..., description="ימים בשבוע (0=ראשון, 1=שני, וכו')")
+    start_time: str = Field(..., description="שעת התחלה (HH:MM)")
+    end_time: str = Field(..., description="שעת סיום (HH:MM)")
+
+
+class ConstraintCreate(ConstraintBase):
+    pass
+
+
+class Constraint(ConstraintBase):
+    id: str
+    user_id: str
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+# Assignment models
+class AssignmentBase(BaseModel):
+    title: str = Field(..., description="כותרת המטלה")
+    description: Optional[str] = Field(None, description="תיאור המטלה")
+    due_date: str = Field(..., description="תאריך דד-ליין (YYYY-MM-DD)")
+    priority: str = Field("medium", description="עדיפות: low, medium, high")
+    is_completed: bool = Field(False, description="האם הושלמה")
+
+
+class AssignmentCreate(AssignmentBase):
+    course_id: str = Field(..., description="מזהה הקורס")
+
+
+class Assignment(AssignmentBase):
+    id: str
+    course_id: str
+    user_id: str
+    created_at: datetime
+    updated_at: datetime
+    days_remaining: Optional[int] = None  # Calculated field
+    
+    class Config:
+        from_attributes = True
+
+
+# Chat models
+class ChatMessage(BaseModel):
+    message: str = Field(..., description="הודעת המשתמש")
+    conversation_id: Optional[str] = Field(None, description="מזהה שיחה (אופציונלי)")
+
+
+class ChatResponse(BaseModel):
+    response: str = Field(..., description="תשובת המערכת")
+    conversation_id: Optional[str] = Field(None, description="מזהה שיחה")
+
+
+# Study Groups models
+class StudyGroupCreate(BaseModel):
+    course_id: str = Field(..., description="מזהה הקורס")
+    course_name: str = Field(..., description="שם הקורס")
+    group_name: str = Field(..., description="שם הקבוצה")
+    description: Optional[str] = Field(None, description="תיאור הקבוצה")
+    invite_emails: List[str] = Field(default_factory=list, description="רשימת מיילים להזמנה")
+
+
+class StudyGroup(BaseModel):
+    id: str
+    course_id: str
+    course_name: str
+    group_name: str
+    description: Optional[str]
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+    members_count: Optional[int] = 0
+    
+    class Config:
+        from_attributes = True
+
+
+class GroupInvitationResponse(BaseModel):
+    id: str
+    group_id: str
+    group_name: str
+    course_name: str
+    inviter_email: str
+    inviter_name: Optional[str]
+    status: str
+    created_at: datetime
+
+
+class Notification(BaseModel):
+    id: str
+    type: str
+    title: str
+    message: str
+    link: Optional[str]
+    read: bool
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+# Assignment/Task models
+class AssignmentCreate(BaseModel):
+    title: str = Field(..., description="כותרת המטלה")
+    description: Optional[str] = Field(None, description="תיאור המטלה")
+    due_date: str = Field(..., description="תאריך יעד (YYYY-MM-DD)")
+    priority: Optional[str] = Field("medium", description="עדיפות: low, medium, high")
+
+
+class Assignment(BaseModel):
+    id: str
+    course_id: str
+    user_id: str
+    title: str
+    description: Optional[str]
+    due_date: str  # ISO format date string (YYYY-MM-DD)
+    is_completed: bool = False
+    priority: str = "medium"
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
