@@ -18,14 +18,19 @@ from typing import Optional
 from app.database import init_db, get_db, User as DBUser, Course as DBCourse
 from app.models import (
     UserCreate, User, Course, TranscriptData, SignUpRequest, SignInRequest,
-    ConstraintCreate, Constraint, ChatMessage, ChatResponse,
-    StudyGroupCreate, StudyGroup, GroupInvitationResponse, Notification,
-    Assignment, AssignmentCreate
+    ConstraintCreate, Constraint, WeeklyConstraintCreate, WeeklyConstraint,
+    ChatMessage, ChatResponse, StudyGroupCreate, StudyGroup,
+    GroupInvitationResponse, Notification, Assignment, AssignmentCreate
 )
 from app.parser import TranscriptParser
 from app.supabase_client import supabase, supabase_admin
 from app.auth import get_current_user, get_optional_user
 from dotenv import load_dotenv
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
+from datetime import datetime, timedelta
+import asyncio
 import sys
 import logging
 
@@ -43,6 +48,33 @@ logging.basicConfig(
 )
 
 app = FastAPI(title="Student Planner System", description="סוכן חכם לתכנון מערכת קורסים ולימודים")
+
+# Background scheduler for weekly auto-planning
+scheduler = BackgroundScheduler()
+
+
+@app.on_event("startup")
+def _start_scheduler():
+    try:
+        # Run every Sunday at 12:34 UTC
+        scheduler.add_job(
+            _run_weekly_auto_for_all_users_sync,
+            CronTrigger(day_of_week="sun", hour=12, minute=34),
+            id="weekly_auto_plan",
+            replace_existing=True,
+        )
+        scheduler.start()
+        logging.info("Weekly scheduler started")
+    except Exception as e:
+        logging.error(f"Failed to start scheduler: {e}")
+
+
+@app.on_event("shutdown")
+def _shutdown_scheduler():
+    try:
+        scheduler.shutdown(wait=False)
+    except Exception:
+        pass
 
 # Create uploads directory
 UPLOAD_DIR = Path("uploads")
@@ -449,8 +481,20 @@ async def get_user_data(
     Returns data in the same format as transcript parsing
     """
     try:
-        user_id = current_user["id"]
-        logging.info(f"📥 Loading user data for user_id: {user_id}")
+        print("=" * 60)
+        print("📥 [USER-DATA API] /api/user-data endpoint called")
+        logging.info("=" * 60)
+        logging.info("📥 [USER-DATA API] /api/user-data endpoint called")
+        print(f"📥 [USER-DATA API] current_user keys: {list(current_user.keys())}")
+        logging.info(f"📥 [USER-DATA API] current_user keys: {list(current_user.keys())}")
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            error_msg = f"User ID not found in current_user: {current_user}"
+            print(f"❌ [USER-DATA API] {error_msg}")
+            logging.error(f"❌ [USER-DATA API] {error_msg}")
+            raise HTTPException(status_code=500, detail=error_msg)
+        print(f"📥 [USER-DATA API] Loading user data for user_id: {user_id}")
+        logging.info(f"📥 [USER-DATA API] Loading user data for user_id: {user_id}")
         
         # Use service_role client if available, otherwise anon client
         client = supabase_admin if supabase_admin else supabase
@@ -501,8 +545,12 @@ async def get_user_data(
         
         # Convert courses to CourseBase format
         courses_list = []
+        print("=" * 60)
+        print(f"📚 [USER-DATA API] Processing {len(courses)} courses:")
+        logging.info(f"📚 [USER-DATA API] Processing {len(courses)} courses:")
         for course in courses:
-            courses_list.append({
+            course_data = {
+                "id": course.get("id"),  # Include course ID for frontend matching
                 "course_name": course.get("course_name", ""),
                 "course_number": course.get("course_number", ""),
                 "credit_points": course.get("credit_points"),
@@ -513,7 +561,12 @@ async def get_user_data(
                 "notes": course.get("notes", ""),
                 "is_passed": course.get("is_passed", False),
                 "retake_count": course.get("retake_count", 0)
-            })
+            }
+            courses_list.append(course_data)
+            course_info = f"   📚 Course: '{course_data['course_name']}' | course_number: '{course_data['course_number']}' | id: '{course_data['id']}' | semester: '{course_data['semester']}'"
+            print(course_info)
+            logging.info(course_info)
+        print("=" * 60)
         
         result = {
             "student_info": student_info,
@@ -890,7 +943,8 @@ async def create_constraint(
             "description": constraint_data.description,
             "days": days_str,
             "start_time": constraint_data.start_time,
-            "end_time": constraint_data.end_time
+            "end_time": constraint_data.end_time,
+            "is_hard": getattr(constraint_data, "is_hard", True)
         }
         
         response = client.table("constraints").insert(constraint_dict).execute()
@@ -933,7 +987,8 @@ async def update_constraint(
             "description": constraint_data.description,
             "days": days_str,
             "start_time": constraint_data.start_time,
-            "end_time": constraint_data.end_time
+            "end_time": constraint_data.end_time,
+            "is_hard": getattr(constraint_data, "is_hard", True)
         }
         
         response = client.table("constraints").update(update_data).eq("id", constraint_id).execute()
@@ -976,6 +1031,780 @@ async def delete_constraint(
     except Exception as e:
         logging.error(f"Error deleting constraint: {e}")
         raise HTTPException(status_code=500, detail=f"Error deleting constraint: {str(e)}")
+
+
+# Weekly constraints and weekly plan endpoints
+def _parse_days(value):
+    import json
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return [int(d.strip()) for d in value.split(',') if d.strip().isdigit()]
+    return []
+
+
+def _time_to_minutes(time_str: str) -> int:
+    hour, minute = time_str.split(":")
+    return int(hour) * 60 + int(minute)
+
+
+def _minutes_to_time(minutes: int) -> str:
+    hour = minutes // 60
+    minute = minutes % 60
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _build_time_slots(start_hour: int = 8, end_hour: int = 20, slot_minutes: int = 60):
+    slots = []
+    for hour in range(start_hour, end_hour + 1):
+        slots.append(f"{hour:02d}:00")
+    return slots
+
+
+def _extract_semester_season(semester_str: str):
+    if not semester_str:
+        return None
+    semester_str = str(semester_str).strip()
+    if "חורף" in semester_str or "winter" in semester_str.lower():
+        return "חורף"
+    if "אביב" in semester_str or "spring" in semester_str.lower():
+        return "אביב"
+    if "קיץ" in semester_str or "summer" in semester_str.lower():
+        return "קיץ"
+    return semester_str
+
+
+def _ensure_group_blocks_for_week(client, user_id: str, week_start: str, available_slots):
+    """
+    Create group_plan_blocks once per group per week and post an update to the group.
+    Returns updated available_slots and the map of course_number -> group info.
+    """
+    group_members_result = client.table("group_members").select("group_id,status").eq("user_id", user_id).execute()
+    group_ids = [gm["group_id"] for gm in (group_members_result.data or []) if gm.get("status") == "approved"]
+
+    group_map = {}
+    for group_id in group_ids:
+        group_result = client.table("study_groups").select("id,course_id,course_name,group_name").eq("id", group_id).limit(1).execute()
+        if group_result.data:
+            group = group_result.data[0]
+            group_map[group["course_id"]] = {
+                "group_id": group["id"],
+                "course_name": group.get("course_name"),
+                "group_name": group.get("group_name")
+            }
+
+            # If group blocks already exist for this week, REMOVE THEM from available_slots and skip creation
+            existing_blocks_res = client.table("group_plan_blocks").select("*").eq("group_id", group_id).eq("week_start", week_start).execute()
+            if existing_blocks_res.data:
+                for block in existing_blocks_res.data:
+                    day = block["day_of_week"]
+                    time = block["start_time"]
+                    if (day, time) in available_slots:
+                        available_slots.remove((day, time))
+                continue
+
+            # Create a default group session (2 hours) from available slots
+            created_blocks = []
+            for _ in range(2):
+                if not available_slots:
+                    break
+                day, time = available_slots.pop(0)
+                created_blocks.append({
+                    "group_id": group_id,
+                    "week_start": week_start,
+                    "course_number": group.get("course_id"),
+                    "day_of_week": day,
+                    "start_time": time,
+                    "end_time": _minutes_to_time(_time_to_minutes(time) + 60),
+                    "created_by": user_id
+                })
+
+            if created_blocks:
+                client.table("group_plan_blocks").insert(created_blocks).execute()
+                try:
+                    times = ", ".join([f"{b['day_of_week']} {b['start_time']}-{b['end_time']}" for b in created_blocks])
+                    client.table("group_updates").insert({
+                        "group_id": group_id,
+                        "update_text": f"נקבעו שעות עבודה שבועיות לקבוצה ({week_start}): {times}",
+                        "update_type": "info"
+                    }).execute()
+                except Exception as update_error:
+                    logging.warning(f"Failed to post group update for {group_id}: {update_error}")
+
+    return available_slots, group_map
+
+
+def _get_week_start(date_obj: datetime) -> str:
+    # Week starts on Sunday (0)
+    days_since_sunday = (date_obj.weekday() + 1) % 7
+    sunday = date_obj - timedelta(days=days_since_sunday)
+    return sunday.strftime("%Y-%m-%d")
+
+
+def _run_weekly_auto_for_all_users_sync():
+    """
+    Sync wrapper for APScheduler (APScheduler can't call async functions directly).
+    """
+    asyncio.run(_run_weekly_auto_for_all_users())
+
+
+async def _run_weekly_auto_for_all_users():
+    """
+    Final Refined Global Scheduler Agent:
+    1. Clear old data for the week.
+    2. Calculate quotas: credits * 3 total. Split 50/50 (remainder to personal).
+    3. Global Sync: Find long blocks (2-3h) for group work for ALL members.
+    4. Individual Fill: Find long blocks for personal work.
+    """
+    try:
+        client = supabase_admin if supabase_admin else supabase
+        if not client:
+            logging.error("Weekly scheduler: Supabase client not configured")
+            return
+
+        # 1. Determine the week (Next Sunday)
+        current_week_start = _get_week_start(datetime.utcnow())
+        next_week_start_dt = datetime.strptime(current_week_start, "%Y-%m-%d") + timedelta(days=7)
+        week_start = next_week_start_dt.strftime("%Y-%m-%d")
+        
+        logging.info(f"🚀 [GLOBAL AGENT] Starting weekly planning for week {week_start}")
+
+        # 2. Cleanup
+        # Since we have cascade deletes, deleting the plans will delete the blocks
+        logging.info(f"🧹 [GLOBAL AGENT] Cleaning up old data for week {week_start}")
+        client.table("weekly_plans").delete().eq("week_start", week_start).execute()
+        client.table("group_plan_blocks").delete().eq("week_start", week_start).execute()
+
+        # 3. Get all users and their active courses for this semester (HARDCODED TO חורף תשפ"ו)
+        users_result = client.table("user_profiles").select("id").execute()
+        users = users_result.data or []
+        user_ids = [u["id"] for u in users]
+        
+        # user_id -> set of (day, time) that are BLOCKED
+        user_blocked_slots = {uid: set() for uid in user_ids}
+        # user_id -> set of active course_numbers
+        user_active_courses = {uid: set() for uid in user_ids}
+        time_slots = _build_time_slots()
+        
+        # FORCED SEMESTER FOR PLANNING
+        forced_season = "חורף"
+        forced_year = 2026 # Filter by year 2026
+        
+        # Get valid catalog courses
+        catalog_res = client.table("course_catalog").select("course_number").execute()
+        valid_course_numbers = {c["course_number"] for c in (catalog_res.data or [])}
+
+        logging.info(f"🚀 [GLOBAL AGENT] Forced semester: {forced_season} {forced_year}")
+
+        for u in users:
+            uid = u["id"]
+            
+            # Fetch user's courses
+            courses_res = client.table("courses").select("*").eq("user_id", uid).execute()
+            all_u_courses = courses_res.data or []
+            
+            for c in all_u_courses:
+                c_num = str(c.get("course_number")).strip()
+                c_sem = c.get("semester")
+                c_year = c.get("year") # Assuming year is stored in 'courses' table
+                
+                if c_sem and c_num in valid_course_numbers:
+                    c_season = _extract_semester_season(c_sem)
+                    # Match by season "חורף" and year 2026
+                    # Note: Handle case where year might be string or int
+                    year_matches = not c_year or str(c_year) == str(forced_year) or str(forced_year) in str(c_year)
+                    
+                    if c_season == forced_season and year_matches:
+                        user_active_courses[uid].add(c_num)
+            
+            logging.info(f"   👤 User {uid}: {len(user_active_courses[uid])} valid courses active in {forced_season} {forced_year}")
+            
+            # Permanent constraints (FETCH THEM HERE!)
+            pc_res = client.table("constraints").select("*").eq("user_id", uid).execute()
+            for c in (pc_res.data or []):
+                for day in _parse_days(c.get("days")):
+                    for t in time_slots:
+                        if _time_to_minutes(t) >= _time_to_minutes(c["start_time"]) and _time_to_minutes(t) < _time_to_minutes(c["end_time"]):
+                            user_blocked_slots[uid].add((day, t))
+            
+            # Weekly constraints
+            wc_res = client.table("weekly_constraints").select("*").eq("user_id", uid).eq("week_start", week_start).execute()
+            for c in (wc_res.data or []):
+                if c.get("is_hard", True):
+                    for day in _parse_days(c.get("days")):
+                        for t in time_slots:
+                            if _time_to_minutes(t) >= _time_to_minutes(c["start_time"]) and _time_to_minutes(t) < _time_to_minutes(c["end_time"]):
+                                user_blocked_slots[uid].add((day, t))
+
+        # 4. Phase 2: Global Group Synchronization
+        groups_res = client.table("study_groups").select("*").execute()
+        groups = groups_res.data or []
+        
+        for group in groups:
+            group_id = group["id"]
+            course_number = group.get("course_id") # Note: This field is expected to be the course_number
+            course_name = group.get("course_name") or "Group Work"
+            
+            # Get members
+            members_res = client.table("group_members").select("user_id").eq("group_id", group_id).eq("status", "approved").execute()
+            all_member_ids = [m["user_id"] for m in (members_res.data or [])]
+            
+            # Filter members to only those taking this course THIS semester
+            member_ids = [mid for mid in all_member_ids if mid in user_active_courses and course_number in user_active_courses[mid]]
+            
+            if not member_ids:
+                logging.info(f"👥 [GLOBAL AGENT] Skipping group {course_name} - no active members this semester")
+                continue
+            
+            # Quota calculation for group: assume 3 credits if not found
+            group_quota = 4 # Default to 4h for group (half of 3*3=9)
+            
+            # Try to find 2 blocks of 2 hours
+            allocated_count = 0
+            for day in range(7):
+                if allocated_count >= group_quota: break
+                
+                # Look for a 2-hour block
+                for i in range(len(time_slots) - 1):
+                    if allocated_count >= group_quota: break
+                    t1, t2 = time_slots[i], time_slots[i+1]
+                    
+                    # Check all members
+                    all_free = True
+                    for mid in member_ids:
+                        if mid in user_blocked_slots:
+                            if (day, t1) in user_blocked_slots[mid] or (day, t2) in user_blocked_slots[mid]:
+                                all_free = False
+                                break
+                    
+                    if all_free:
+                        # Found a 2h block!
+                        new_blocks = []
+                        for t in [t1, t2]:
+                            new_blocks.append({
+                                "group_id": group_id,
+                                "week_start": week_start,
+                                "course_number": course_number,
+                                "day_of_week": day,
+                                "start_time": t,
+                                "end_time": _minutes_to_time(_time_to_minutes(t) + 60),
+                                "created_by": member_ids[0]
+                            })
+                            for mid in member_ids:
+                                if mid in user_blocked_slots:
+                                    user_blocked_slots[mid].add((day, t))
+                        
+                        client.table("group_plan_blocks").insert(new_blocks).execute()
+                        allocated_count += 2
+                        logging.info(f"👥 [GLOBAL AGENT] Scheduled 2h group for {course_name} on day {day} at {t1} for {len(member_ids)} active members")
+
+        # 5. Phase 3: Individual User Planning
+        logging.info(f"👤 [GLOBAL AGENT] Starting individual planning for users")
+        for uid in user_ids:
+            try:
+                fake_user = {"id": uid, "sub": uid}
+                await generate_weekly_plan(week_start, fake_user)
+            except Exception as e:
+                logging.error(f"❌ [GLOBAL AGENT] Individual plan failed for {uid}: {e}")
+
+        logging.info(f"✅ [GLOBAL AGENT] Weekly planning complete")
+    except Exception as e:
+        logging.error(f"💥 [GLOBAL AGENT] CRITICAL ERROR: {e}")
+
+
+@app.get("/api/weekly-constraints")
+async def get_weekly_constraints(
+    week_start: str,
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        client = supabase_admin if supabase_admin else supabase
+        response = client.table("weekly_constraints").select("*").eq("user_id", user_id).eq("week_start", week_start).execute()
+        constraints_list = []
+        for constraint in (response.data or []):
+            constraint_copy = constraint.copy()
+            constraint_copy["days"] = _parse_days(constraint.get("days"))
+            constraints_list.append(constraint_copy)
+        return {"constraints": constraints_list}
+    except Exception as e:
+        logging.error(f"Error fetching weekly constraints: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching weekly constraints: {str(e)}")
+
+
+@app.post("/api/weekly-constraints")
+async def create_weekly_constraint(
+    constraint_data: WeeklyConstraintCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        client = supabase_admin if supabase_admin else supabase
+        import json
+        days_str = json.dumps(constraint_data.days) if isinstance(constraint_data.days, list) else str(constraint_data.days)
+        constraint_dict = {
+            "user_id": user_id,
+            "title": constraint_data.title,
+            "description": constraint_data.description,
+            "days": days_str,
+            "start_time": constraint_data.start_time,
+            "end_time": constraint_data.end_time,
+            "week_start": constraint_data.week_start,
+            "is_hard": constraint_data.is_hard
+        }
+        response = client.table("weekly_constraints").insert(constraint_dict).execute()
+        if response.data:
+            return {"message": "אילוץ שבועי נוצר בהצלחה", "constraint": response.data[0]}
+        raise HTTPException(status_code=400, detail="Failed to create weekly constraint")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error creating weekly constraint: {e}")
+        raise HTTPException(status_code=500, detail=f"Error creating weekly constraint: {str(e)}")
+
+
+@app.delete("/api/weekly-constraints/{constraint_id}")
+async def delete_weekly_constraint(
+    constraint_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        client = supabase_admin if supabase_admin else supabase
+        existing = client.table("weekly_constraints").select("id").eq("id", constraint_id).eq("user_id", user_id).execute()
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="Weekly constraint not found")
+        client.table("weekly_constraints").delete().eq("id", constraint_id).execute()
+        return {"message": "אילוץ שבועי נמחק בהצלחה", "deleted": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error deleting weekly constraint: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting weekly constraint: {str(e)}")
+
+
+@app.put("/api/weekly-constraints/{constraint_id}")
+async def update_weekly_constraint(
+    constraint_id: str,
+    constraint_data: WeeklyConstraintCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        client = supabase_admin if supabase_admin else supabase
+
+        existing = client.table("weekly_constraints").select("id").eq("id", constraint_id).eq("user_id", user_id).execute()
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="Weekly constraint not found")
+
+        import json
+        days_str = json.dumps(constraint_data.days) if isinstance(constraint_data.days, list) else str(constraint_data.days)
+        update_data = {
+            "title": constraint_data.title,
+            "description": constraint_data.description,
+            "days": days_str,
+            "start_time": constraint_data.start_time,
+            "end_time": constraint_data.end_time,
+            "week_start": constraint_data.week_start,
+            "is_hard": constraint_data.is_hard
+        }
+        response = client.table("weekly_constraints").update(update_data).eq("id", constraint_id).execute()
+        if response.data:
+            return {"message": "אילוץ שבועי עודכן בהצלחה", "constraint": response.data[0]}
+        raise HTTPException(status_code=400, detail="Failed to update weekly constraint")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error updating weekly constraint: {e}")
+        raise HTTPException(status_code=500, detail=f"Error updating weekly constraint: {str(e)}")
+
+
+@app.get("/api/weekly-plan")
+async def get_weekly_plan(
+    week_start: str,
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        client = supabase_admin if supabase_admin else supabase
+        plan_result = client.table("weekly_plans").select("*").eq("user_id", user_id).eq("week_start", week_start).limit(1).execute()
+        if not plan_result.data:
+            return {"plan": None, "blocks": []}
+        plan = plan_result.data[0]
+        blocks_result = client.table("weekly_plan_blocks").select("*").eq("plan_id", plan["id"]).order("day_of_week").order("start_time").execute()
+        return {"plan": plan, "blocks": blocks_result.data or []}
+    except Exception as e:
+        logging.error(f"Error fetching weekly plan: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching weekly plan: {str(e)}")
+
+
+@app.post("/api/weekly-plan/generate")
+async def generate_weekly_plan(
+    week_start: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Generate a weekly plan using hard/soft constraints and course credit points.
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        client = supabase_admin if supabase_admin else supabase
+
+        # Load courses (HARDCODED TO חורף 2026)
+        forced_season = "חורף"
+        forced_year = 2026
+
+        courses_result = client.table("courses").select("*").eq("user_id", user_id).execute()
+        all_courses = courses_result.data or []
+        logging.info(f"📚 [GENERATE] User {user_id}: found {len(all_courses)} courses total")
+        
+        courses = []
+        for course in all_courses:
+            course_semester = course.get("semester")
+            course_year = course.get("year")
+            if course_semester:
+                course_semester_season = _extract_semester_season(course_semester)
+                year_matches = not course_year or str(course_year) == str(forced_year) or str(forced_year) in str(course_year)
+                
+                if course_semester_season == forced_season and year_matches:
+                    courses.append(course)
+        
+        # Validate courses against CATALOG to ensure no "invented" courses are used
+        catalog_res = client.table("course_catalog").select("course_number,course_name").execute()
+        valid_catalog = {c["course_number"]: c["course_name"] for c in (catalog_res.data or [])}
+        
+        valid_courses = []
+        for c in courses:
+            c_num = str(c.get("course_number")).strip()
+            if c_num in valid_catalog:
+                # Use the official name from catalog
+                c["course_name"] = valid_catalog[c_num]
+                valid_courses.append(c)
+            else:
+                logging.warning(f"⚠️ User {user_id} has course {c_num} which is NOT in the catalog. Skipping.")
+        
+        courses = valid_courses
+
+        if not courses:
+            return {"message": f"No valid courses (from catalog) available for plan in {forced_season}", "plan": None, "blocks": []}
+
+        # Load preferences
+        prefs_result = client.table("course_time_preferences").select("*").eq("user_id", user_id).execute()
+        prefs_map = {p["course_number"]: p for p in (prefs_result.data or [])}
+
+        # Load constraints
+        constraints_result = client.table("constraints").select("*").eq("user_id", user_id).execute()
+        permanent_constraints = constraints_result.data or []
+        weekly_constraints_result = client.table("weekly_constraints").select("*").eq("user_id", user_id).eq("week_start", week_start).execute()
+        weekly_constraints = weekly_constraints_result.data or []
+
+        # Build blocked slots (hard constraints only)
+        time_slots = _build_time_slots()
+        blocked = set()
+        soft_blocked = set()
+
+        for constraint in permanent_constraints:
+            for day in _parse_days(constraint.get("days")):
+                for time in time_slots:
+                    if _time_to_minutes(time) >= _time_to_minutes(constraint["start_time"]) and _time_to_minutes(time) < _time_to_minutes(constraint["end_time"]):
+                        blocked.add((day, time))
+
+        for constraint in weekly_constraints:
+            for day in _parse_days(constraint.get("days")):
+                for time in time_slots:
+                    if _time_to_minutes(time) >= _time_to_minutes(constraint["start_time"]) and _time_to_minutes(time) < _time_to_minutes(constraint["end_time"]):
+                        if constraint.get("is_hard", True):
+                            blocked.add((day, time))
+                        else:
+                            soft_blocked.add((day, time))
+
+        # Determine available slots FIRST (before group blocks)
+        available_slots = [(day, time) for day in range(7) for time in time_slots if (day, time) not in blocked]
+        
+        # 1. First, identify all group blocks for this user and remove them from available_slots
+        group_members_result = client.table("group_members").select("group_id").eq("user_id", user_id).eq("status", "approved").execute()
+        user_group_ids = [gm["group_id"] for gm in (group_members_result.data or [])]
+        
+        # Build course_id -> group_id map for this user
+        group_map = {}
+        for gid in user_group_ids:
+            g_res = client.table("study_groups").select("id,course_id").eq("id", gid).limit(1).execute()
+            if g_res.data:
+                group_map[g_res.data[0]["course_id"]] = gid
+
+        # Remove ALL existing group slots from availability
+        actual_group_blocks = []
+        if user_group_ids:
+            all_gb_res = client.table("group_plan_blocks").select("*").in_("group_id", user_group_ids).eq("week_start", week_start).execute()
+            actual_group_blocks = all_gb_res.data or []
+            for gb in actual_group_blocks:
+                g_day, g_time = gb["day_of_week"], gb["start_time"]
+                if (g_day, g_time) in available_slots:
+                    available_slots.remove((g_day, g_time))
+
+        # Compute total hours and weights AFTER group blocks are removed
+        total_credits = sum([c.get("credit_points") or 3 for c in courses]) or 1
+        total_slots = len(available_slots) 
+        if total_slots == 0 and not actual_group_blocks:
+            return {"message": "No available slots for plan", "plan": None, "blocks": []}
+
+        # Create plan record
+        existing_plan = client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).execute()
+        if existing_plan.data:
+            plan_id = existing_plan.data[0]["id"]
+            client.table("weekly_plan_blocks").delete().eq("plan_id", plan_id).execute()
+        else:
+            plan_id = client.table("weekly_plans").insert({"user_id": user_id, "week_start": week_start, "source": "auto"}).execute().data[0]["id"]
+
+        plan_blocks = []
+
+        # 2. Add the pre-calculated group blocks to the plan
+        for gb in actual_group_blocks:
+            # Find the course name for this group block
+            course_for_group = next((c for c in courses if c["course_number"] == gb["course_number"]), None)
+            
+            # CRITICAL FIX: If this group block belongs to a course NOT in the filtered 'courses' list (current semester), SKIP IT!
+            if not course_for_group:
+                logging.info(f"⏭️ Skipping group block for course {gb['course_number']} - not in user's current semester courses")
+                continue
+
+            course_name = course_for_group["course_name"]
+            
+            # Use the actual course name from study_groups if available
+            g_res = client.table("study_groups").select("course_name").eq("id", gb["group_id"]).limit(1).execute()
+            if g_res.data and g_res.data[0].get("course_name"):
+                course_name = g_res.data[0]["course_name"]
+
+            plan_blocks.append({
+                "plan_id": plan_id,
+                "user_id": user_id,
+                "course_number": gb["course_number"],
+                "course_name": course_name,
+                "work_type": "group",
+                "day_of_week": gb["day_of_week"],
+                "start_time": gb["start_time"],
+                "end_time": gb["end_time"],
+                "source": "group"
+            })
+
+        # 3. Allocate personal slots in blocks (longer sequences)
+        # Sort courses by credits to prioritize
+        courses.sort(key=lambda x: x.get("credit_points") or 3, reverse=True)
+
+        for course in courses:
+            course_number = course.get("course_number")
+            course_name = course.get("course_name")
+            credits = course.get("credit_points") or 3
+            
+            # Calculation: credits * 3 total hours. 
+            # Group is already allocated. Calculate remaining personal.
+            total_quota = credits * 3
+            group_hours = len([b for b in plan_blocks if b['course_number'] == course_number and b['work_type'] == 'group'])
+            personal_quota = max(0, total_quota - group_hours)
+
+            if personal_quota == 0: continue
+
+            # Try to find blocks of 2-3 hours for personal work
+            allocated_personal = 0
+            while allocated_personal < personal_quota:
+                if not available_slots: break
+                
+                # Try to find a 2-3h block
+                best_block = []
+                # Simple greedy: look for consecutive slots in available_slots
+                for i in range(len(available_slots)):
+                    current_day, current_time = available_slots[i]
+                    temp_block = [(current_day, current_time)]
+                    
+                    # Look ahead for up to 2 more hours
+                    for j in range(1, 3):
+                        if i + j < len(available_slots):
+                            next_day, next_time = available_slots[i+j]
+                            if next_day == current_day:
+                                # Check if they are actually consecutive (1 hour diff)
+                                if _time_to_minutes(next_time) == _time_to_minutes(current_time) + (j * 60):
+                                    temp_block.append((next_day, next_time))
+                                else:
+                                    break
+                            else:
+                                break
+                        else:
+                            break
+                    
+                    if len(temp_block) > len(best_block):
+                        best_block = temp_block
+                        if len(best_block) == 3: break # Found a good 3h block
+
+                if not best_block:
+                    # If no blocks found, just take the first single slot
+                    best_block = [available_slots[0]]
+
+                # Allocate this block
+                for d, t in best_block:
+                    if allocated_personal >= personal_quota: break
+                    plan_blocks.append({
+                        "plan_id": plan_id,
+                        "user_id": user_id,
+                        "course_number": course_number,
+                        "course_name": course_name,
+                        "work_type": "personal",
+                        "day_of_week": d,
+                        "start_time": t,
+                        "end_time": _minutes_to_time(_time_to_minutes(t) + 60),
+                        "source": "auto"
+                    })
+                    available_slots.remove((d, t))
+                    allocated_personal += 1
+
+            logging.info(f"   ✓ Allocated {allocated_personal} personal blocks for {course_name}")
+            
+            logging.info(f"   ✓ Allocated {len([b for b in plan_blocks if b['course_number'] == course_number])} total blocks for this course")
+            logging.info(f"   📊 Remaining available slots: {len(available_slots)}")
+
+        logging.info(f"📅 Total plan blocks to insert: {len(plan_blocks)}")
+        if plan_blocks:
+            # Check for duplicates before inserting
+            slot_check = {}
+            for block in plan_blocks:
+                key = (block['day_of_week'], block['start_time'])
+                if key in slot_check:
+                    logging.error(f"❌ DUPLICATE SLOT DETECTED! {key} used by both '{slot_check[key]}' and '{block['course_name']}'")
+                else:
+                    slot_check[key] = block['course_name']
+            
+            client.table("weekly_plan_blocks").insert(plan_blocks).execute()
+            logging.info(f"✅ Inserted {len(plan_blocks)} blocks successfully")
+
+        return {"message": "Weekly plan generated", "plan_id": plan_id, "blocks": plan_blocks}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error generating weekly plan: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generating weekly plan: {str(e)}")
+
+
+@app.post("/api/weekly-plan/auto")
+async def auto_weekly_plan(
+    week_start: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Auto weekly process:
+    1) Create group work time and post to groups
+    2) Generate the rest of the personal calendar
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        client = supabase_admin if supabase_admin else supabase
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+
+        # Build an initial availability grid (used only for group time)
+        time_slots = _build_time_slots()
+        available_slots = [(day, time) for day in range(7) for time in time_slots]
+        _ensure_group_blocks_for_week(client, user_id, week_start, available_slots)
+
+        # Generate the rest of the weekly plan (personal + remaining group slots)
+        return await generate_weekly_plan(week_start, current_user)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error running auto weekly plan: {e}")
+        raise HTTPException(status_code=500, detail=f"Error running auto weekly plan: {str(e)}")
+
+
+@app.post("/api/weekly-plan/trigger-now")
+async def trigger_weekly_plan_now(
+    minutes: int = 2
+):
+    """
+    Schedule the weekly auto plan to run after a short delay (default 2 minutes).
+    Useful for testing.
+    """
+    try:
+        run_at = datetime.utcnow() + timedelta(minutes=minutes)
+        scheduler.add_job(
+            _run_weekly_auto_for_all_users_sync,
+            DateTrigger(run_date=run_at),
+            id=f"weekly_auto_plan_manual_{run_at.timestamp()}",
+            replace_existing=False,
+        )
+        return {"message": f"Weekly auto plan scheduled for {run_at.isoformat()} UTC"}
+    except Exception as e:
+        logging.error(f"Error scheduling manual weekly plan: {e}")
+        raise HTTPException(status_code=500, detail=f"Error scheduling manual weekly plan: {str(e)}")
+
+
+@app.post("/api/weekly-plan/run-immediately")
+async def run_weekly_plan_immediately():
+    """
+    Run the weekly auto plan immediately (not scheduled).
+    Bypasses APScheduler to avoid misfire issues.
+    """
+    try:
+        await _run_weekly_auto_for_all_users()
+        return {"message": "Weekly auto plan executed immediately for all users"}
+    except Exception as e:
+        logging.error(f"Error running weekly plan immediately: {e}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.put("/api/weekly-plan-blocks/{block_id}")
+async def update_weekly_plan_block(
+    block_id: str,
+    update_data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Update a weekly plan block (used when user edits the plan).
+    Also updates course time preferences based on current plan distribution.
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        client = supabase_admin if supabase_admin else supabase
+
+        existing = client.table("weekly_plan_blocks").select("*").eq("id", block_id).eq("user_id", user_id).execute()
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="Plan block not found")
+
+        block = existing.data[0]
+        allowed_fields = {"day_of_week", "start_time", "end_time", "work_type", "is_locked"}
+        update_payload = {k: v for k, v in update_data.items() if k in allowed_fields}
+        if not update_payload:
+            raise HTTPException(status_code=400, detail="No valid fields to update")
+
+        update_result = client.table("weekly_plan_blocks").update(update_payload).eq("id", block_id).execute()
+        if not update_result.data:
+            raise HTTPException(status_code=400, detail="Failed to update plan block")
+
+        # Update course time preferences based on all blocks in this plan
+        plan_id = block["plan_id"]
+        course_number = block["course_number"]
+        blocks_result = client.table("weekly_plan_blocks").select("work_type").eq("plan_id", plan_id).eq("course_number", course_number).execute()
+        blocks = blocks_result.data or []
+        total = len(blocks) if blocks else 0
+        if total > 0:
+            personal_count = sum(1 for b in blocks if b.get("work_type") == "personal")
+            group_count = sum(1 for b in blocks if b.get("work_type") == "group")
+            personal_ratio = personal_count / total
+            group_ratio = group_count / total
+
+            client.table("course_time_preferences").upsert({
+                "user_id": user_id,
+                "course_number": course_number,
+                "personal_ratio": personal_ratio,
+                "group_ratio": group_ratio
+            }, on_conflict="user_id,course_number").execute()
+
+        return {"message": "Plan block updated", "block": update_result.data[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error updating plan block: {e}")
+        raise HTTPException(status_code=500, detail=f"Error updating plan block: {str(e)}")
 
 
 # Chat endpoint
@@ -1162,20 +1991,112 @@ async def create_study_group(
                 detail=error_msg
             )
         
-        # If no valid emails provided, reject (user must invite at least one person)
+        # Allow group creation without invitees (user can invite later)
+        # Only reject if user tried to invite themselves and no other valid emails
         if not valid_emails:
             if self_invite_attempted:
-                error_msg = "You cannot invite yourself to a group. Please invite at least one other registered user."
+                logging.warning(f"   ⚠️ User tried to invite themselves only - allowing group creation without invitees")
             else:
-                error_msg = "You must invite at least one registered user to create a group."
+                logging.info(f"   ℹ️ No invitees provided - group will be created without initial members")
+        
+        # Get creator's current semester and year to validate invitees
+        creator_profile = client.table("user_profiles").select("current_semester, current_year").eq("id", user_id).execute()
+        creator_semester = None
+        creator_year = None
+        if creator_profile.data and len(creator_profile.data) > 0:
+            creator_semester = creator_profile.data[0].get("current_semester")
+            creator_year = creator_profile.data[0].get("current_year")
+            logging.info(f"   Creator's semester: {creator_semester}, year: {creator_year}")
+        
+        # Validate that each invitee is enrolled in the course for the selected semester
+        course_number = group_data.course_id  # course_id is actually course_number
+        eligible_emails = []
+        ineligible_emails = []
+        
+        # Helper function to extract semester season (e.g., "חורף" from "חורף תשפ"ו")
+        def extract_semester_season(semester_str):
+            if not semester_str:
+                return None
+            semester_str = str(semester_str).strip()
+            # Common Hebrew semester names
+            if "חורף" in semester_str or "winter" in semester_str.lower():
+                return "חורף"
+            elif "אביב" in semester_str or "spring" in semester_str.lower():
+                return "אביב"
+            elif "קיץ" in semester_str or "summer" in semester_str.lower():
+                return "קיץ"
+            return semester_str  # Return as-is if no match
+        
+        if creator_semester and creator_year and course_number:
+            creator_semester_season = extract_semester_season(creator_semester)
+            logging.info(f"   Validating invitees for course {course_number} in semester {creator_semester} (season: {creator_semester_season}) year {creator_year}")
+            
+            for email_data in valid_emails:
+                email = email_data["email"]
+                invitee_user_id = email_data["user"].id
+                
+                # Check if invitee has this course in the same semester/year
+                invitee_courses = client.table("courses").select("*").eq("user_id", invitee_user_id).eq("course_number", course_number).execute()
+                
+                has_course_in_semester = False
+                if invitee_courses.data:
+                    logging.info(f"   🔍 Checking {len(invitee_courses.data)} courses for {email}")
+                    for course in invitee_courses.data:
+                        course_semester = course.get("semester")
+                        course_year = course.get("year")
+                        course_semester_season = extract_semester_season(course_semester) if course_semester else None
+                        
+                        # Match by semester season (not exact string) and year
+                        semester_matches = course_semester_season == creator_semester_season if course_semester_season and creator_semester_season else False
+                        year_matches = not creator_year or not course_year or course_year == creator_year
+                        
+                        logging.info(f"   🔍 Course: semester='{course_semester}' (season: {course_semester_season}), year={course_year}")
+                        logging.info(f"   🔍 Match: semester={semester_matches}, year={year_matches}")
+                        
+                        if semester_matches and year_matches:
+                            has_course_in_semester = True
+                            logging.info(f"   ✅ {email} is enrolled in course {course_number} for {creator_semester_season} {creator_year}")
+                            break
+                else:
+                    logging.warning(f"   ⚠️ {email} has no courses with course_number={course_number}")
+                
+                if has_course_in_semester:
+                    eligible_emails.append(email_data)
+                else:
+                    ineligible_emails.append(email)
+                    logging.warning(f"   ❌ {email} is NOT enrolled in course {course_number} for {creator_semester_season} {creator_year}")
+        else:
+            # If creator doesn't have semester/year set, allow all (backward compatibility)
+            logging.warning(f"   ⚠️ Creator's semester/year not set - allowing all invitees (backward compatibility)")
+            eligible_emails = valid_emails
+        
+        # If there are ineligible emails, reject them
+        if ineligible_emails:
+            creator_semester_season = extract_semester_season(creator_semester) if creator_semester else None
+            error_msg = f"The following users are not enrolled in course {group_data.course_name} (course number: {course_number}) for the selected semester ({creator_semester_season or creator_semester} {creator_year}): {', '.join(ineligible_emails)}. Please make sure they have this course in their courses list for the same semester and year."
+            logging.error(f"   ❌ {error_msg}")
+            logging.error(f"   💡 Debug: Creator semester='{creator_semester}' (season: {creator_semester_season}), year={creator_year}")
+            raise HTTPException(
+                status_code=400,
+                detail=error_msg
+            )
+        
+        # If no eligible emails after validation AND there were invitees, reject
+        # But allow group creation without invitees (user can invite later)
+        if not eligible_emails and valid_emails:
+            error_msg = "None of the invited users are enrolled in this course for the selected semester."
             logging.error(f"   ❌ {error_msg}")
             raise HTTPException(
                 status_code=400,
                 detail=error_msg
             )
         
-        # NOW create the group (only if all emails are valid)
-        logging.info(f"   ✅ All {len(valid_emails)} emails are valid. Creating group...")
+        # If no invitees at all, that's fine - group can be created without members
+        if not valid_emails:
+            logging.info(f"   ℹ️ No invitees provided - group will be created without initial members")
+        
+        # NOW create the group (only if all emails are valid and eligible)
+        logging.info(f"   ✅ All {len(eligible_emails)} invitees are eligible. Creating group...")
         group_result = client.table("study_groups").insert({
             "course_id": group_data.course_id,
             "course_name": group_data.course_name,
@@ -1208,16 +2129,16 @@ async def create_study_group(
             else:
                 logging.info(f"ℹ️ Creator already exists as member")
         
-        # Create invitations for each VALIDATED email
+        # Create invitations for each ELIGIBLE email
         invitations_created = []
         invitations_failed = []
         
-        for email_data in valid_emails:
+        for email_data in eligible_emails:
             email = email_data["email"]
             user_check = email_data["user"]
             
             try:
-                # Create invitation (user is already validated)
+                # Create invitation (user is already validated and eligible)
                 invitation_data = {
                     "group_id": group_id,
                     "inviter_id": user_id,
@@ -1295,17 +2216,26 @@ async def create_study_group(
 async def get_my_groups(current_user: dict = Depends(get_current_user)):
     """Get all groups the user is a member of"""
     try:
+        print("=" * 60)
+        print("👥 [GROUPS API] /api/groups/my-groups endpoint called")
+        logging.info("=" * 60)
+        logging.info("👥 [GROUPS API] /api/groups/my-groups endpoint called")
         user_id = current_user.get('sub')
+        print(f"👥 [GROUPS API] User ID: {user_id}")
+        logging.info(f"👥 [GROUPS API] User ID: {user_id}")
         
         if not user_id:
             raise HTTPException(status_code=401, detail="User not authenticated")
         
+        # Use admin client to bypass RLS
+        client = supabase_admin if supabase_admin else supabase
+        
         # Get groups where user is a member
-        members_result = supabase.table("group_members").select("group_id").eq("user_id", user_id).eq("status", "approved").execute()
+        members_result = client.table("group_members").select("group_id").eq("user_id", user_id).eq("status", "approved").execute()
         member_group_ids = [m['group_id'] for m in (members_result.data or [])]
         
         # Get groups created by user
-        created_groups = supabase.table("study_groups").select("*").eq("created_by", user_id).execute()
+        created_groups = client.table("study_groups").select("*").eq("created_by", user_id).execute()
         created_group_ids = [g['id'] for g in (created_groups.data or [])]
         
         # Combine group IDs
@@ -1314,9 +2244,14 @@ async def get_my_groups(current_user: dict = Depends(get_current_user)):
         # Get all groups
         all_groups = {}
         if all_group_ids:
-            groups_result = supabase.table("study_groups").select("*").in_("id", all_group_ids).execute()
+            groups_result = client.table("study_groups").select("*").in_("id", all_group_ids).execute()
+            print(f"👥 [GROUPS API] Found {len(groups_result.data or [])} groups in database")
+            logging.info(f"👥 [GROUPS API] Found {len(groups_result.data or [])} groups in database")
             for group in (groups_result.data or []):
                 all_groups[group['id']] = group
+                group_info = f"   📦 Group from DB: '{group.get('group_name')}' | course_id: '{group.get('course_id')}' (type: {type(group.get('course_id')).__name__}) | course_name: '{group.get('course_name')}'"
+                print(group_info)
+                logging.info(group_info)
         
         # Get member counts and member details
         # Use admin client to bypass RLS and get all members
@@ -1361,7 +2296,18 @@ async def get_my_groups(current_user: dict = Depends(get_current_user)):
                 all_groups[group_id]['members_count'] = 0
                 all_groups[group_id]['members'] = []
         
-        return JSONResponse(content={"groups": list(all_groups.values())})
+        # Log all groups with their course_id and course_name for debugging
+        groups_list = list(all_groups.values())
+        print("=" * 60)
+        print(f"👥 [GROUPS API] Returning {len(groups_list)} groups:")
+        logging.info(f"👥 [GROUPS API] Returning {len(groups_list)} groups:")
+        for group in groups_list:
+            group_info = f"   - Group: '{group.get('group_name')}' | course_id: '{group.get('course_id')}' | course_name: '{group.get('course_name')}'"
+            print(group_info)
+            logging.info(group_info)
+        print("=" * 60)
+        
+        return JSONResponse(content={"groups": groups_list})
         
     except HTTPException:
         raise
@@ -2207,6 +3153,278 @@ async def get_sample_assignments():
             assignment["days_remaining"] = days_remaining
     
     return JSONResponse(content={"assignments": sample_assignments})
+
+
+@app.get("/api/course-catalog")
+async def get_course_catalog():
+    """
+    Get all courses from the course catalog
+    Returns list of all available courses
+    """
+    try:
+        client = supabase_admin if supabase_admin else supabase
+        
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+        
+        # Get all courses from catalog
+        result = client.table("course_catalog").select("*").order("course_number", desc=False).execute()
+        
+        courses = result.data if result.data else []
+        logging.info(f"📚 [CATALOG] Found {len(courses)} courses in catalog")
+        
+        return JSONResponse(content={"courses": courses})
+        
+    except Exception as e:
+        logging.error(f"❌ [CATALOG] Error loading course catalog: {e}")
+        import traceback
+        logging.error(f"   Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error loading course catalog: {str(e)}")
+
+
+@app.get("/api/assignments")
+async def get_assignments():
+    """
+    Get all assignments from Supabase (not user-specific)
+    Returns assignments grouped by course_catalog_id (with course info)
+    """
+    try:
+        logging.info(f"📝 [ASSIGNMENTS] Loading all assignments")
+        
+        # Use service_role client if available, otherwise anon client
+        client = supabase_admin if supabase_admin else supabase
+        
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+        
+        # Get all assignments (no user filter)
+        result = client.table("assignments").select("*").order("due_date", desc=False).execute()
+        
+        assignments = result.data if result.data else []
+        logging.info(f"📝 [ASSIGNMENTS] Found {len(assignments)} assignments")
+        
+        # Get all course catalog entries for mapping (by course_number AND by id)
+        course_catalog_result = client.table("course_catalog").select("*").execute()
+        course_catalog_map_by_id = {}
+        course_catalog_map_by_number = {}
+        if course_catalog_result.data:
+            for course in course_catalog_result.data:
+                course_catalog_map_by_id[course["id"]] = course
+                course_number = course.get("course_number")
+                if course_number:
+                    course_catalog_map_by_number[str(course_number).strip()] = course
+            logging.info(f"📝 [ASSIGNMENTS] Loaded {len(course_catalog_map_by_id)} courses from catalog")
+            print(f"📝 [ASSIGNMENTS] Loaded {len(course_catalog_map_by_id)} courses from catalog, {len(course_catalog_map_by_number)} by course_number")
+        
+        # Attach course info to each assignment
+        # Priority: 1) course_number from assignment -> find in course_catalog by course_number
+        #           2) course_catalog_id -> find in course_catalog by id
+        for assignment in assignments:
+            assignment_course_number = assignment.get("course_number")  # Direct field in assignments
+            course_catalog_id = assignment.get("course_catalog_id")
+            
+            course_info = None
+            final_course_number = None
+            
+            # First try: match by course_number directly from assignment
+            if assignment_course_number:
+                assignment_course_number_str = str(assignment_course_number).strip()
+                if assignment_course_number_str in course_catalog_map_by_number:
+                    course_info = course_catalog_map_by_number[assignment_course_number_str]
+                    final_course_number = assignment_course_number_str
+                    print(f"✅ [ASSIGNMENTS] Assignment '{assignment.get('title')}' -> matched by course_number: {final_course_number}")
+                    logging.info(f"📝 [ASSIGNMENTS] Assignment {assignment.get('id')} matched by course_number: {final_course_number}")
+                else:
+                    print(f"⚠️ [ASSIGNMENTS] Assignment '{assignment.get('title')}' has course_number '{assignment_course_number_str}' but not found in course_catalog")
+            
+            # Second try: match by course_catalog_id
+            if not course_info and course_catalog_id:
+                if course_catalog_id in course_catalog_map_by_id:
+                    course_info = course_catalog_map_by_id[course_catalog_id]
+                    final_course_number = course_info.get("course_number")
+                    if final_course_number:
+                        final_course_number = str(final_course_number).strip()
+                    print(f"✅ [ASSIGNMENTS] Assignment '{assignment.get('title')}' -> matched by course_catalog_id: {course_catalog_id}, course_number: {final_course_number}")
+                    logging.info(f"📝 [ASSIGNMENTS] Assignment {assignment.get('id')} matched by course_catalog_id: {course_catalog_id}")
+            
+            if course_info and final_course_number:
+                assignment["course_catalog"] = course_info
+                assignment["course_number"] = final_course_number  # Ensure assignment has course_number
+                print(f"   ✅ Final: course_number={final_course_number}, course_name={course_info.get('course_name')}")
+                logging.info(f"📝 [ASSIGNMENTS] Attached course info: course_number={final_course_number}, course_name={course_info.get('course_name')}")
+            else:
+                assignment["course_catalog"] = {}
+                print(f"❌ [ASSIGNMENTS] Assignment '{assignment.get('title')}' could not be matched:")
+                print(f"   - course_number from assignment: {assignment_course_number}")
+                print(f"   - course_catalog_id: {course_catalog_id}")
+                logging.warning(f"📝 [ASSIGNMENTS] Assignment {assignment.get('id')} could not be matched to course_catalog")
+        
+        logging.info(f"📝 [ASSIGNMENTS] Processed {len(assignments)} assignments with course info")
+        
+        # Debug: log first assignment structure
+        if assignments:
+            logging.info(f"📝 [ASSIGNMENTS] First assignment structure: {assignments[0]}")
+        
+        # Group assignments by course_number (use course_number from assignment, which we set above)
+        assignments_by_course = {}
+        for assignment in assignments:
+            # Get course_number from assignment (we set it in the previous loop)
+            course_number = assignment.get("course_number")
+            
+            # If not set, try to get from course_catalog
+            if not course_number:
+                course_catalog_info = assignment.get("course_catalog", {})
+                if isinstance(course_catalog_info, dict):
+                    course_number = course_catalog_info.get("course_number")
+            
+            if not course_number:
+                logging.warning(f"📝 [ASSIGNMENTS] Assignment {assignment.get('id')} has no course_number! Skipping...")
+                print(f"⚠️ [ASSIGNMENTS] Assignment '{assignment.get('title')}' has no course_number - cannot match with user courses!")
+                continue
+            
+            # Normalize course_number to string
+            key = str(course_number).strip()
+            
+            logging.info(f"📝 [ASSIGNMENTS] Using key (course_number): {key} for assignment {assignment.get('title')}")
+            print(f"📝 [ASSIGNMENTS] Assignment '{assignment.get('title')}' -> key: {key} (course_number)")
+            
+            if key not in assignments_by_course:
+                assignments_by_course[key] = []
+            
+            # Calculate days_remaining
+            from datetime import datetime
+            if assignment.get("due_date"):
+                due_date = datetime.strptime(assignment["due_date"], "%Y-%m-%d") if isinstance(assignment["due_date"], str) else assignment["due_date"]
+                today = datetime.now()
+                days_remaining = (due_date - today).days
+                assignment["days_remaining"] = days_remaining
+            
+            # Add course info to assignment (use course_catalog if available)
+            course_catalog_info = assignment.get("course_catalog", {})
+            if course_catalog_info:
+                assignment["course_info"] = course_catalog_info
+            
+            assignments_by_course[key].append(assignment)
+        
+        print("=" * 60)
+        print(f"📝 [ASSIGNMENTS] Grouped into {len(assignments_by_course)} courses: {list(assignments_by_course.keys())}")
+        logging.info(f"📝 [ASSIGNMENTS] Grouped into {len(assignments_by_course)} courses: {list(assignments_by_course.keys())}")
+        
+        # Debug: log the final structure
+        for key, assignments_list in assignments_by_course.items():
+            print(f"📝 [ASSIGNMENTS] Key '{key}': {len(assignments_list)} assignments")
+            logging.info(f"📝 [ASSIGNMENTS] Key '{key}': {len(assignments_list)} assignments")
+            if assignments_list:
+                first = assignments_list[0]
+                course_info = first.get('course_info') or first.get('course_catalog') or {}
+                course_number = course_info.get('course_number')
+                course_name = course_info.get('course_name')
+                print(f"   First assignment: '{first.get('title')}', course_number: {course_number}, course_name: {course_name}")
+                logging.info(f"📝 [ASSIGNMENTS]   First assignment: {first.get('title')}, course_number: {course_number}, course_name: {course_name}")
+        print("=" * 60)
+        
+        return JSONResponse(content={"assignments": assignments_by_course})
+        
+    except Exception as e:
+        logging.error(f"❌ [ASSIGNMENTS] Error loading assignments: {e}")
+        import traceback
+        logging.error(f"   Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error loading assignments: {str(e)}")
+
+
+@app.post("/api/assignments")
+async def create_assignment(assignment_data: dict):
+    """
+    Create a new assignment (not user-specific)
+    Requires: course_catalog_id (or course_number), title, due_date
+    """
+    try:
+        logging.info(f"📝 [ASSIGNMENTS] Creating assignment")
+        
+        client = supabase_admin if supabase_admin else supabase
+        
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+        
+        # Get course_catalog_id from course_number if provided
+        course_catalog_id = assignment_data.get("course_catalog_id")
+        course_number = assignment_data.get("course_number")
+        
+        if not course_catalog_id and course_number:
+            # Find course by course_number
+            course_result = client.table("course_catalog").select("id").eq("course_number", course_number).limit(1).execute()
+            if course_result.data and len(course_result.data) > 0:
+                course_catalog_id = course_result.data[0]["id"]
+            else:
+                raise HTTPException(status_code=404, detail=f"Course with number {course_number} not found in catalog")
+        
+        if not course_catalog_id:
+            raise HTTPException(status_code=400, detail="course_catalog_id or course_number is required")
+        
+        # Prepare assignment data (no user_id)
+        new_assignment = {
+            "course_catalog_id": course_catalog_id,
+            "title": assignment_data.get("title"),
+            "description": assignment_data.get("description"),
+            "due_date": assignment_data.get("due_date"),
+            "priority": assignment_data.get("priority", "medium"),
+            "is_completed": assignment_data.get("is_completed", False)
+        }
+        
+        # Insert assignment
+        result = client.table("assignments").insert(new_assignment).execute()
+        
+        if result.data:
+            logging.info(f"📝 [ASSIGNMENTS] Created assignment: {result.data[0].get('id')}")
+            return JSONResponse(content={"assignment": result.data[0]}, status_code=201)
+        else:
+            raise HTTPException(status_code=500, detail="Failed to create assignment")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"❌ [ASSIGNMENTS] Error creating assignment: {e}")
+        import traceback
+        logging.error(f"   Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error creating assignment: {str(e)}")
+
+
+@app.patch("/api/assignments/{assignment_id}")
+async def update_assignment_status(assignment_id: str, status_data: dict):
+    """
+    Update assignment completion status
+    Requires: is_completed (bool)
+    """
+    try:
+        logging.info(f"📝 [ASSIGNMENTS] Updating assignment {assignment_id} status")
+        
+        client = supabase_admin if supabase_admin else supabase
+        
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+        
+        is_completed = status_data.get("is_completed", False)
+        
+        # Update assignment
+        result = client.table("assignments").update({
+            "is_completed": is_completed
+        }).eq("id", assignment_id).execute()
+        
+        if result.data and len(result.data) > 0:
+            logging.info(f"📝 [ASSIGNMENTS] Updated assignment {assignment_id} to is_completed={is_completed}")
+            print(f"✅ [ASSIGNMENTS] Updated assignment {assignment_id} to is_completed={is_completed}")
+            return JSONResponse(content={"assignment": result.data[0]}, status_code=200)
+        else:
+            raise HTTPException(status_code=404, detail="Assignment not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"❌ [ASSIGNMENTS] Error updating assignment: {e}")
+        print(f"❌ [ASSIGNMENTS] Error updating assignment: {e}")
+        import traceback
+        logging.error(f"   Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error updating assignment: {str(e)}")
 
 
 @app.get("/api/assignments/course/{course_id}")

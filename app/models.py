@@ -81,6 +81,7 @@ class ConstraintBase(BaseModel):
     days: List[int] = Field(..., description="ימים בשבוע (0=ראשון, 1=שני, וכו')")
     start_time: str = Field(..., description="שעת התחלה (HH:MM)")
     end_time: str = Field(..., description="שעת סיום (HH:MM)")
+    is_hard: bool = Field(True, description="אילוץ קשיח או רך")
 
 
 class ConstraintCreate(ConstraintBase):
@@ -93,6 +94,31 @@ class Constraint(ConstraintBase):
     created_at: datetime
     updated_at: datetime
     
+    class Config:
+        from_attributes = True
+
+
+# Weekly constraint models (disposable constraints for a specific week)
+class WeeklyConstraintBase(BaseModel):
+    title: str = Field(..., description="שם האילוץ")
+    description: Optional[str] = Field(None, description="תיאור האילוץ")
+    days: List[int] = Field(..., description="ימים בשבוע (0=ראשון, 1=שני, וכו')")
+    start_time: str = Field(..., description="שעת התחלה (HH:MM)")
+    end_time: str = Field(..., description="שעת סיום (HH:MM)")
+    week_start: str = Field(..., description="תאריך תחילת שבוע (YYYY-MM-DD)")
+    is_hard: bool = Field(True, description="אילוץ קשיח או רך")
+
+
+class WeeklyConstraintCreate(WeeklyConstraintBase):
+    pass
+
+
+class WeeklyConstraint(WeeklyConstraintBase):
+    id: str
+    user_id: str
+    created_at: datetime
+    updated_at: datetime
+
     class Config:
         from_attributes = True
 

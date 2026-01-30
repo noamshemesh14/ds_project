@@ -153,13 +153,24 @@
             width: 100%;
             border-collapse: collapse;
             min-width: 800px;
+            table-layout: fixed;
         }
         
         .schedule-table th,
         .schedule-table td {
             border: 1px solid #e0e0e0;
-            padding: 0.75rem;
+            padding: 0;
             text-align: center;
+            width: 12.5%;
+            height: 80px;
+            position: relative;
+            background: white;
+            vertical-align: top;
+            overflow: visible; /* Allow badges to extend across cells */
+        }
+        
+        .schedule-table td.available {
+            background: white !important;
         }
         
         .schedule-table th {
@@ -186,12 +197,25 @@
             background: #ffe0e0;
             border: 2px solid #ff6b6b;
         }
-        
-        .schedule-cell.has-course {
-            background: #e0f0ff;
-            border: 2px solid #4dabf7;
+
+        .schedule-cell.has-constraint.constraint-start {
+            border-bottom: none;
+        }
+
+        .schedule-cell.has-constraint.constraint-middle {
+            border-top: none;
+            border-bottom: none;
+        }
+
+        .schedule-cell.has-constraint.constraint-end {
+            border-top: none;
         }
         
+        /* Cells stay plain - no coloring */
+        .schedule-cell.has-course {
+            background: white;
+        }
+
         .schedule-cell.available {
             background: #f0f9ff;
         }
@@ -207,18 +231,91 @@
             padding: 0.25rem 0.5rem;
             border-radius: 4px;
             font-size: 0.85em;
-            margin: 0.25rem;
             display: inline-block;
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+
+        .constraint-badge.soft {
+            background: #ffb347;
+        }
+
+        /* Course/Study block styles - differentiate personal vs group work */
+        .course-badge.personal-work {
+            background: #4a9eff !important;  /* Blue for personal work */
+        }
+        
+        .course-badge.group-work {
+            background: #9b59b6 !important;  /* Purple for group work */
+        }
+
+        .constraint-help {
+            font-size: 0.85em;
+            color: #666;
+            margin-top: 0.25rem;
+        }
+
+        .time-inputs.disabled {
+            opacity: 0.6;
+        }
+
+        .form-group.inline {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+
+        .checkbox-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            padding: 0.5rem 0.75rem;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            background: #fafafa;
+        }
+
+        .checkbox-label {
+            display: flex;
+            flex-direction: column;
+            gap: 0.2rem;
+            color: #333;
+        }
+
+        .checkbox-label span {
+            font-weight: 600;
+        }
+
+        .checkbox-label small {
+            color: #666;
+            font-weight: 400;
         }
         
         .course-badge {
-            background: #4dabf7;
+            background: #4dabf7;  /* Default blue */
             color: white;
-            padding: 0.25rem 0.5rem;
-            border-radius: 4px;
+            padding: 0.5rem;
+            border-radius: 10px;
             font-size: 0.85em;
-            margin: 0.25rem;
-            display: inline-block;
+            line-height: 1.4;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: absolute;
+            left: 5%;
+            right: 5%;
+            top: 5px;
+            pointer-events: none;
+            box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+            white-space: normal;
+            word-wrap: break-word;
+            text-align: center;
+            z-index: 5;
         }
         
         /* Constraints Management */
@@ -345,6 +442,31 @@
             margin-top: 0.5rem;
             display: flex;
             gap: 0.5rem;
+        }
+
+        .week-controls {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .week-controls label {
+            font-weight: 500;
+            color: #333;
+        }
+
+        .week-controls input[type="date"] {
+            padding: 0.5rem 0.75rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 1em;
+        }
+
+        .week-controls input[type="date"]:focus {
+            outline: none;
+            border-color: #667eea;
         }
         
         .btn {
@@ -551,11 +673,12 @@
             </div>
             
             <div class="tabs">
-                <button class="tab active" onclick="switchTab('schedule', this)">📅 מערכת שבועית</button>
+                <button class="tab active" onclick="switchTab('schedule', this)">📆 מערכת סמסטרית</button>
+                <button class="tab" onclick="switchTab('weekly', this)">🗓️ מערכת שבועית</button>
                 <button class="tab" onclick="switchTab('constraints', this)">🚫 אילוצים קבועים</button>
             </div>
             
-            <!-- Weekly Schedule Tab -->
+            <!-- Semester Schedule Tab -->
             <div id="schedule-tab" class="tab-content active">
                 <div class="schedule-container">
                     <table class="schedule-table">
@@ -575,6 +698,47 @@
                             <!-- Will be populated by JavaScript -->
                         </tbody>
                     </table>
+                </div>
+            </div>
+
+            <!-- Weekly Planner Tab -->
+            <div id="weekly-tab" class="tab-content">
+                <div class="week-controls">
+                    <label for="weekStartDate">שבוע:</label>
+                    <input type="date" id="weekStartDate">
+                    <button class="btn btn-primary" onclick="generateWeeklyPlan()">⚙️ צור מערכת שבועית</button>
+                    <button class="btn btn-secondary" onclick="openWeeklyConstraintModal()">➕ אילוץ שבועי</button>
+                </div>
+
+                <div class="schedule-container">
+                    <table class="schedule-table">
+                        <thead>
+                            <tr>
+                                <th>שעה</th>
+                                <th>ראשון</th>
+                                <th>שני</th>
+                                <th>שלישי</th>
+                                <th>רביעי</th>
+                                <th>חמישי</th>
+                                <th>שישי</th>
+                                <th>שבת</th>
+                            </tr>
+                        </thead>
+                        <tbody id="weekly-schedule-body">
+                            <!-- Will be populated by JavaScript -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <div style="margin-top: 1.5rem;">
+                    <h3 style="margin-bottom: 0.5rem;">אילוצים שבועיים</h3>
+                    <div id="weekly-constraints-list" class="constraints-list">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">🗓️</div>
+                            <p>אין אילוצים שבועיים עדיין</p>
+                            <p style="font-size: 0.9em; color: #999; margin-top: 0.5rem;">הוסף אילוצים לשבוע הנוכחי</p>
+                        </div>
+                    </div>
                 </div>
             </div>
             
@@ -604,6 +768,7 @@
                 </div>
             </div>
         </section>
+        
     </div>
     
     <!-- Constraint Modal -->
@@ -663,9 +828,111 @@
                     <label>שעת סיום</label>
                     <input type="time" id="constraintEndTime" required>
                 </div>
+                <div class="form-group inline">
+                    <div class="checkbox-row">
+                        <div class="checkbox-label">
+                            <span>אילוץ לכל היום</span>
+                            <small>מסמן את כל היום כלא זמין (00:00–23:59)</small>
+                        </div>
+                        <input type="checkbox" id="constraintAllDay">
+                    </div>
+                </div>
+                <div class="form-group inline">
+                    <div class="checkbox-row">
+                        <div class="checkbox-label">
+                            <span>אילוץ קשיח</span>
+                            <small>אילוץ רך מאפשר לאחר או לסיים מוקדם אם אין זמן פנוי</small>
+                        </div>
+                        <input type="checkbox" id="constraintIsHard" checked>
+                    </div>
+                </div>
                 <div class="form-actions">
                     <button type="submit" class="btn btn-primary">שמור</button>
                     <button type="button" class="btn btn-secondary" onclick="closeConstraintModal()">ביטול</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Weekly Constraint Modal -->
+    <div id="weeklyConstraintModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>הוסף אילוץ שבועי</h3>
+                <button class="close-btn" onclick="closeWeeklyConstraintModal()">×</button>
+            </div>
+            <form id="weeklyConstraintForm" onsubmit="saveWeeklyConstraint(event)">
+                <div class="form-group">
+                    <label>כותרת האילוץ</label>
+                    <input type="text" id="weeklyConstraintTitle" required placeholder="למשל: אירוע, מבחן, וכו'">
+                </div>
+                <div class="form-group">
+                    <label>תיאור (אופציונלי)</label>
+                    <textarea id="weeklyConstraintDescription" rows="3" placeholder="פרטים נוספים על האילוץ"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>ימים</label>
+                    <div class="days-checkboxes">
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="weeklyDay0" value="0">
+                            <label for="weeklyDay0">ראשון</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="weeklyDay1" value="1">
+                            <label for="weeklyDay1">שני</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="weeklyDay2" value="2">
+                            <label for="weeklyDay2">שלישי</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="weeklyDay3" value="3">
+                            <label for="weeklyDay3">רביעי</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="weeklyDay4" value="4">
+                            <label for="weeklyDay4">חמישי</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="weeklyDay5" value="5">
+                            <label for="weeklyDay5">שישי</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="weeklyDay6" value="6">
+                            <label for="weeklyDay6">שבת</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>שעת התחלה</label>
+                    <input type="time" id="weeklyConstraintStartTime" required>
+                </div>
+                <div class="form-group">
+                    <label>שעת סיום</label>
+                    <input type="time" id="weeklyConstraintEndTime" required>
+                </div>
+                <div class="form-group inline">
+                    <div class="checkbox-row">
+                        <div class="checkbox-label">
+                            <span>אילוץ לכל היום</span>
+                            <small>מסמן את כל היום כלא זמין (00:00–23:59)</small>
+                        </div>
+                        <input type="checkbox" id="weeklyConstraintAllDay">
+                    </div>
+                </div>
+                <div class="form-group inline">
+                    <div class="checkbox-row">
+                        <div class="checkbox-label">
+                            <span>אילוץ קשיח</span>
+                            <small>אילוץ רך מאפשר לאחר או לסיים מוקדם אם אין זמן פנוי</small>
+                        </div>
+                        <input type="checkbox" id="weeklyConstraintIsHard" checked>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 1rem; margin-top: 1rem;">
+                    <button type="submit" class="btn btn-primary">שמור</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeWeeklyConstraintModal()">ביטול</button>
+                    <button type="button" class="btn btn-danger" id="weeklyConstraintDeleteBtn" onclick="deleteWeeklyConstraintFromModal()" style="display: none;">מחק</button>
                 </div>
             </form>
         </div>
@@ -705,6 +972,10 @@
                 });
             }
             document.getElementById(tabName + '-tab').classList.add('active');
+
+            if (tabName === 'weekly') {
+                loadAllWeeklyData(); // Just load existing data, don't generate!
+            }
         }
         
         // Check if URL has hash for tab switching
@@ -725,13 +996,45 @@
         
         // Schedule data
         const timeSlots = [];
-        for (let hour = 8; hour <= 20; hour++) {
+        for (let hour = 0; hour <= 23; hour++) {
             timeSlots.push(`${hour.toString().padStart(2, '0')}:00`);
         }
         
         const days = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
         const constraints = [];
+        const weeklyConstraints = [];
+        const weeklyPlanBlocks = [];
         const courses = [];
+        let editingWeeklyConstraintId = null;
+
+        function getWeekStartDate() {
+            const input = document.getElementById('weekStartDate');
+            let selectedDate;
+            
+            if (input && input.value) {
+                // User selected a date - calculate the Sunday of that week
+                selectedDate = new Date(input.value + 'T00:00:00');
+            } else {
+                // No date selected - use today
+                selectedDate = new Date();
+            }
+            
+            // Calculate the Sunday of the week containing selectedDate
+            const day = selectedDate.getDay(); // 0=Sunday, 1=Monday, etc.
+            const diff = selectedDate.getDate() - day; // Go back to Sunday
+            const weekStart = new Date(selectedDate.setDate(diff));
+            
+            const yyyy = weekStart.getFullYear();
+            const mm = String(weekStart.getMonth() + 1).padStart(2, '0');
+            const dd = String(weekStart.getDate()).padStart(2, '0');
+            const value = `${yyyy}-${mm}-${dd}`;
+            
+            // Update input to show the calculated Sunday
+            if (input && input.value) {
+                input.value = value;
+            }
+            return value;
+        }
         
         // Initialize schedule
         function initSchedule() {
@@ -760,9 +1063,9 @@
             updateScheduleDisplay();
         }
         
-        // Update schedule display based on constraints and courses
+        // Update schedule display based on permanent constraints and courses
         function updateScheduleDisplay() {
-            document.querySelectorAll('.schedule-cell').forEach(cell => {
+            document.querySelectorAll('#schedule-body .schedule-cell').forEach(cell => {
                 cell.className = 'schedule-cell';
                 cell.innerHTML = '';
                 
@@ -789,12 +1092,34 @@
                 
                 if (constraint) {
                     cell.classList.add('has-constraint');
-                    const badge = document.createElement('span');
-                    badge.className = 'constraint-badge';
-                    badge.textContent = constraint.title;
-                    cell.appendChild(badge);
+                    const slotIndex = timeSlots.indexOf(time);
+                    const prevTime = slotIndex > 0 ? timeSlots[slotIndex - 1] : null;
+                    const nextTime = slotIndex < timeSlots.length - 1 ? timeSlots[slotIndex + 1] : null;
+                    const prevIn = prevTime && isTimeInRange(prevTime, constraint.start_time, constraint.end_time);
+                    const nextIn = nextTime && isTimeInRange(nextTime, constraint.start_time, constraint.end_time);
+                    const startsHere = !prevIn;
+                    if (startsHere && !nextIn) {
+                        cell.classList.add('constraint-start', 'constraint-end');
+                    } else if (startsHere) {
+                        cell.classList.add('constraint-start');
+                    } else if (!nextIn) {
+                        cell.classList.add('constraint-end');
+                    } else {
+                        cell.classList.add('constraint-middle');
+                    }
+
+                    // Render badge in the middle slot of the constraint
+                    const middleTime = getConstraintMiddleTime(constraint);
+                    if (time === middleTime) {
+                        const badge = document.createElement('span');
+                        badge.className = `constraint-badge ${constraint.is_hard === false ? 'soft' : ''}`;
+                        badge.textContent = constraint.title;
+                        cell.appendChild(badge);
+                    }
+                    cell.onclick = () => openConstraintModal(constraint.id);
                 } else {
                     cell.classList.add('available');
+                    cell.onclick = () => handleCellClick(day, time);
                 }
                 
                 // Check for courses (will be implemented later)
@@ -806,12 +1131,203 @@
                 if (course) {
                     cell.classList.remove('available');
                     cell.classList.add('has-course');
-                    const badge = document.createElement('span');
-                    badge.className = 'course-badge';
-                    badge.textContent = course.name;
-                    cell.appendChild(badge);
+
+                    const slotIndex = timeSlots.indexOf(time);
+                    const prevTime = slotIndex > 0 ? timeSlots[slotIndex - 1] : null;
+                    const nextTime = slotIndex < timeSlots.length - 1 ? timeSlots[slotIndex + 1] : null;
+                    const prevIn = prevTime && isTimeInRange(prevTime, course.start_time, course.end_time) && course.day === day;
+                    const nextIn = nextTime && isTimeInRange(nextTime, course.start_time, course.end_time) && course.day === day;
+                    const startsHere = !prevIn;
+                    if (startsHere && !nextIn) {
+                        cell.classList.add('course-start', 'course-end');
+                    } else if (startsHere) {
+                        cell.classList.add('course-start');
+                    } else if (!nextIn) {
+                        cell.classList.add('course-end');
+                    } else {
+                        cell.classList.add('course-middle');
+                    }
+
+                    const middleTime = getConstraintMiddleTime(course);
+                    if (time === middleTime) {
+                        const badge = document.createElement('span');
+                        badge.className = 'course-badge';
+                        badge.textContent = course.name;
+                        cell.appendChild(badge);
+                    }
                 }
             });
+        }
+
+        // Initialize weekly schedule
+        function initWeeklySchedule() {
+            const tbody = document.getElementById('weekly-schedule-body');
+            if (!tbody) return;
+            tbody.innerHTML = '';
+
+            timeSlots.forEach(time => {
+                const row = document.createElement('tr');
+                const timeCell = document.createElement('td');
+                timeCell.className = 'time-slot';
+                timeCell.textContent = time;
+                row.appendChild(timeCell);
+
+                for (let day = 0; day < 7; day++) {
+                    const cell = document.createElement('td');
+                    cell.className = 'schedule-cell available';
+                    cell.dataset.day = day;
+                    cell.dataset.time = time;
+                    cell.onclick = () => handleWeeklyCellClick(day, time);
+                    row.appendChild(cell);
+                }
+                tbody.appendChild(row);
+            });
+            updateWeeklyScheduleDisplay();
+        }
+
+        // Update weekly schedule display based on weekly constraints and plan blocks
+        function updateWeeklyScheduleDisplay() {
+            const cells = document.querySelectorAll('#weekly-schedule-body .schedule-cell');
+            cells.forEach(cell => {
+                cell.className = 'schedule-cell';
+                cell.innerHTML = '';
+
+                const day = parseInt(cell.dataset.day);
+                const time = cell.dataset.time;
+
+                const weeklyConstraint = weeklyConstraints.find(c => {
+                    let daysArray = c.days;
+                    if (!Array.isArray(daysArray)) {
+                        if (typeof daysArray === 'string') {
+                            try {
+                                daysArray = JSON.parse(daysArray);
+                            } catch {
+                                daysArray = daysArray.split(',').map(d => parseInt(d.trim())).filter(d => !isNaN(d));
+                            }
+                        } else {
+                            daysArray = [];
+                        }
+                    }
+                    return daysArray.includes(day) && isTimeInRange(time, c.start_time, c.end_time);
+                });
+
+                if (weeklyConstraint) {
+                    cell.classList.add('has-constraint');
+                    const slotIndex = timeSlots.indexOf(time);
+                    const prevTime = slotIndex > 0 ? timeSlots[slotIndex - 1] : null;
+                    const nextTime = slotIndex < timeSlots.length - 1 ? timeSlots[slotIndex + 1] : null;
+                    const prevIn = prevTime && isTimeInRange(prevTime, weeklyConstraint.start_time, weeklyConstraint.end_time);
+                    const nextIn = nextTime && isTimeInRange(nextTime, weeklyConstraint.start_time, weeklyConstraint.end_time);
+                    const startsHere = !prevIn;
+                    if (startsHere && !nextIn) {
+                        cell.classList.add('constraint-start', 'constraint-end');
+                    } else if (startsHere) {
+                        cell.classList.add('constraint-start');
+                    } else if (!nextIn) {
+                        cell.classList.add('constraint-end');
+                    } else {
+                        cell.classList.add('constraint-middle');
+                    }
+
+                    const middleTime = getConstraintMiddleTime(weeklyConstraint);
+                    if (time === middleTime) {
+                        const badge = document.createElement('span');
+                        badge.className = `constraint-badge ${weeklyConstraint.is_hard === false ? 'soft' : ''}`;
+                        badge.textContent = weeklyConstraint.title;
+                        cell.appendChild(badge);
+                    }
+                    cell.onclick = () => openWeeklyConstraintModal(null, null, weeklyConstraint.id);
+                } else {
+                    cell.classList.add('available');
+                    cell.onclick = () => handleWeeklyCellClick(day, time);
+                }
+
+                const planBlock = weeklyPlanBlocks.find(b => b.day_of_week === day && b.start_time === time);
+                if (planBlock) {
+                    cell.classList.remove('available');
+                    cell.classList.add('has-course');
+                    // Add work type class for background color
+                    const workTypeClass = planBlock.work_type === 'group' ? 'group-work' : 'personal-work';
+                    cell.classList.add(workTypeClass);
+
+                    const slotIndex = timeSlots.indexOf(time);
+                    const prevTime = slotIndex > 0 ? timeSlots[slotIndex - 1] : null;
+                    const nextTime = slotIndex < timeSlots.length - 1 ? timeSlots[slotIndex + 1] : null;
+                    const prevBlock = prevTime && weeklyPlanBlocks.find(b => b.day_of_week === day && b.start_time === prevTime);
+                    const nextBlock = nextTime && weeklyPlanBlocks.find(b => b.day_of_week === day && b.start_time === nextTime);
+                    const prevIn = prevBlock && prevBlock.course_number === planBlock.course_number && prevBlock.work_type === planBlock.work_type;
+                    const nextIn = nextBlock && nextBlock.course_number === planBlock.course_number && nextBlock.work_type === planBlock.work_type;
+                    const startsHere = !prevIn;
+                    if (startsHere && !nextIn) {
+                        cell.classList.add('course-start', 'course-end');
+                    } else if (startsHere) {
+                        cell.classList.add('course-start');
+                    } else if (!nextIn) {
+                        cell.classList.add('course-end');
+                    } else {
+                        cell.classList.add('course-middle');
+                    }
+
+                    // Create badge only at the start of the block
+                    if (startsHere) {
+                        // Count ONLY consecutive hours from this exact starting point
+                        let numHours = 1;
+                        let currentHour = parseInt(time.split(':')[0]);
+                        
+                        // Check each following hour sequentially
+                        for (let h = 1; h < 12; h++) {
+                            const nextHour = currentHour + h;
+                            if (nextHour >= 24) break; // Don't go past midnight
+                            
+                            const nextTimeStr = `${String(nextHour).padStart(2, '0')}:00`;
+                            
+                            // MUST be the IMMEDIATE next hour for the SAME course and work type
+                            const nextBlock = weeklyPlanBlocks.find(b => 
+                                b.day_of_week === day && 
+                                b.start_time === nextTimeStr &&
+                                b.course_number === planBlock.course_number &&
+                                b.work_type === planBlock.work_type
+                            );
+                            
+                            if (nextBlock) {
+                                numHours++;
+                            } else {
+                                break; // Stop at first gap
+                            }
+                        }
+                        
+                        console.log(`Block for ${planBlock.course_name} (${planBlock.work_type}) on day ${day} at ${time} spans ${numHours} consecutive hours`);
+                        
+                        const cellHeight = 80; // matches td height in CSS
+                        const badgeHeight = (cellHeight * numHours) - 10; // -10 for padding
+                        
+                        const badge = document.createElement('span');
+                        const isGroup = planBlock.work_type === 'group';
+                        badge.className = isGroup ? 'course-badge group-work' : 'course-badge personal-work';
+                        badge.style.height = `${badgeHeight}px`;
+                        badge.style.minHeight = `${badgeHeight}px`;
+                        
+                        const typeIcon = isGroup ? '👥' : '👤';
+                        const typeLabel = isGroup ? 'קבוצה' : 'אישי';
+                        
+                        // Shorten long course names for display
+                        let displayName = planBlock.course_name;
+                        if (displayName.length > 35) {
+                            displayName = displayName.substring(0, 32) + '...';
+                        }
+                        
+                        badge.textContent = `${typeIcon} ${displayName}`;
+                        badge.title = `${planBlock.course_name} (${typeLabel})`; // Full text on hover
+                        cell.appendChild(badge);
+                    }
+                }
+            });
+        }
+
+        // Handle weekly cell click
+        function handleWeeklyCellClick(day, time) {
+            console.log(`Weekly clicked: ${days[day]} ${time}`);
+            openWeeklyConstraintModal(day, time);
         }
         
         // Check if time is in range
@@ -826,17 +1342,39 @@
             
             return timeMinutes >= startMinutes && timeMinutes < endMinutes;
         }
+
+        function getConstraintMiddleTime(constraint) {
+            const activeTimes = timeSlots.filter(slot => isTimeInRange(slot, constraint.start_time, constraint.end_time));
+            if (activeTimes.length === 0) {
+                return null;
+            }
+            const middleIndex = Math.floor(activeTimes.length / 2);
+            return activeTimes[middleIndex];
+        }
+
+        function getPlanBlockMiddleTime(day, planBlock) {
+            const blocks = weeklyPlanBlocks
+                .filter(b => b.day_of_week === day && b.course_number === planBlock.course_number && b.work_type === planBlock.work_type)
+                .map(b => b.start_time)
+                .sort();
+            if (blocks.length === 0) {
+                return null;
+            }
+            const middleIndex = Math.floor(blocks.length / 2);
+            return blocks[middleIndex];
+        }
         
         // Handle cell click
         function handleCellClick(day, time) {
             // Will be used for adding courses later
             console.log(`Clicked: ${days[day]} ${time}`);
+            openConstraintModal(null, day, time);
         }
         
         let editingConstraintId = null;
         
         // Constraint Modal
-        function openConstraintModal(constraintId = null) {
+        function openConstraintModal(constraintId = null, prefillDay = null, prefillTime = null) {
             if (!token) {
                 alert('אנא התחבר כדי להוסיף אילוצים');
                 return;
@@ -876,11 +1414,28 @@
                     
                     document.getElementById('constraintStartTime').value = constraint.start_time || '';
                     document.getElementById('constraintEndTime').value = constraint.end_time || '';
+                    const isAllDay = constraint.start_time === '00:00' && (constraint.end_time === '23:59' || constraint.end_time === '24:00');
+                    document.getElementById('constraintAllDay').checked = isAllDay;
+                    document.getElementById('constraintIsHard').checked = constraint.is_hard !== false;
+                    toggleAllDayConstraintInputs();
                 }
             } else {
                 // Adding new constraint
                 formTitle.textContent = 'הוסף אילוץ קבוע';
                 document.getElementById('constraintForm').reset();
+                if (prefillDay !== null) {
+                    for (let i = 0; i < 7; i++) {
+                        document.getElementById(`day${i}`).checked = i === prefillDay;
+                    }
+                }
+                if (prefillTime) {
+                    document.getElementById('constraintStartTime').value = prefillTime;
+                    const endHour = Math.min(23, parseInt(prefillTime.split(':')[0], 10) + 1);
+                    document.getElementById('constraintEndTime').value = `${endHour.toString().padStart(2, '0')}:00`;
+                }
+                document.getElementById('constraintAllDay').checked = false;
+                document.getElementById('constraintIsHard').checked = true;
+                toggleAllDayConstraintInputs();
             }
             
             modal.classList.add('active');
@@ -890,6 +1445,21 @@
             document.getElementById('constraintModal').classList.remove('active');
             document.getElementById('constraintForm').reset();
             editingConstraintId = null;
+        }
+
+        document.getElementById('constraintAllDay').addEventListener('change', toggleAllDayConstraintInputs);
+        document.getElementById('weeklyConstraintAllDay').addEventListener('change', toggleAllDayWeeklyConstraintInputs);
+
+        function toggleAllDayConstraintInputs() {
+            const allDay = document.getElementById('constraintAllDay').checked;
+            document.getElementById('constraintStartTime').disabled = allDay;
+            document.getElementById('constraintEndTime').disabled = allDay;
+            document.getElementById('constraintStartTime').parentElement.classList.toggle('disabled', allDay);
+            document.getElementById('constraintEndTime').parentElement.classList.toggle('disabled', allDay);
+            if (allDay) {
+                document.getElementById('constraintStartTime').value = '00:00';
+                document.getElementById('constraintEndTime').value = '23:59';
+            }
         }
         
         // Save constraint
@@ -913,12 +1483,14 @@
                 return;
             }
             
+            const isAllDay = document.getElementById('constraintAllDay').checked;
             const constraintData = {
                 title: document.getElementById('constraintTitle').value.trim(),
                 description: document.getElementById('constraintDescription').value.trim() || null,
                 days: selectedDays,
-                start_time: document.getElementById('constraintStartTime').value,
-                end_time: document.getElementById('constraintEndTime').value
+                start_time: isAllDay ? '00:00' : document.getElementById('constraintStartTime').value,
+                end_time: isAllDay ? '23:59' : document.getElementById('constraintEndTime').value,
+                is_hard: document.getElementById('constraintIsHard').checked
             };
             
             if (!constraintData.title) {
@@ -1068,6 +1640,7 @@
                         ${constraint.description ? `<p>${constraint.description}</p>` : ''}
                         <p><strong>ימים:</strong> ${dayNames}</p>
                         <p><strong>שעות:</strong> ${constraint.start_time} - ${constraint.end_time}</p>
+                        <p><strong>סוג:</strong> ${constraint.is_hard === false ? 'רך 🟡' : 'קשיח 🔒'}</p>
                         <div class="constraint-actions">
                             <button class="btn btn-primary" onclick="openConstraintModal('${constraint.id}')">✏️ ערוך</button>
                             <button class="btn btn-danger" onclick="deleteConstraint('${constraint.id || ''}')">🗑️ מחק</button>
@@ -1175,6 +1748,300 @@
                 alert('שגיאה במחיקת האילוץ: ' + error.message);
             }
         }
+
+        // Weekly constraint modal
+        function openWeeklyConstraintModal(prefillDay = null, prefillTime = null, constraintId = null) {
+            if (!token) {
+                alert('אנא התחבר כדי להוסיף אילוצים שבועיים');
+                return;
+            }
+            document.getElementById('weeklyConstraintForm').reset();
+            editingWeeklyConstraintId = constraintId;
+            const deleteBtn = document.getElementById('weeklyConstraintDeleteBtn');
+            deleteBtn.style.display = constraintId ? 'inline-block' : 'none';
+            if (constraintId) {
+                const constraint = weeklyConstraints.find(c => c.id === constraintId);
+                if (constraint) {
+                    document.getElementById('weeklyConstraintTitle').value = constraint.title || '';
+                    document.getElementById('weeklyConstraintDescription').value = constraint.description || '';
+                    let daysArray = constraint.days;
+                    if (!Array.isArray(daysArray)) {
+                        if (typeof daysArray === 'string') {
+                            try {
+                                daysArray = JSON.parse(daysArray);
+                            } catch {
+                                daysArray = daysArray.split(',').map(d => parseInt(d.trim())).filter(d => !isNaN(d));
+                            }
+                        } else {
+                            daysArray = [];
+                        }
+                    }
+                    for (let i = 0; i < 7; i++) {
+                        document.getElementById(`weeklyDay${i}`).checked = daysArray.includes(i);
+                    }
+                    document.getElementById('weeklyConstraintStartTime').value = constraint.start_time || '';
+                    document.getElementById('weeklyConstraintEndTime').value = constraint.end_time || '';
+                    const isAllDay = constraint.start_time === '00:00' && (constraint.end_time === '23:59' || constraint.end_time === '24:00');
+                    document.getElementById('weeklyConstraintAllDay').checked = isAllDay;
+                    document.getElementById('weeklyConstraintIsHard').checked = constraint.is_hard !== false;
+                    toggleAllDayWeeklyConstraintInputs();
+                }
+            }
+            if (prefillDay !== null) {
+                for (let i = 0; i < 7; i++) {
+                    document.getElementById(`weeklyDay${i}`).checked = i === prefillDay;
+                }
+            }
+            if (prefillTime) {
+                document.getElementById('weeklyConstraintStartTime').value = prefillTime;
+                const endHour = Math.min(23, parseInt(prefillTime.split(':')[0], 10) + 1);
+                document.getElementById('weeklyConstraintEndTime').value = `${endHour.toString().padStart(2, '0')}:00`;
+            }
+            if (!constraintId) {
+                document.getElementById('weeklyConstraintAllDay').checked = false;
+                document.getElementById('weeklyConstraintIsHard').checked = true;
+                toggleAllDayWeeklyConstraintInputs();
+            }
+            document.getElementById('weeklyConstraintModal').classList.add('active');
+        }
+
+        function closeWeeklyConstraintModal() {
+            document.getElementById('weeklyConstraintModal').classList.remove('active');
+            document.getElementById('weeklyConstraintForm').reset();
+            editingWeeklyConstraintId = null;
+            document.getElementById('weeklyConstraintDeleteBtn').style.display = 'none';
+        }
+
+        function toggleAllDayWeeklyConstraintInputs() {
+            const allDay = document.getElementById('weeklyConstraintAllDay').checked;
+            document.getElementById('weeklyConstraintStartTime').disabled = allDay;
+            document.getElementById('weeklyConstraintEndTime').disabled = allDay;
+            document.getElementById('weeklyConstraintStartTime').parentElement.classList.toggle('disabled', allDay);
+            document.getElementById('weeklyConstraintEndTime').parentElement.classList.toggle('disabled', allDay);
+            if (allDay) {
+                document.getElementById('weeklyConstraintStartTime').value = '00:00';
+                document.getElementById('weeklyConstraintEndTime').value = '23:59';
+            }
+        }
+
+        async function saveWeeklyConstraint(event) {
+            event.preventDefault();
+            if (!token) {
+                alert('אנא התחבר כדי לשמור אילוצים שבועיים');
+                return;
+            }
+
+            const selectedDays = [];
+            for (let i = 0; i < 7; i++) {
+                if (document.getElementById(`weeklyDay${i}`).checked) {
+                    selectedDays.push(i);
+                }
+            }
+
+            if (selectedDays.length === 0) {
+                alert('אנא בחר לפחות יום אחד');
+                return;
+            }
+
+            const weekStart = getWeekStartDate();
+            const isAllDay = document.getElementById('weeklyConstraintAllDay').checked;
+            const constraintData = {
+                title: document.getElementById('weeklyConstraintTitle').value.trim(),
+                description: document.getElementById('weeklyConstraintDescription').value.trim() || null,
+                days: selectedDays,
+                start_time: isAllDay ? '00:00' : document.getElementById('weeklyConstraintStartTime').value,
+                end_time: isAllDay ? '23:59' : document.getElementById('weeklyConstraintEndTime').value,
+                week_start: weekStart,
+                is_hard: document.getElementById('weeklyConstraintIsHard').checked
+            };
+
+            if (!constraintData.title) {
+                alert('אנא הזן כותרת לאילוץ');
+                return;
+            }
+
+            try {
+                const url = editingWeeklyConstraintId ? `/api/weekly-constraints/${editingWeeklyConstraintId}` : '/api/weekly-constraints';
+                const response = await fetch(url, {
+                    method: editingWeeklyConstraintId ? 'PUT' : 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(constraintData)
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'שגיאה בשמירת האילוץ השבועי');
+                }
+
+                const result = await response.json();
+                if (result.constraint) {
+                    if (editingWeeklyConstraintId) {
+                        const idx = weeklyConstraints.findIndex(c => c.id === editingWeeklyConstraintId);
+                        if (idx > -1) {
+                            weeklyConstraints[idx] = result.constraint;
+                        }
+                    } else {
+                        weeklyConstraints.push(result.constraint);
+                    }
+                    updateWeeklyConstraintsList();
+                    updateWeeklyScheduleDisplay();
+                }
+                closeWeeklyConstraintModal();
+            } catch (error) {
+                console.error('Error saving weekly constraint:', error);
+                alert(error.message);
+            }
+        }
+
+        function deleteWeeklyConstraintFromModal() {
+            if (!editingWeeklyConstraintId) return;
+            deleteWeeklyConstraint(editingWeeklyConstraintId);
+            closeWeeklyConstraintModal();
+        }
+
+        async function loadWeeklyConstraints() {
+            if (!token) return;
+            try {
+                const weekStart = getWeekStartDate();
+                const response = await fetch(`/api/weekly-constraints?week_start=${weekStart}`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    weeklyConstraints.length = 0;
+                    weeklyConstraints.push(...(data.constraints || []));
+                    updateWeeklyConstraintsList();
+                    updateWeeklyScheduleDisplay();
+                }
+            } catch (error) {
+                console.error('Error loading weekly constraints:', error);
+            }
+        }
+
+        function updateWeeklyConstraintsList() {
+            const list = document.getElementById('weekly-constraints-list');
+            if (!list) return;
+
+            if (weeklyConstraints.length === 0) {
+                list.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">🗓️</div>
+                        <p>אין אילוצים שבועיים עדיין</p>
+                        <p style="font-size: 0.9em; color: #999; margin-top: 0.5rem;">הוסף אילוצים לשבוע הנוכחי</p>
+                    </div>
+                `;
+                return;
+            }
+
+            list.innerHTML = weeklyConstraints.map(constraint => {
+                const daysList = Array.isArray(constraint.days) ? constraint.days : [];
+                const daysNames = daysList.map(d => days[d]).join(', ');
+                return `
+                    <div class="constraint-card">
+                        <h4>${constraint.title}</h4>
+                        ${constraint.description ? `<p>${constraint.description}</p>` : ''}
+                        <p>ימים: ${daysNames}</p>
+                        <p>שעות: ${constraint.start_time} - ${constraint.end_time}</p>
+                        <p>סוג: ${constraint.is_hard ? 'קשיח' : 'רך'} ${constraint.is_hard ? '🔒' : '🟡'}</p>
+                        <div class="constraint-actions">
+                            <button class="btn btn-danger" onclick="deleteWeeklyConstraint('${constraint.id}')">🗑️ מחק</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function deleteWeeklyConstraint(id) {
+            if (!confirm('למחוק את האילוץ השבועי?')) return;
+            try {
+                const response = await fetch(`/api/weekly-constraints/${id}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                if (response.ok) {
+                    const index = weeklyConstraints.findIndex(c => c.id === id);
+                    if (index > -1) {
+                        weeklyConstraints.splice(index, 1);
+                        updateWeeklyConstraintsList();
+                        updateWeeklyScheduleDisplay();
+                    }
+                }
+            } catch (error) {
+                console.error('Error deleting weekly constraint:', error);
+            }
+        }
+
+        // Weekly plan generation
+        async function generateWeeklyPlan() {
+            if (!token) {
+                alert('אנא התחבר כדי ליצור מערכת שבועית');
+                return;
+            }
+            const weekStart = getWeekStartDate();
+            try {
+                const response = await fetch(`/api/weekly-plan/generate?week_start=${weekStart}`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'שגיאה ביצירת מערכת שבועית');
+                }
+                const data = await response.json();
+                weeklyPlanBlocks.length = 0;
+                weeklyPlanBlocks.push(...(data.blocks || []));
+                updateWeeklyScheduleDisplay();
+            } catch (error) {
+                console.error('Error generating weekly plan:', error);
+                alert(error.message);
+            }
+        }
+
+        async function loadWeeklyPlan() {
+            if (!token) return;
+            const weekStart = getWeekStartDate();
+            try {
+                const response = await fetch(`/api/weekly-plan?week_start=${weekStart}`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    weeklyPlanBlocks.length = 0;
+                    weeklyPlanBlocks.push(...(data.blocks || []));
+                    updateWeeklyScheduleDisplay();
+                }
+            } catch (error) {
+                console.error('Error loading weekly plan:', error);
+            }
+        }
+
+        async function runWeeklyAutoPlan() {
+            if (!token) return;
+            const weekStart = getWeekStartDate();
+            try {
+                await fetch(`/api/weekly-plan/auto?week_start=${weekStart}`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                await loadWeeklyConstraints();
+                await loadWeeklyPlan();
+            } catch (error) {
+                console.error('Error running auto weekly plan:', error);
+            }
+        }
         
         // Display My Courses - MOVED TO /my-courses PAGE
         // This function has been moved to my_courses.html
@@ -1269,7 +2136,60 @@
         
         // Initialize
         initSchedule();
+        // Load everything together to avoid visual jumps
+        async function loadAllWeeklyData() {
+            if (!token) return;
+            const weekStart = getWeekStartDate();
+            
+            try {
+                // Load constraints and plan in parallel
+                const [constraintsResponse, planResponse] = await Promise.all([
+                    fetch(`/api/weekly-constraints?week_start=${weekStart}`, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    }),
+                    fetch(`/api/weekly-plan?week_start=${weekStart}`, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    })
+                ]);
+                
+                // Process constraints
+                if (constraintsResponse.ok) {
+                    const constraintsData = await constraintsResponse.json();
+                    weeklyConstraints.length = 0;
+                    weeklyConstraints.push(...(constraintsData.constraints || []));
+                }
+                
+                // Process plan
+                if (planResponse.ok) {
+                    const planData = await planResponse.json();
+                    weeklyPlanBlocks.length = 0;
+                    weeklyPlanBlocks.push(...(planData.blocks || []));
+                }
+                
+                // If no plan exists yet, show message (don't generate on-demand)
+                if (weeklyPlanBlocks.length === 0) {
+                    console.info('No weekly plan exists yet - will be generated by scheduler');
+                }
+                
+                // Update display ONCE after everything is loaded
+                updateWeeklyScheduleDisplay();
+                updateWeeklyConstraintsList();
+            } catch (error) {
+                console.error('Error loading weekly data:', error);
+            }
+        }
+        
         loadConstraints();
+        initWeeklySchedule();
+        getWeekStartDate();
+        loadAllWeeklyData(); // Load everything together!
+
+        const weekStartInput = document.getElementById('weekStartDate');
+        if (weekStartInput) {
+            weekStartInput.addEventListener('change', () => {
+                loadAllWeeklyData(); // Reload everything together when date changes
+            });
+        }
         
         // Chat toggle (placeholder)
         function toggleChat() {
