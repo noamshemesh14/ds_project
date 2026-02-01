@@ -1,0 +1,164 @@
+Weekly Scheduling & Group Coordination – System Design Specification
+1. Scope & Goal
+This document defines the design and logic for the weekly schedule planning system and group coordination mechanism.
+The goal is to:
+Generate a personalized weekly study schedule.
+Support collaborative (group-based) meetings with approval workflows.
+Allow users to manually adjust schedules while preserving system consistency.
+Learn user preferences over time.
+Use an LLM (GPT-4o mini) to refine schedules under strict constraints.
+This scope explicitly does not include course selection, academic eligibility, or RAG-based academic advising.
+2. Core Concepts
+2.1 Schedule Types
+Personal Schedule: Individual study blocks per course.
+Group Schedule: Meetings shared across multiple users (projects, study groups).
+2.2 Constraint Types
+Hard Constraints
+Fixed commitments (classes, work, approved group meetings).
+User-blocked times.
+Calendar events that must not be moved.
+Soft Constraints
+Preferred study hours.
+Preferred days of week.
+Preferred session length.
+Preferred break length between sessions.
+Frequency preferences (e.g., short daily vs long sessions).
+Hard constraints must never be violated.
+Soft constraints may be violated only if strictly necessary.
+3. User Interaction Model
+3.1 Manual Schedule Editing
+Users can drag and resize personal study blocks freely.
+Changes are immediately applied to the personal schedule.
+Each manual edit is logged as a preference signal for the learning model.
+3.2 Group Schedule Changes
+Group meetings cannot be moved unilaterally.
+If a user attempts to modify a group meeting:
+A change request is created.
+A notification is sent to all group members.
+Each member must approve or reject.
+Only after unanimous approval:
+The meeting is moved.
+All members’ calendars are updated.
+Rejection triggers:
+Reversion to original time.
+Optional suggestion of alternative slots.
+4. Notifications System
+Notifications are triggered for:
+Publication of a new weekly schedule.
+Group meeting change requests.
+Group meeting approvals or rejections.
+Automatically generated schedules affecting group meetings.
+Additionally:
+When a weekly schedule is finalized, the agent:
+Notifies the user.
+Sends each group a message summarizing only the relevant group-related schedule for the upcoming week.
+5. User Preference Learning Model
+5.1 Learned Signals
+The system continuously learns from:
+Manual drag-and-drop changes.
+Accepted vs rejected group meeting times.
+Frequency and duration of completed study sessions.
+
+Skipped or shortened sessions.
+5.2 Learned Parameters
+The model maintains:
+Preferred study hours distribution (by day & time).
+Preferred days of week.
+Preferred session length.
+Preferred break duration between sessions.
+Per-course time distribution:
+Personal study time.
+Group study time.
+These are stored as probability distributions, not fixed rules.
+6. Schedule Generation Pipeline (Hybrid Model)
+6.1 Step 1 – Deterministic Skeleton Planner (Code-Based)
+The system first builds a schedule skeleton using deterministic logic:
+Inputs
+Available time slots (after removing hard constraints).
+Required weekly hours per course (personal & group).
+Existing fixed group meetings.
+Learned preference distributions.
+Explicit user profile preferences (if provided).
+Responsibilities
+Allocate time blocks per course.
+Respect all hard constraints.
+Avoid overlaps.
+Produce a valid but not fully optimized schedule.
+This step guarantees feasibility.
+6.2 Step 2 – LLM-Based Refinement (GPT-4o mini)
+The skeleton schedule is then sent to the LLM for refinement.
+LLM Input (JSON)
+The LLM receives:
+Current schedule skeleton.
+Remaining unallocated time slots.
+Updated per-course hour distributions.
+Explicit user preferences (from profile).
+Learned preference distributions.
+Hard vs soft constraint annotations.
+Explicit instruction: do not modify fixed blocks or group meetings.
+LLM Responsibilities
+Rearrange flexible study blocks only.
+Improve alignment with user preferences.
+Improve flow:
+Better spacing.
+Better breaks.
+Preferred hours/days.
+Return a refined schedule proposal.
+Output
+A JSON schedule proposal.
+No free-form text.
+All modifications must be explicitly listed.
+6.3 Step 3 – Validation & Application (Code-Based)
+The system:
+Validates the LLM output:
+No hard constraint violations.
+No overlap.
+Total hours preserved.
+Applies changes.
+Persists the schedule.
+Triggers notifications.
+If validation fails:
+
+The output is rejected.
+
+The skeleton schedule is used as fallback.
+7. Preference Input via User Profile
+Users may explicitly define preferences in their profile:
+Preferred study days.
+Preferred study hours.
+Session length preference.
+Break length preference.
+Intensity preference (spread vs concentrated).
+If provided:
+These preferences override learned defaults.
+They are included explicitly in the LLM input.
+8. Group Coordination Logic
+8.1 Group Availability Model
+Each user contributes availability windows.
+Availability may be explicit or derived from calendars.
+Group availability is computed as intersections.
+8.2 Group Scheduling
+Proposed meeting times are ranked by:
+Max participant availability.
+Alignment with group members’ preferences.
+Minimal disruption to personal schedules.
+8.3 Change Requests
+Stored with:
+Proposed new time.
+Requesting user.
+Approval state per member.
+Timeouts may trigger alternative proposals.
+9. Safety & Control Rules
+The LLM cannot:
+Move group meetings.
+Modify hard constraints.
+Change total required hours.
+All final authority remains in deterministic code.
+Users always see and approve final schedules.
+10. Summary
+This system uses a hybrid architecture:
+Deterministic scheduling logic guarantees correctness and constraint satisfaction.
+A learning model captures user habits and preferences over time.
+GPT-4o mini is used only as a refinement layer, operating on structured JSON under strict rules.
+Group coordination is consensus-based, transparent, and notification-driven.
+Manual user actions continuously improve personalization without sacrificing control.

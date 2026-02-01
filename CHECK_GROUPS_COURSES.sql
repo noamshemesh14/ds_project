@@ -43,3 +43,4 @@ WHERE c.user_id = '56a2597d-62fc-49b3-9f98-1b852941b5ef'  -- Replace with your u
 ORDER BY g.group_name, c.course_name;
 
 
+

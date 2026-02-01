@@ -33,6 +33,15 @@ from datetime import datetime, timedelta
 import asyncio
 import sys
 import logging
+import json
+
+# OpenAI for schedule refinement
+try:
+    from openai import OpenAI
+    HAS_OPENAI = True
+except ImportError:
+    HAS_OPENAI = False
+    logging.warning("OpenAI not installed. LLM-based schedule refinement will not be available.")
 
 # Load environment variables
 load_dotenv()
@@ -56,10 +65,10 @@ scheduler = BackgroundScheduler()
 @app.on_event("startup")
 def _start_scheduler():
     try:
-        # Run every Sunday at 12:34 UTC
+        # Run every Friday at 12:43 (3 minutes from now)
         scheduler.add_job(
             _run_weekly_auto_for_all_users_sync,
-            CronTrigger(day_of_week="sun", hour=12, minute=34),
+            CronTrigger(day_of_week="fri", hour=12, minute=43),
             id="weekly_auto_plan",
             replace_existing=True,
         )
@@ -482,19 +491,19 @@ async def get_user_data(
     """
     try:
         print("=" * 60)
-        print("📥 [USER-DATA API] /api/user-data endpoint called")
+        print("[USER-DATA API] /api/user-data endpoint called")
         logging.info("=" * 60)
-        logging.info("📥 [USER-DATA API] /api/user-data endpoint called")
-        print(f"📥 [USER-DATA API] current_user keys: {list(current_user.keys())}")
-        logging.info(f"📥 [USER-DATA API] current_user keys: {list(current_user.keys())}")
+        logging.info("[USER-DATA API] /api/user-data endpoint called")
+        print(f"[USER-DATA API] current_user keys: {list(current_user.keys())}")
+        logging.info(f"[USER-DATA API] current_user keys: {list(current_user.keys())}")
         user_id = current_user.get("id") or current_user.get("sub")
         if not user_id:
             error_msg = f"User ID not found in current_user: {current_user}"
-            print(f"❌ [USER-DATA API] {error_msg}")
-            logging.error(f"❌ [USER-DATA API] {error_msg}")
+            print(f"[USER-DATA API] ERROR: {error_msg}")
+            logging.error(f"[USER-DATA API] ERROR: {error_msg}")
             raise HTTPException(status_code=500, detail=error_msg)
-        print(f"📥 [USER-DATA API] Loading user data for user_id: {user_id}")
-        logging.info(f"📥 [USER-DATA API] Loading user data for user_id: {user_id}")
+        print(f"[USER-DATA API] Loading user data for user_id: {user_id}")
+        logging.info(f"[USER-DATA API] Loading user data for user_id: {user_id}")
         
         # Use service_role client if available, otherwise anon client
         client = supabase_admin if supabase_admin else supabase
@@ -506,16 +515,12 @@ async def get_user_data(
         try:
             profile_result = client.table("user_profiles").select("*").eq("id", user_id).execute()
             if not profile_result.data or len(profile_result.data) == 0:
-                logging.info(f"   No profile found for user {user_id}")
-                return JSONResponse(content={
-                    "student_info": None,
-                    "courses": [],
-                    "metadata": {"has_data": False}
-                })
-            
-            profile = profile_result.data[0]
-            logging.info(f"   Profile found: {profile.get('name', 'N/A')}")
-            logging.info(f"   Profile data: {profile}")
+                logging.info(f"   No profile found for user {user_id}; continuing to load courses")
+                profile = {}
+            else:
+                profile = profile_result.data[0]
+                logging.info(f"   Profile found: {profile.get('name', 'N/A')}")
+                logging.info(f"   Profile data: {profile}")
         except Exception as e:
             logging.error(f"   Error loading profile: {e}")
             raise HTTPException(status_code=500, detail=f"Error loading profile: {str(e)}")
@@ -530,6 +535,14 @@ async def get_user_data(
         except Exception as e:
             logging.error(f"   Error loading courses: {e}")
             courses = []
+
+        # Load catalog names to normalize display (avoid mojibake from legacy imports)
+        catalog_map = {}
+        try:
+            catalog_res = client.table("course_catalog").select("course_number,course_name").execute()
+            catalog_map = {c["course_number"]: c["course_name"] for c in (catalog_res.data or [])}
+        except Exception as e:
+            logging.warning(f"   Could not load course catalog for name normalization: {e}")
         
         # Convert to TranscriptData format
         student_info = {
@@ -546,12 +559,17 @@ async def get_user_data(
         # Convert courses to CourseBase format
         courses_list = []
         print("=" * 60)
-        print(f"📚 [USER-DATA API] Processing {len(courses)} courses:")
-        logging.info(f"📚 [USER-DATA API] Processing {len(courses)} courses:")
+        print(f"[USER-DATA API] Processing {len(courses)} courses:")
+        logging.info(f"[USER-DATA API] Processing {len(courses)} courses:")
         for course in courses:
+            normalized_name = course.get("course_name", "")
+            catalog_name = catalog_map.get(str(course.get("course_number")).strip())
+            if catalog_name:
+                normalized_name = catalog_name
+
             course_data = {
                 "id": course.get("id"),  # Include course ID for frontend matching
-                "course_name": course.get("course_name", ""),
+                "course_name": normalized_name,
                 "course_number": course.get("course_number", ""),
                 "credit_points": course.get("credit_points"),
                 "grade": course.get("grade"),
@@ -563,7 +581,7 @@ async def get_user_data(
                 "retake_count": course.get("retake_count", 0)
             }
             courses_list.append(course_data)
-            course_info = f"   📚 Course: '{course_data['course_name']}' | course_number: '{course_data['course_number']}' | id: '{course_data['id']}' | semester: '{course_data['semester']}'"
+            course_info = f"   Course: '{course_data['course_name']}' | course_number: '{course_data['course_number']}' | id: '{course_data['id']}' | semester: '{course_data['semester']}'"
             print(course_info)
             logging.info(course_info)
         print("=" * 60)
@@ -613,6 +631,100 @@ async def get_user_by_id_number(id_number: str, db: Session = Depends(get_db)):
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy"}
+
+
+# User Preferences endpoints
+@app.post("/api/user/preferences")
+async def save_user_preferences(
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Save user study preferences (raw text from user)
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        body = await request.json()
+        study_preferences_raw = body.get("study_preferences_raw", "")
+        
+        if not study_preferences_raw:
+            raise HTTPException(status_code=400, detail="study_preferences_raw is required")
+        
+        client = supabase_admin if supabase_admin else supabase
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+        
+        # Upsert user profile with raw preferences (create row if missing)
+        profile_payload = {
+            "id": user_id,
+            "study_preferences_raw": study_preferences_raw
+        }
+        # Preserve email/name if available from token
+        user_email = current_user.get("email")
+        if user_email:
+            profile_payload["email"] = user_email
+        user_name = current_user.get("user_metadata", {}).get("name")
+        if user_name:
+            profile_payload["name"] = user_name
+
+        update_result = client.table("user_profiles").upsert(
+            profile_payload,
+            on_conflict="id"
+        ).execute()
+        
+        logging.info(f"Saved study preferences for user {user_id}: {len(study_preferences_raw)} chars")
+        
+        # TODO: In the future, we can call LLM here to extract structured preferences
+        # and update study_preferences_summary column
+        
+        return JSONResponse(content={
+            "message": "Preferences saved successfully",
+            "preferences_length": len(study_preferences_raw)
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error saving user preferences: {e}")
+        raise HTTPException(status_code=500, detail=f"Error saving preferences: {str(e)}")
+
+
+@app.get("/api/user/preferences")
+async def get_user_preferences(current_user: dict = Depends(get_current_user)):
+    """
+    Get user study preferences
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        client = supabase_admin if supabase_admin else supabase
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+        
+        profile_result = client.table("user_profiles").select("study_preferences_raw, study_preferences_summary").eq("id", user_id).limit(1).execute()
+        
+        if not profile_result.data:
+            return JSONResponse(content={
+                "study_preferences_raw": "",
+                "study_preferences_summary": {}
+            })
+        
+        profile = profile_result.data[0]
+        return JSONResponse(content={
+            "study_preferences_raw": profile.get("study_preferences_raw") or "",
+            "study_preferences_summary": profile.get("study_preferences_summary") or {}
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error getting user preferences: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting preferences: {str(e)}")
 
 
 # Authentication endpoints
@@ -1125,12 +1237,56 @@ def _ensure_group_blocks_for_week(client, user_id: str, week_start: str, availab
             if created_blocks:
                 client.table("group_plan_blocks").insert(created_blocks).execute()
                 try:
-                    times = ", ".join([f"{b['day_of_week']} {b['start_time']}-{b['end_time']}" for b in created_blocks])
+                    day_names = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
+                    daily_blocks = {}
+                    for b in created_blocks:
+                        daily_blocks.setdefault(b["day_of_week"], []).append((b["start_time"], b["end_time"]))
+
+                    def _merge_ranges(ranges):
+                        ranges_sorted = sorted(ranges, key=lambda r: r[0])
+                        merged = []
+                        for start, end in ranges_sorted:
+                            if not merged:
+                                merged.append([start, end])
+                                continue
+                            last_start, last_end = merged[-1]
+                            if start <= last_end:
+                                merged[-1][1] = max(last_end, end)
+                            else:
+                                merged.append([start, end])
+                        return merged
+
+                    summary_lines = []
+                    for d in sorted(daily_blocks.keys()):
+                        merged = _merge_ranges(daily_blocks[d])
+                        ranges_str = ", ".join([f"{s}-{e}" for s, e in merged])
+                        summary_lines.append(f"{day_names[d]} {ranges_str}")
+
+                    try:
+                        d_parts = week_start.split('-')
+                        concise_date = f"{d_parts[2]}/{d_parts[1]}"
+                    except Exception:
+                        concise_date = week_start
+
+                    summary_text = f"פגישות קבוצתיות לשבוע ה-{concise_date}:\n" + "\n".join(summary_lines)
+
+                    # Group updates feed
                     client.table("group_updates").insert({
                         "group_id": group_id,
-                        "update_text": f"נקבעו שעות עבודה שבועיות לקבוצה ({week_start}): {times}",
+                        "update_text": summary_text,
                         "update_type": "info"
                     }).execute()
+
+                    # System message in group chat (use a real user_id to avoid NOT NULL issues)
+                    system_user_id = member_ids[0] if member_ids else user_id
+                    client.table("group_messages").insert({
+                        "group_id": group_id,
+                        "user_id": system_user_id,
+                        "sender_name": "🤖 סוכן אקדמי",
+                        "message": summary_text,
+                        "is_system": True
+                    }).execute()
+
                 except Exception as update_error:
                     logging.warning(f"Failed to post group update for {group_id}: {update_error}")
 
@@ -1144,6 +1300,185 @@ def _get_week_start(date_obj: datetime) -> str:
     return sunday.strftime("%Y-%m-%d")
 
 
+async def _refine_schedule_with_llm(
+    skeleton_blocks: list,
+    available_slots: list,
+    courses: list,
+    user_preferences_raw: str,
+    user_preferences_summary: dict,
+    time_slots: list
+) -> dict:
+    """
+    Use GPT-4o mini to refine the schedule by optimally placing personal study blocks.
+    
+    Args:
+        skeleton_blocks: List of already-placed blocks (group meetings, fixed blocks)
+        available_slots: List of (day, time) tuples still available
+        courses: List of courses with their requirements
+        user_preferences_raw: Raw user text about preferences
+        user_preferences_summary: LLM-extracted structured preferences
+        time_slots: List of all time slots
+        
+    Returns:
+        dict with 'success', 'blocks' (refined schedule), 'message'
+    """
+    if not HAS_OPENAI:
+        logging.warning("OpenAI not available, skipping LLM refinement")
+        return {"success": False, "blocks": [], "message": "OpenAI not configured"}
+    
+    try:
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        if not openai_api_key:
+            logging.warning("OPENAI_API_KEY not found in environment")
+            return {"success": False, "blocks": [], "message": "OpenAI API key missing"}
+        
+        base_url = os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+        if base_url:
+            client = OpenAI(api_key=openai_api_key, base_url=base_url)
+            logging.info(f"LLM base_url configured: {base_url}")
+        else:
+            client = OpenAI(api_key=openai_api_key)
+        
+        # Calculate how many personal blocks are needed per course
+        course_requirements = []
+        for course in courses:
+            course_number = course.get("course_number")
+            course_name = course.get("course_name")
+            credit_points = course.get("credit_points") or 3
+            total_hours = credit_points * 3
+            
+            # Count group blocks already allocated
+            group_hours = sum(1 for b in skeleton_blocks if b.get("course_number") == course_number and b.get("work_type") == "group")
+            personal_hours_needed = max(0, (total_hours // 2) - group_hours)
+            
+            course_requirements.append({
+                "course_number": course_number,
+                "course_name": course_name,
+                "credit_points": credit_points,
+                "personal_hours_needed": personal_hours_needed,
+                "group_hours_allocated": group_hours
+            })
+        
+        # Day names for readability
+        day_names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+        
+        # Build available slots in readable format
+        available_slots_readable = [
+            {"day": day_names[day], "day_index": day, "time": time}
+            for day, time in available_slots
+        ]
+        
+        # Build skeleton blocks in readable format
+        skeleton_blocks_readable = [
+            {
+                "day": day_names[b["day_of_week"]],
+                "day_index": b["day_of_week"],
+                "start_time": b["start_time"],
+                "end_time": b["end_time"],
+                "course_name": b.get("course_name"),
+                "type": b.get("work_type")
+            }
+            for b in skeleton_blocks
+        ]
+        
+        # Build the prompt
+        system_prompt = """You are a schedule optimization assistant. Your task is to place personal study blocks for courses based on user preferences.
+
+STRICT RULES:
+1. You MUST NOT modify or move any blocks in the skeleton (group meetings or fixed blocks)
+2. You can ONLY place new personal study blocks in the available slots
+3. Each block is exactly 1 hour
+4. You must allocate the EXACT number of personal hours required for each course
+5. Optimize placement based on user preferences (preferred times, days, session lengths, breaks)
+6. Return ONLY valid JSON, no explanations
+
+OUTPUT FORMAT:
+{
+  "personal_blocks": [
+    {
+      "course_number": "10401",
+      "course_name": "Course Name",
+      "day_index": 0,
+      "start_time": "09:00"
+    }
+  ]
+}"""
+
+        user_prompt = f"""Please optimally place personal study blocks for the following schedule:
+
+COURSE REQUIREMENTS:
+{json.dumps(course_requirements, indent=2)}
+
+ALREADY PLACED BLOCKS (DO NOT MODIFY):
+{json.dumps(skeleton_blocks_readable, indent=2)}
+
+AVAILABLE TIME SLOTS:
+{json.dumps(available_slots_readable, indent=2)}
+
+USER PREFERENCES (RAW):
+{user_preferences_raw or "No specific preferences provided"}
+
+USER PREFERENCES (STRUCTURED):
+{json.dumps(user_preferences_summary, indent=2) if user_preferences_summary else "{}"}
+
+TASK:
+Place the required personal study blocks for each course in the available slots, optimizing for:
+1. User's preferred study times and days
+2. Appropriate session lengths (avoid too many single-hour blocks if user prefers longer sessions)
+3. Adequate breaks between sessions
+4. Even distribution across the week
+5. Grouping blocks for the same course when beneficial
+
+Return only the JSON with personal_blocks array."""
+
+        # Call LLM (configurable model)
+        model = os.getenv("LLM_MODEL") or "gpt-4o-mini"
+        base_url = os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+        logging.info(f"Calling LLM for schedule refinement (model={model}, base_url={base_url})")
+
+        # gpt-5 family requires temperature=1 with this provider
+        temperature = 0.7
+        if "gpt-5" in model.lower():
+            temperature = 1
+
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=temperature,
+            max_tokens=2000,
+            response_format={"type": "json_object"}
+        )
+        
+        # Parse response
+        content = response.choices[0].message.content
+        logging.info(f"LLM response received: {len(content)} chars")
+        logging.info(f"LLM response (truncated): {content[:500]}")
+        
+        llm_output = json.loads(content)
+        personal_blocks = llm_output.get("personal_blocks", [])
+        
+        logging.info(f"LLM proposed {len(personal_blocks)} personal blocks")
+        
+        return {
+            "success": True,
+            "blocks": personal_blocks,
+            "message": f"LLM refinement successful, proposed {len(personal_blocks)} blocks"
+        }
+        
+    except Exception as e:
+        logging.error(f"LLM refinement error: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        return {
+            "success": False,
+            "blocks": [],
+            "message": f"LLM refinement failed: {str(e)}"
+        }
+
+
 def _run_weekly_auto_for_all_users_sync():
     """
     Sync wrapper for APScheduler (APScheduler can't call async functions directly).
@@ -1151,7 +1486,7 @@ def _run_weekly_auto_for_all_users_sync():
     asyncio.run(_run_weekly_auto_for_all_users())
 
 
-async def _run_weekly_auto_for_all_users():
+async def _run_weekly_auto_for_all_users(week_start_override: Optional[str] = None):
     """
     Final Refined Global Scheduler Agent:
     1. Clear old data for the week.
@@ -1165,20 +1500,28 @@ async def _run_weekly_auto_for_all_users():
             logging.error("Weekly scheduler: Supabase client not configured")
             return
 
-        # 1. Determine the week (Next Sunday)
-        current_week_start = _get_week_start(datetime.utcnow())
-        next_week_start_dt = datetime.strptime(current_week_start, "%Y-%m-%d") + timedelta(days=7)
-        week_start = next_week_start_dt.strftime("%Y-%m-%d")
+        # 1. Determine the week (Next Sunday by default, or override)
+        if week_start_override:
+            week_start = week_start_override
+        else:
+            current_week_start = _get_week_start(datetime.utcnow())
+            next_week_start_dt = datetime.strptime(current_week_start, "%Y-%m-%d") + timedelta(days=7)
+            week_start = next_week_start_dt.strftime("%Y-%m-%d")
         
         logging.info(f"🚀 [GLOBAL AGENT] Starting weekly planning for week {week_start}")
 
         # 2. Cleanup
         # Since we have cascade deletes, deleting the plans will delete the blocks
         logging.info(f"🧹 [GLOBAL AGENT] Cleaning up old data for week {week_start}")
-        client.table("weekly_plans").delete().eq("week_start", week_start).execute()
-        client.table("group_plan_blocks").delete().eq("week_start", week_start).execute()
+        try:
+            client.table("weekly_plans").delete().eq("week_start", week_start).execute()
+            client.table("group_plan_blocks").delete().eq("week_start", week_start).execute()
+            # Also clear notifications for this week to avoid duplicates
+            client.table("notifications").delete().eq("type", "plan_ready").like("link", f"%week={week_start}%").execute()
+        except Exception as cleanup_err:
+            logging.warning(f"⚠️ Cleanup warning: {cleanup_err}")
 
-        # 3. Get all users and their active courses for this semester (HARDCODED TO חורף תשפ"ו)
+        # 3. Get all users and their active courses (from Supabase only)
         users_result = client.table("user_profiles").select("id").execute()
         users = users_result.data or []
         user_ids = [u["id"] for u in users]
@@ -1189,15 +1532,9 @@ async def _run_weekly_auto_for_all_users():
         user_active_courses = {uid: set() for uid in user_ids}
         time_slots = _build_time_slots()
         
-        # FORCED SEMESTER FOR PLANNING
-        forced_season = "חורף"
-        forced_year = 2026 # Filter by year 2026
-        
         # Get valid catalog courses
         catalog_res = client.table("course_catalog").select("course_number").execute()
         valid_course_numbers = {c["course_number"] for c in (catalog_res.data or [])}
-
-        logging.info(f"🚀 [GLOBAL AGENT] Forced semester: {forced_season} {forced_year}")
 
         for u in users:
             uid = u["id"]
@@ -1208,19 +1545,12 @@ async def _run_weekly_auto_for_all_users():
             
             for c in all_u_courses:
                 c_num = str(c.get("course_number")).strip()
-                c_sem = c.get("semester")
-                c_year = c.get("year") # Assuming year is stored in 'courses' table
-                
-                if c_sem and c_num in valid_course_numbers:
-                    c_season = _extract_semester_season(c_sem)
-                    # Match by season "חורף" and year 2026
-                    # Note: Handle case where year might be string or int
-                    year_matches = not c_year or str(c_year) == str(forced_year) or str(forced_year) in str(c_year)
-                    
-                    if c_season == forced_season and year_matches:
-                        user_active_courses[uid].add(c_num)
+                if c_num in valid_course_numbers:
+                    user_active_courses[uid].add(c_num)
+                else:
+                    logging.warning(f"❌ [GLOBAL AGENT] User {uid} has course {c_num} which is NOT in the catalog. Rejecting for planning.")
             
-            logging.info(f"   👤 User {uid}: {len(user_active_courses[uid])} valid courses active in {forced_season} {forced_year}")
+            logging.info(f"   👤 User {uid}: {len(user_active_courses[uid])} VALID courses available for planning")
             
             # Permanent constraints (FETCH THEM HERE!)
             pc_res = client.table("constraints").select("*").eq("user_id", uid).execute()
@@ -1256,14 +1586,16 @@ async def _run_weekly_auto_for_all_users():
             member_ids = [mid for mid in all_member_ids if mid in user_active_courses and course_number in user_active_courses[mid]]
             
             if not member_ids:
-                logging.info(f"👥 [GLOBAL AGENT] Skipping group {course_name} - no active members this semester")
+                logging.info(f"👥 [GLOBAL AGENT] Skipping group {course_name} - no active members in this course")
                 continue
             
             # Quota calculation for group: assume 3 credits if not found
             group_quota = 4 # Default to 4h for group (half of 3*3=9)
             
-            # Try to find 2 blocks of 2 hours
+            # 4. Global Group Synchronization
             allocated_count = 0
+            daily_ranges = {} # Track ranges for combined message
+            
             for day in range(7):
                 if allocated_count >= group_quota: break
                 
@@ -1283,6 +1615,8 @@ async def _run_weekly_auto_for_all_users():
                     if all_free:
                         # Found a 2h block!
                         new_blocks = []
+                        end_t = _minutes_to_time(_time_to_minutes(t2) + 60)
+                        
                         for t in [t1, t2]:
                             new_blocks.append({
                                 "group_id": group_id,
@@ -1299,14 +1633,94 @@ async def _run_weekly_auto_for_all_users():
                         
                         client.table("group_plan_blocks").insert(new_blocks).execute()
                         allocated_count += 2
-                        logging.info(f"👥 [GLOBAL AGENT] Scheduled 2h group for {course_name} on day {day} at {t1} for {len(member_ids)} active members")
+                        
+                        if day not in daily_ranges: daily_ranges[day] = []
+                        daily_ranges[day].append(f"{t1}-{end_t}")
+                        logging.info(f"👥 [GLOBAL AGENT] Scheduled 2h group for {course_name} on day {day} at {t1}")
+
+            # Post ONE consolidated update if any blocks were scheduled
+            if daily_ranges:
+                try:
+                    day_names = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
+                    summary_lines = []
+                    for d in sorted(daily_ranges.keys()):
+                        summary_lines.append(f"{day_names[d]} {', '.join(daily_ranges[d])}")
+                    
+                    # Formatting week start date to DD/MM
+                    try:
+                        d_parts = week_start.split('-')
+                        concise_date = f"{d_parts[2]}/{d_parts[1]}"
+                    except:
+                        concise_date = week_start
+
+                    summary_text = f"פגישות קבוצתיות בשבוע הבא ה-{concise_date}:\n" + "\n".join(summary_lines)
+                    
+                    # 1. Post to chat as a system message (PRIMARY)
+                    logging.info(f"💬 [GLOBAL AGENT] Sending system message to group {group_id} chat")
+                    try:
+                        system_user_id = member_ids[0] if member_ids else None
+                        if not system_user_id:
+                            logging.warning(f"⚠️ [GLOBAL AGENT] No member_ids for group {group_id}, skipping system message")
+                            raise Exception("No group members available for system message")
+                        client.table("group_messages").insert({
+                            "group_id": group_id,
+                            "user_id": system_user_id,
+                            "sender_name": "🤖 סוכן אקדמי",
+                            "message": summary_text,
+                            "is_system": True
+                        }).execute()
+                        logging.info(f"✅ [GLOBAL AGENT] System message sent to group {group_id}")
+                    except Exception as msg_err:
+                        logging.error(f"❌ [GLOBAL AGENT] Failed to send system message to group {group_id}: {msg_err}")
+                    
+                    # 2. Update Feed (Pink box)
+                    logging.info(f"📢 [GLOBAL AGENT] Sending feed update to group {group_id}")
+                    try:
+                        client.table("group_updates").insert({
+                            "group_id": group_id,
+                            "update_text": summary_text,
+                            "update_type": "info"
+                        }).execute()
+                        logging.info(f"✅ [GLOBAL AGENT] Feed update sent to group {group_id}")
+                    except Exception as feed_err:
+                        logging.error(f"❌ [GLOBAL AGENT] Failed to send feed update to group {group_id}: {feed_err}")
+                    
+                    # 3. Do not send per-group notifications (single plan_ready per user only)
+                        
+                except Exception as update_err:
+                    logging.error(f"💥 [GLOBAL AGENT] Critical error in group update for {group_id}: {update_err}", exc_info=True)
 
         # 5. Phase 3: Individual User Planning
-        logging.info(f"👤 [GLOBAL AGENT] Starting individual planning for users")
+        logging.info(f"👤 [GLOBAL AGENT] Starting individual planning for {len(user_ids)} users")
         for uid in user_ids:
             try:
+                # Check if user has any active courses before planning
+                if not user_active_courses[uid]:
+                    logging.info(f"   ⏭️ Skipping user {uid} - no active courses")
+                    continue
+
                 fake_user = {"id": uid, "sub": uid}
-                await generate_weekly_plan(week_start, fake_user)
+                plan_res = await generate_weekly_plan(week_start, fake_user, notify=False)
+                
+                # Only notify if a plan was actually created (even if no blocks were found, but courses exist)
+                if plan_res and (plan_res.get("plan_id") or plan_res.get("blocks") is not None):
+                    # Notify user that their plan is ready
+                    try:
+                        notif_data = {
+                            "user_id": uid,
+                            "type": "plan_ready",
+                            "title": "המערכת השבועית שלך מוכנה! 📅",
+                            "message": f"הסוכן סיים לתכנן את המערכת שלך לשבוע הבא ({week_start}). מוזמן להסתכל ולעדכן!",
+                            "link": f"/schedule?week={week_start}",
+                            "read": False
+                        }
+                        logging.info(f"   🔔 Sending plan_ready notification to user {uid}")
+                        client.table("notifications").insert(notif_data).execute()
+                    except Exception as notif_err:
+                        logging.warning(f"⚠️ Failed to notify user {uid} about plan ready: {notif_err}")
+                else:
+                    logging.info(f"   ⏭️ No plan created for user {uid}: {plan_res.get('message') if plan_res else 'Unknown'}")
+                    
             except Exception as e:
                 logging.error(f"❌ [GLOBAL AGENT] Individual plan failed for {uid}: {e}")
 
@@ -1441,10 +1855,63 @@ async def get_weekly_plan(
         raise HTTPException(status_code=500, detail=f"Error fetching weekly plan: {str(e)}")
 
 
+@app.get("/api/weekly-plan/llm-status")
+async def get_weekly_plan_llm_status(
+    week_start: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Return LLM usage status for the current user and week.
+    Useful to verify preferences were loaded and LLM blocks were applied.
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        client = supabase_admin if supabase_admin else supabase
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+
+        profile_result = client.table("user_profiles").select("study_preferences_raw").eq("id", user_id).limit(1).execute()
+        prefs_raw = ""
+        if profile_result.data:
+            prefs_raw = profile_result.data[0].get("study_preferences_raw") or ""
+
+        plan_result = client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).limit(1).execute()
+        if not plan_result.data:
+            return {
+                "week_start": week_start,
+                "user_id": user_id,
+                "preferences_length": len(prefs_raw),
+                "llm_blocks": 0,
+                "auto_fallback_blocks": 0,
+                "group_blocks": 0,
+                "total_blocks": 0,
+                "message": "No weekly plan found for this week"
+            }
+
+        plan_id = plan_result.data[0]["id"]
+        blocks_result = client.table("weekly_plan_blocks").select("source").eq("plan_id", plan_id).execute()
+        sources = [b.get("source") for b in (blocks_result.data or [])]
+        return {
+            "week_start": week_start,
+            "user_id": user_id,
+            "preferences_length": len(prefs_raw),
+            "llm_blocks": sources.count("llm"),
+            "auto_fallback_blocks": sources.count("auto_fallback"),
+            "group_blocks": sources.count("group"),
+            "total_blocks": len(sources)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error fetching LLM status: {e}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
 @app.post("/api/weekly-plan/generate")
 async def generate_weekly_plan(
     week_start: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    notify: bool = True
 ):
     """
     Generate a weekly plan using hard/soft constraints and course credit points.
@@ -1453,24 +1920,10 @@ async def generate_weekly_plan(
         user_id = current_user.get("id") or current_user.get("sub")
         client = supabase_admin if supabase_admin else supabase
 
-        # Load courses (HARDCODED TO חורף 2026)
-        forced_season = "חורף"
-        forced_year = 2026
-
         courses_result = client.table("courses").select("*").eq("user_id", user_id).execute()
         all_courses = courses_result.data or []
         logging.info(f"📚 [GENERATE] User {user_id}: found {len(all_courses)} courses total")
-        
-        courses = []
-        for course in all_courses:
-            course_semester = course.get("semester")
-            course_year = course.get("year")
-            if course_semester:
-                course_semester_season = _extract_semester_season(course_semester)
-                year_matches = not course_year or str(course_year) == str(forced_year) or str(forced_year) in str(course_year)
-                
-                if course_semester_season == forced_season and year_matches:
-                    courses.append(course)
+        courses = list(all_courses)
         
         # Validate courses against CATALOG to ensure no "invented" courses are used
         catalog_res = client.table("course_catalog").select("course_number,course_name").execute()
@@ -1484,12 +1937,12 @@ async def generate_weekly_plan(
                 c["course_name"] = valid_catalog[c_num]
                 valid_courses.append(c)
             else:
-                logging.warning(f"⚠️ User {user_id} has course {c_num} which is NOT in the catalog. Skipping.")
+                logging.error(f"❌ [GENERATE] User {user_id} has course {c_num} which is NOT in the catalog. STRICT REJECTION.")
         
         courses = valid_courses
 
         if not courses:
-            return {"message": f"No valid courses (from catalog) available for plan in {forced_season}", "plan": None, "blocks": []}
+            return {"message": "No valid courses (from catalog) available for plan", "plan": None, "blocks": []}
 
         # Load preferences
         prefs_result = client.table("course_time_preferences").select("*").eq("user_id", user_id).execute()
@@ -1566,17 +2019,18 @@ async def generate_weekly_plan(
             # Find the course name for this group block
             course_for_group = next((c for c in courses if c["course_number"] == gb["course_number"]), None)
             
-            # CRITICAL FIX: If this group block belongs to a course NOT in the filtered 'courses' list (current semester), SKIP IT!
+            # CRITICAL FIX: If this group block belongs to a course NOT in the filtered 'courses' list, SKIP IT!
             if not course_for_group:
-                logging.info(f"⏭️ Skipping group block for course {gb['course_number']} - not in user's current semester courses")
+                logging.info(f"⏭️ Skipping group block for course {gb['course_number']} - not in user's courses")
                 continue
 
             course_name = course_for_group["course_name"]
             
-            # Use the actual course name from study_groups if available
-            g_res = client.table("study_groups").select("course_name").eq("id", gb["group_id"]).limit(1).execute()
-            if g_res.data and g_res.data[0].get("course_name"):
-                course_name = g_res.data[0]["course_name"]
+            # Use study_groups course_name only if no catalog name exists
+            if not course_name:
+                g_res = client.table("study_groups").select("course_name").eq("id", gb["group_id"]).limit(1).execute()
+                if g_res.data and g_res.data[0].get("course_name"):
+                    course_name = g_res.data[0]["course_name"]
 
             plan_blocks.append({
                 "plan_id": plan_id,
@@ -1590,81 +2044,202 @@ async def generate_weekly_plan(
                 "source": "group"
             })
 
-        # 3. Allocate personal slots in blocks (longer sequences)
-        # Sort courses by credits to prioritize
-        courses.sort(key=lambda x: x.get("credit_points") or 3, reverse=True)
-
-        for course in courses:
-            course_number = course.get("course_number")
-            course_name = course.get("course_name")
-            credits = course.get("credit_points") or 3
+        # 3. Load user preferences for LLM refinement
+        profile_result = client.table("user_profiles").select("study_preferences_raw, study_preferences_summary").eq("id", user_id).limit(1).execute()
+        user_preferences_raw = ""
+        user_preferences_summary = {}
+        if profile_result.data:
+            user_preferences_raw = profile_result.data[0].get("study_preferences_raw") or ""
+            user_preferences_summary = profile_result.data[0].get("study_preferences_summary") or {}
+        
+        logging.info(f"📋 User preferences loaded: {len(user_preferences_raw)} chars raw, {len(user_preferences_summary)} keys in summary")
+        
+        # 4. Try LLM-based personal block placement
+        llm_result = await _refine_schedule_with_llm(
+            skeleton_blocks=plan_blocks,  # Group blocks already placed
+            available_slots=available_slots[:],  # Copy of available slots
+            courses=courses,
+            user_preferences_raw=user_preferences_raw,
+            user_preferences_summary=user_preferences_summary,
+            time_slots=time_slots
+        )
+        
+        if llm_result["success"] and llm_result["blocks"]:
+            logging.info("Using LLM-refined schedule")
+            llm_blocks = llm_result["blocks"]
+            applied_llm_blocks = 0
             
-            # Calculation: credits * 3 total hours. 
-            # Group is already allocated. Calculate remaining personal.
-            total_quota = credits * 3
-            group_hours = len([b for b in plan_blocks if b['course_number'] == course_number and b['work_type'] == 'group'])
-            personal_quota = max(0, total_quota - group_hours)
-
-            if personal_quota == 0: continue
-
-            # Try to find blocks of 2-3 hours for personal work
-            allocated_personal = 0
-            while allocated_personal < personal_quota:
-                if not available_slots: break
+            # Validate and add LLM blocks
+            for llm_block in llm_blocks:
+                day_index = llm_block.get("day_index")
+                start_time = llm_block.get("start_time")
+                course_number = llm_block.get("course_number")
+                course_name = llm_block.get("course_name")
                 
-                # Try to find a 2-3h block
-                best_block = []
-                # Simple greedy: look for consecutive slots in available_slots
-                for i in range(len(available_slots)):
-                    current_day, current_time = available_slots[i]
-                    temp_block = [(current_day, current_time)]
-                    
-                    # Look ahead for up to 2 more hours
-                    for j in range(1, 3):
-                        if i + j < len(available_slots):
-                            next_day, next_time = available_slots[i+j]
-                            if next_day == current_day:
-                                # Check if they are actually consecutive (1 hour diff)
-                                if _time_to_minutes(next_time) == _time_to_minutes(current_time) + (j * 60):
-                                    temp_block.append((next_day, next_time))
-                                else:
-                                    break
-                            else:
-                                break
-                        else:
-                            break
-                    
-                    if len(temp_block) > len(best_block):
-                        best_block = temp_block
-                        if len(best_block) == 3: break # Found a good 3h block
-
-                if not best_block:
-                    # If no blocks found, just take the first single slot
-                    best_block = [available_slots[0]]
-
-                # Allocate this block
-                for d, t in best_block:
-                    if allocated_personal >= personal_quota: break
+                # Validate slot is actually available
+                if (day_index, start_time) in available_slots:
                     plan_blocks.append({
                         "plan_id": plan_id,
                         "user_id": user_id,
                         "course_number": course_number,
                         "course_name": course_name,
                         "work_type": "personal",
-                        "day_of_week": d,
-                        "start_time": t,
-                        "end_time": _minutes_to_time(_time_to_minutes(t) + 60),
-                        "source": "auto"
+                        "day_of_week": day_index,
+                        "start_time": start_time,
+                        "end_time": _minutes_to_time(_time_to_minutes(start_time) + 60),
+                        "source": "llm"
                     })
-                    available_slots.remove((d, t))
-                    allocated_personal += 1
-
-            logging.info(f"   ✓ Allocated {allocated_personal} personal blocks for {course_name}")
+                    available_slots.remove((day_index, start_time))
+                    applied_llm_blocks += 1
+                else:
+                    logging.warning(f"LLM proposed invalid slot ({day_index}, {start_time}), skipping")
             
-            logging.info(f"   ✓ Allocated {len([b for b in plan_blocks if b['course_number'] == course_number])} total blocks for this course")
-            logging.info(f"   📊 Remaining available slots: {len(available_slots)}")
+            logging.info(f"Applied {applied_llm_blocks} LLM-refined personal blocks")
 
-        logging.info(f"📅 Total plan blocks to insert: {len(plan_blocks)}")
+            # If LLM returned too few blocks, fill remaining deterministically
+            logging.info("Checking for remaining personal hours after LLM placement")
+            courses.sort(key=lambda x: x.get("credit_points") or 3, reverse=True)
+            for course in courses:
+                course_number = course.get("course_number")
+                course_name = course.get("course_name")
+                credits = course.get("credit_points") or 3
+                total_quota = credits * 3
+                group_hours = len([b for b in plan_blocks if b['course_number'] == course_number and b['work_type'] == 'group'])
+                existing_personal = len([b for b in plan_blocks if b['course_number'] == course_number and b['work_type'] == 'personal'])
+                remaining_personal = max(0, total_quota - group_hours - existing_personal)
+
+                if remaining_personal == 0:
+                    continue
+
+                logging.info(f"Filling remaining {remaining_personal} personal blocks for {course_name}")
+                allocated_personal = 0
+                while allocated_personal < remaining_personal:
+                    if not available_slots:
+                        break
+                    best_block = []
+                    for i in range(len(available_slots)):
+                        current_day, current_time = available_slots[i]
+                        temp_block = [(current_day, current_time)]
+                        for j in range(1, 3):
+                            if i + j < len(available_slots):
+                                next_day, next_time = available_slots[i + j]
+                                if next_day == current_day:
+                                    if _time_to_minutes(next_time) == _time_to_minutes(current_time) + (j * 60):
+                                        temp_block.append((next_day, next_time))
+                                    else:
+                                        break
+                                else:
+                                    break
+                            else:
+                                break
+                        if len(temp_block) > len(best_block):
+                            best_block = temp_block
+                            if len(best_block) == 3:
+                                break
+                    if not best_block:
+                        best_block = [available_slots[0]]
+                    for d, t in best_block:
+                        if allocated_personal >= remaining_personal:
+                            break
+                        plan_blocks.append({
+                            "plan_id": plan_id,
+                            "user_id": user_id,
+                            "course_number": course_number,
+                            "course_name": course_name,
+                            "work_type": "personal",
+                            "day_of_week": d,
+                            "start_time": t,
+                            "end_time": _minutes_to_time(_time_to_minutes(t) + 60),
+                            "source": "auto_fallback"
+                        })
+                        available_slots.remove((d, t))
+                        allocated_personal += 1
+                logging.info(f"Filled {allocated_personal} personal blocks for {course_name}")
+        else:
+            # FALLBACK: Use deterministic placement if LLM fails
+            logging.warning("LLM refinement failed, falling back to deterministic placement")
+            logging.warning(f"   Reason: {llm_result.get('message', 'Unknown')}")
+            
+            # Sort courses by credits to prioritize
+            courses.sort(key=lambda x: x.get("credit_points") or 3, reverse=True)
+
+            for course in courses:
+                course_number = course.get("course_number")
+                course_name = course.get("course_name")
+                credits = course.get("credit_points") or 3
+                
+                # Calculation: credits * 3 total hours. 
+                # Group is already allocated. Calculate remaining personal.
+                total_quota = credits * 3
+                group_hours = len([b for b in plan_blocks if b['course_number'] == course_number and b['work_type'] == 'group'])
+                personal_quota = max(0, total_quota - group_hours)
+
+                if personal_quota == 0: continue
+
+                # Try to find blocks of 2-3 hours for personal work
+                allocated_personal = 0
+                while allocated_personal < personal_quota:
+                    if not available_slots: break
+                    
+                    # Try to find a 2-3h block
+                    best_block = []
+                    # Simple greedy: look for consecutive slots in available_slots
+                    for i in range(len(available_slots)):
+                        current_day, current_time = available_slots[i]
+                        temp_block = [(current_day, current_time)]
+                        
+                        # Look ahead for up to 2 more hours
+                        for j in range(1, 3):
+                            if i + j < len(available_slots):
+                                next_day, next_time = available_slots[i+j]
+                                if next_day == current_day:
+                                    # Check if they are actually consecutive (1 hour diff)
+                                    if _time_to_minutes(next_time) == _time_to_minutes(current_time) + (j * 60):
+                                        temp_block.append((next_day, next_time))
+                                    else:
+                                        break
+                                else:
+                                    break
+                            else:
+                                break
+                        
+                        if len(temp_block) > len(best_block):
+                            best_block = temp_block
+                            if len(best_block) == 3: break # Found a good 3h block
+
+                    if not best_block:
+                        # If no blocks found, just take the first single slot
+                        best_block = [available_slots[0]]
+
+                    # Allocate this block
+                    for d, t in best_block:
+                        if allocated_personal >= personal_quota: break
+                        plan_blocks.append({
+                            "plan_id": plan_id,
+                            "user_id": user_id,
+                            "course_number": course_number,
+                            "course_name": course_name,
+                            "work_type": "personal",
+                            "day_of_week": d,
+                            "start_time": t,
+                            "end_time": _minutes_to_time(_time_to_minutes(t) + 60),
+                            "source": "auto_fallback"
+                        })
+                        available_slots.remove((d, t))
+                        allocated_personal += 1
+
+                logging.info(f"   OK Allocated {allocated_personal} personal blocks for {course_name}")
+            
+        # Log final allocation
+        for course in courses:
+            course_number = course.get("course_number")
+            course_name = course.get("course_name")
+            total_blocks = len([b for b in plan_blocks if b['course_number'] == course_number])
+            logging.info(f"   OK Total blocks for {course_name}: {total_blocks}")
+        
+        logging.info(f"Remaining available slots: {len(available_slots)}")
+
+        logging.info(f"Total plan blocks to insert: {len(plan_blocks)}")
         if plan_blocks:
             # Check for duplicates before inserting
             slot_check = {}
@@ -1676,7 +2251,22 @@ async def generate_weekly_plan(
                     slot_check[key] = block['course_name']
             
             client.table("weekly_plan_blocks").insert(plan_blocks).execute()
-            logging.info(f"✅ Inserted {len(plan_blocks)} blocks successfully")
+            logging.info(f"Inserted {len(plan_blocks)} blocks successfully")
+
+        if notify:
+            try:
+                notif_data = {
+                    "user_id": user_id,
+                    "type": "plan_ready",
+                    "title": "המערכת השבועית שלך מוכנה! 📅",
+                    "message": f"הסוכן סיים לתכנן את המערכת שלך לשבוע ({week_start}). מוזמן להסתכל ולעדכן!",
+                    "link": f"/schedule?week={week_start}",
+                    "read": False
+                }
+                logging.info(f"🔔 Sending plan_ready notification to user {user_id}")
+                client.table("notifications").insert(notif_data).execute()
+            except Exception as notif_err:
+                logging.warning(f"⚠️ Failed to notify user {user_id} about plan ready: {notif_err}")
 
         return {"message": "Weekly plan generated", "plan_id": plan_id, "blocks": plan_blocks}
     except HTTPException:
@@ -1739,18 +2329,54 @@ async def trigger_weekly_plan_now(
 
 
 @app.post("/api/weekly-plan/run-immediately")
-async def run_weekly_plan_immediately():
+async def run_weekly_plan_immediately(week_start: Optional[str] = None):
     """
     Run the weekly auto plan immediately (not scheduled).
     Bypasses APScheduler to avoid misfire issues.
     """
     try:
-        await _run_weekly_auto_for_all_users()
+        await _run_weekly_auto_for_all_users(week_start_override=week_start)
+        if week_start:
+            return {"message": f"Weekly auto plan executed immediately for all users (week_start={week_start})"}
         return {"message": "Weekly auto plan executed immediately for all users"}
     except Exception as e:
         logging.error(f"Error running weekly plan immediately: {e}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
+
+@app.get("/api/llm/health")
+async def llm_health_check():
+    """
+    Quick LLM connectivity check (OpenAI-compatible providers).
+    """
+    try:
+        if not HAS_OPENAI:
+            return JSONResponse(status_code=503, content={"ok": False, "error": "openai_not_installed"})
+
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        if not openai_api_key:
+            return JSONResponse(status_code=503, content={"ok": False, "error": "missing_api_key"})
+
+        base_url = os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+        model = os.getenv("LLM_MODEL") or "gpt-4o-mini"
+
+        client = OpenAI(api_key=openai_api_key, base_url=base_url) if base_url else OpenAI(api_key=openai_api_key)
+
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=5
+        )
+
+        return {
+            "ok": True,
+            "model": model,
+            "base_url": base_url,
+            "response": response.choices[0].message.content
+        }
+    except Exception as e:
+        logging.error(f"LLM health check failed: {e}")
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
 @app.put("/api/weekly-plan-blocks/{block_id}")
 async def update_weekly_plan_block(
@@ -1857,6 +2483,465 @@ async def chat(
     except Exception as e:
         logging.error(f"Error in chat endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing chat message: {str(e)}")
+
+
+# Manual Schedule Editing & Group Change Request endpoints
+@app.post("/api/schedule/block/move")
+async def move_schedule_block(
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Move a schedule block to a new day/time.
+    - Personal blocks: Move immediately
+    - Group blocks: Create change request (requires approval)
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        body = await request.json()
+        block_id = body.get("block_id")
+        new_day = body.get("new_day_of_week")
+        new_start_time = body.get("new_start_time")
+        
+        if not all([block_id, new_day is not None, new_start_time]):
+            raise HTTPException(status_code=400, detail="block_id, new_day_of_week, and new_start_time are required")
+        
+        client = supabase_admin if supabase_admin else supabase
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+        
+        # Get the block
+        block_result = client.table("weekly_plan_blocks").select("*").eq("id", block_id).limit(1).execute()
+        if not block_result.data:
+            raise HTTPException(status_code=404, detail="Block not found")
+        
+        block = block_result.data[0]
+        
+        # Check if user owns this block
+        if block["user_id"] != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to move this block")
+        
+        # Check if it's a group block
+        if block.get("work_type") == "group":
+            # Cannot move group blocks directly - need to create change request
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "group_block",
+                    "message": "Group blocks require approval from all members. Please use the group change request system.",
+                    "block": block
+                }
+            )
+        
+        # It's a personal block - move it immediately
+        # Calculate new end time (1 hour after start)
+        new_end_time = _minutes_to_time(_time_to_minutes(new_start_time) + 60)
+        
+        # Update the block
+        update_result = client.table("weekly_plan_blocks").update({
+            "day_of_week": new_day,
+            "start_time": new_start_time,
+            "end_time": new_end_time,
+            "source": "manual"  # Mark as manually edited
+        }).eq("id", block_id).execute()
+        
+        logging.info(f"✅ User {user_id} moved personal block {block_id} to day {new_day} at {new_start_time}")
+        
+        return JSONResponse(content={
+            "message": "Block moved successfully",
+            "block": update_result.data[0] if update_result.data else {}
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error moving schedule block: {e}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/api/schedule/group-change-request/create")
+async def create_group_change_request(
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Create a request to change a group meeting time.
+    Requires approval from all group members.
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        body = await request.json()
+        group_id = body.get("group_id")
+        week_start = body.get("week_start")
+        original_day = body.get("original_day_of_week")
+        original_start = body.get("original_start_time")
+        proposed_day = body.get("proposed_day_of_week")
+        proposed_start = body.get("proposed_start_time")
+        reason = body.get("reason", "")
+        
+        if not all([group_id, week_start, proposed_day is not None, proposed_start]):
+            raise HTTPException(status_code=400, detail="Missing required fields")
+        
+        client = supabase_admin if supabase_admin else supabase
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+        
+        # Verify user is member of this group
+        member_check = client.table("group_members").select("id").eq("group_id", group_id).eq("user_id", user_id).eq("status", "approved").execute()
+        if not member_check.data:
+            raise HTTPException(status_code=403, detail="Not a member of this group")
+        
+        # Calculate end times (1 hour blocks)
+        original_end = _minutes_to_time(_time_to_minutes(original_start) + 60) if original_start else None
+        proposed_end = _minutes_to_time(_time_to_minutes(proposed_start) + 60)
+        
+        # Create the change request
+        request_data = {
+            "group_id": group_id,
+            "week_start": week_start,
+            "original_day_of_week": original_day,
+            "original_start_time": original_start,
+            "original_end_time": original_end,
+            "proposed_day_of_week": proposed_day,
+            "proposed_start_time": proposed_start,
+            "proposed_end_time": proposed_end,
+            "requested_by": user_id,
+            "reason": reason,
+            "status": "pending"
+        }
+        
+        request_result = client.table("group_meeting_change_requests").insert(request_data).execute()
+        if not request_result.data:
+            raise HTTPException(status_code=500, detail="Failed to create change request")
+        
+        change_request = request_result.data[0]
+        request_id = change_request["id"]
+        
+        # Get all group members (except requester)
+        members_result = client.table("group_members").select("user_id").eq("group_id", group_id).eq("status", "approved").execute()
+        member_ids = [m["user_id"] for m in (members_result.data or []) if m["user_id"] != user_id]
+        
+        # Get group name
+        group_result = client.table("study_groups").select("group_name, course_name").eq("id", group_id).limit(1).execute()
+        group_name = group_result.data[0].get("group_name", "Group") if group_result.data else "Group"
+        
+        # Get requester name
+        requester_result = client.table("user_profiles").select("name").eq("id", user_id).limit(1).execute()
+        requester_name = requester_result.data[0].get("name", "A member") if requester_result.data else "A member"
+        
+        # Day names for display
+        day_names = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
+        original_time_str = f"{day_names[original_day]} {original_start}" if original_day is not None else "קיים"
+        proposed_time_str = f"{day_names[proposed_day]} {proposed_start}"
+        
+        # Send notifications to all members
+        for member_id in member_ids:
+            try:
+                client.table("notifications").insert({
+                    "user_id": member_id,
+                    "type": "group_change_request",
+                    "title": f"בקשת שינוי מפגש: {group_name}",
+                    "message": f"{requester_name} מבקש לשנות מפגש מ-{original_time_str} ל-{proposed_time_str}. נדרשת אישור מכל החברים.",
+                    "link": f"/schedule?change_request={request_id}",
+                    "read": False
+                }).execute()
+            except Exception as notif_err:
+                logging.error(f"Failed to notify member {member_id}: {notif_err}")
+        
+        logging.info(f"✅ Created group change request {request_id} for group {group_id}")
+        
+        return JSONResponse(content={
+            "message": "Change request created. Waiting for approval from all members.",
+            "request": change_request,
+            "members_to_approve": len(member_ids)
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error creating group change request: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/api/schedule/group-change-request/{request_id}/approve")
+async def approve_group_change_request(
+    request_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Approve a group meeting change request.
+    If all members approve, the change is applied.
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        client = supabase_admin if supabase_admin else supabase
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+        
+        # Get the request
+        request_result = client.table("group_meeting_change_requests").select("*").eq("id", request_id).limit(1).execute()
+        if not request_result.data:
+            raise HTTPException(status_code=404, detail="Change request not found")
+        
+        change_request = request_result.data[0]
+        
+        if change_request["status"] != "pending":
+            raise HTTPException(status_code=400, detail=f"Request is already {change_request['status']}")
+        
+        # Verify user is member of this group
+        group_id = change_request["group_id"]
+        member_check = client.table("group_members").select("id").eq("group_id", group_id).eq("user_id", user_id).eq("status", "approved").execute()
+        if not member_check.data:
+            raise HTTPException(status_code=403, detail="Not a member of this group")
+        
+        # Record the approval
+        try:
+            client.table("group_change_approvals").insert({
+                "request_id": request_id,
+                "user_id": user_id,
+                "approved": True
+            }).execute()
+        except Exception as e:
+            # Might already exist
+            client.table("group_change_approvals").update({
+                "approved": True,
+                "responded_at": "NOW()"
+            }).eq("request_id", request_id).eq("user_id", user_id).execute()
+        
+        # Check if all members have approved
+        all_members = client.table("group_members").select("user_id").eq("group_id", group_id).eq("status", "approved").execute()
+        member_ids = [m["user_id"] for m in (all_members.data or [])]
+        
+        approvals = client.table("group_change_approvals").select("user_id, approved").eq("request_id", request_id).execute()
+        approval_map = {a["user_id"]: a["approved"] for a in (approvals.data or [])}
+        
+        all_responded = all(mid in approval_map for mid in member_ids)
+        all_approved = all_responded and all(approval_map.get(mid, False) for mid in member_ids)
+        
+        if all_approved:
+            # Apply the change!
+            week_start = change_request["week_start"]
+            proposed_day = change_request["proposed_day_of_week"]
+            proposed_start = change_request["proposed_start_time"]
+            proposed_end = change_request["proposed_end_time"]
+            
+            # Update all group_plan_blocks for this group and week
+            client.table("group_plan_blocks").update({
+                "day_of_week": proposed_day,
+                "start_time": proposed_start,
+                "end_time": proposed_end
+            }).eq("group_id", group_id).eq("week_start", week_start).execute()
+            
+            # Update all member's weekly_plan_blocks
+            for mid in member_ids:
+                client.table("weekly_plan_blocks").update({
+                    "day_of_week": proposed_day,
+                    "start_time": proposed_start,
+                    "end_time": proposed_end
+                }).eq("user_id", mid).eq("work_type", "group").eq("course_number", change_request.get("course_number", "")).execute()
+            
+            # Mark request as approved
+            client.table("group_meeting_change_requests").update({
+                "status": "approved",
+                "resolved_at": "NOW()"
+            }).eq("id", request_id).execute()
+            
+            # Notify all members
+            group_result = client.table("study_groups").select("group_name").eq("id", group_id).limit(1).execute()
+            group_name = group_result.data[0].get("group_name", "Group") if group_result.data else "Group"
+            
+            for mid in member_ids:
+                try:
+                    client.table("notifications").insert({
+                        "user_id": mid,
+                        "type": "group_change_approved",
+                        "title": f"שינוי מפגש אושר: {group_name}",
+                        "message": f"כל חברי הקבוצה אישרו את השינוי. המפגש עודכן.",
+                        "link": f"/schedule?week={week_start}",
+                        "read": False
+                    }).execute()
+                except Exception as notif_err:
+                    logging.error(f"Failed to notify member {mid}: {notif_err}")
+            
+            logging.info(f"✅ Change request {request_id} approved and applied!")
+            
+            return JSONResponse(content={
+                "message": "All members approved! Change has been applied.",
+                "status": "approved"
+            })
+        else:
+            logging.info(f"📝 User {user_id} approved request {request_id}. Waiting for others...")
+            return JSONResponse(content={
+                "message": "Your approval recorded. Waiting for other members.",
+                "status": "pending",
+                "approved_count": len([a for a in approval_map.values() if a]),
+                "total_members": len(member_ids)
+            })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error approving change request: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/api/schedule/group-change-request/{request_id}/reject")
+async def reject_group_change_request(
+    request_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Reject a group meeting change request.
+    One rejection cancels the entire request.
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        client = supabase_admin if supabase_admin else supabase
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+        
+        # Get the request
+        request_result = client.table("group_meeting_change_requests").select("*").eq("id", request_id).limit(1).execute()
+        if not request_result.data:
+            raise HTTPException(status_code=404, detail="Change request not found")
+        
+        change_request = request_result.data[0]
+        
+        if change_request["status"] != "pending":
+            raise HTTPException(status_code=400, detail=f"Request is already {change_request['status']}")
+        
+        # Verify user is member of this group
+        group_id = change_request["group_id"]
+        member_check = client.table("group_members").select("id").eq("group_id", group_id).eq("user_id", user_id).eq("status", "approved").execute()
+        if not member_check.data:
+            raise HTTPException(status_code=403, detail="Not a member of this group")
+        
+        # Record the rejection
+        try:
+            client.table("group_change_approvals").insert({
+                "request_id": request_id,
+                "user_id": user_id,
+                "approved": False
+            }).execute()
+        except Exception:
+            client.table("group_change_approvals").update({
+                "approved": False,
+                "responded_at": "NOW()"
+            }).eq("request_id", request_id).eq("user_id", user_id).execute()
+        
+        # Mark request as rejected
+        client.table("group_meeting_change_requests").update({
+            "status": "rejected",
+            "resolved_at": "NOW()"
+        }).eq("id", request_id).execute()
+        
+        # Notify all members
+        all_members = client.table("group_members").select("user_id").eq("group_id", group_id).eq("status", "approved").execute()
+        member_ids = [m["user_id"] for m in (all_members.data or [])]
+        
+        group_result = client.table("study_groups").select("group_name").eq("id", group_id).limit(1).execute()
+        group_name = group_result.data[0].get("group_name", "Group") if group_result.data else "Group"
+        
+        rejector_result = client.table("user_profiles").select("name").eq("id", user_id).limit(1).execute()
+        rejector_name = rejector_result.data[0].get("name", "A member") if rejector_result.data else "A member"
+        
+        for mid in member_ids:
+            try:
+                client.table("notifications").insert({
+                    "user_id": mid,
+                    "type": "group_change_rejected",
+                    "title": f"שינוי מפגש נדחה: {group_name}",
+                    "message": f"{rejector_name} דחה את הבקשה לשנות את מועד המפגש.",
+                    "link": "/schedule",
+                    "read": False
+                }).execute()
+            except Exception as notif_err:
+                logging.error(f"Failed to notify member {mid}: {notif_err}")
+        
+        logging.info(f"❌ User {user_id} rejected change request {request_id}")
+        
+        return JSONResponse(content={
+            "message": "Change request rejected.",
+            "status": "rejected"
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error rejecting change request: {e}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/api/schedule/group-change-requests/pending")
+async def get_pending_change_requests(current_user: dict = Depends(get_current_user)):
+    """
+    Get all pending change requests for groups the user is in.
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        client = supabase_admin if supabase_admin else supabase
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+        
+        # Get user's groups
+        user_groups = client.table("group_members").select("group_id").eq("user_id", user_id).eq("status", "approved").execute()
+        group_ids = [g["group_id"] for g in (user_groups.data or [])]
+        
+        if not group_ids:
+            return JSONResponse(content={"requests": []})
+        
+        # Get pending requests for these groups
+        requests = client.table("group_meeting_change_requests").select("*").in_("group_id", group_ids).eq("status", "pending").execute()
+        
+        # Enrich with group names and approval status
+        enriched_requests = []
+        for req in (requests.data or []):
+            # Get group name
+            group_result = client.table("study_groups").select("group_name").eq("id", req["group_id"]).limit(1).execute()
+            group_name = group_result.data[0].get("group_name", "Group") if group_result.data else "Group"
+            
+            # Get requester name
+            requester_result = client.table("user_profiles").select("name").eq("id", req["requested_by"]).limit(1).execute()
+            requester_name = requester_result.data[0].get("name", "Someone") if requester_result.data else "Someone"
+            
+            # Check if current user has responded
+            approval_check = client.table("group_change_approvals").select("approved").eq("request_id", req["id"]).eq("user_id", user_id).execute()
+            user_response = approval_check.data[0] if approval_check.data else None
+            
+            enriched_requests.append({
+                **req,
+                "group_name": group_name,
+                "requester_name": requester_name,
+                "user_has_responded": user_response is not None,
+                "user_approved": user_response["approved"] if user_response else None
+            })
+        
+        return JSONResponse(content={"requests": enriched_requests})
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error getting pending change requests: {e}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
 # Study Groups endpoints
@@ -2217,12 +3302,12 @@ async def get_my_groups(current_user: dict = Depends(get_current_user)):
     """Get all groups the user is a member of"""
     try:
         print("=" * 60)
-        print("👥 [GROUPS API] /api/groups/my-groups endpoint called")
+        print("[GROUPS API] /api/groups/my-groups endpoint called")
         logging.info("=" * 60)
-        logging.info("👥 [GROUPS API] /api/groups/my-groups endpoint called")
+        logging.info("[GROUPS API] /api/groups/my-groups endpoint called")
         user_id = current_user.get('sub')
-        print(f"👥 [GROUPS API] User ID: {user_id}")
-        logging.info(f"👥 [GROUPS API] User ID: {user_id}")
+        print(f"[GROUPS API] User ID: {user_id}")
+        logging.info(f"[GROUPS API] User ID: {user_id}")
         
         if not user_id:
             raise HTTPException(status_code=401, detail="User not authenticated")
@@ -2245,11 +3330,11 @@ async def get_my_groups(current_user: dict = Depends(get_current_user)):
         all_groups = {}
         if all_group_ids:
             groups_result = client.table("study_groups").select("*").in_("id", all_group_ids).execute()
-            print(f"👥 [GROUPS API] Found {len(groups_result.data or [])} groups in database")
-            logging.info(f"👥 [GROUPS API] Found {len(groups_result.data or [])} groups in database")
+            print(f"[GROUPS API] Found {len(groups_result.data or [])} groups in database")
+            logging.info(f"[GROUPS API] Found {len(groups_result.data or [])} groups in database")
             for group in (groups_result.data or []):
                 all_groups[group['id']] = group
-                group_info = f"   📦 Group from DB: '{group.get('group_name')}' | course_id: '{group.get('course_id')}' (type: {type(group.get('course_id')).__name__}) | course_name: '{group.get('course_name')}'"
+                group_info = f"   Group from DB: '{group.get('group_name')}' | course_id: '{group.get('course_id')}' (type: {type(group.get('course_id')).__name__}) | course_name: '{group.get('course_name')}'"
                 print(group_info)
                 logging.info(group_info)
         
@@ -2299,8 +3384,8 @@ async def get_my_groups(current_user: dict = Depends(get_current_user)):
         # Log all groups with their course_id and course_name for debugging
         groups_list = list(all_groups.values())
         print("=" * 60)
-        print(f"👥 [GROUPS API] Returning {len(groups_list)} groups:")
-        logging.info(f"👥 [GROUPS API] Returning {len(groups_list)} groups:")
+        print(f"[GROUPS API] Returning {len(groups_list)} groups:")
+        logging.info(f"[GROUPS API] Returning {len(groups_list)} groups:")
         for group in groups_list:
             group_info = f"   - Group: '{group.get('group_name')}' | course_id: '{group.get('course_id')}' | course_name: '{group.get('course_name')}'"
             print(group_info)
@@ -2830,6 +3915,32 @@ async def delete_notification(
 
 
 # Group Messages endpoints
+@app.get("/api/groups/{group_id}/updates")
+async def get_group_updates(
+    group_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Fetch updates/notifications for a specific group"""
+    try:
+        user_id = current_user.get('sub')
+        client = supabase_admin if supabase_admin else supabase
+        
+        # Verify user is a member of the group
+        member_res = client.table("group_members").select("*").eq("group_id", group_id).eq("user_id", user_id).execute()
+        if not member_res.data:
+            raise HTTPException(status_code=403, detail="Not a member of this group")
+            
+        # Fetch updates
+        updates_res = client.table("group_updates").select("*").eq("group_id", group_id).order("created_at", desc=True).limit(20).execute()
+        
+        return {"updates": updates_res.data or []}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error fetching group updates: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/groups/{group_id}/messages")
 async def get_group_messages(
     group_id: str,

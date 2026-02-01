@@ -383,11 +383,26 @@
             
             messagesArea.innerHTML = messages.map(msg => {
                 const isUser = msg.user_id === currentUserId;
-                const isAgent = msg.is_agent === true || msg.user_id === null;
+                const isSystem = msg.is_system === true;
+                const isAgent = msg.is_agent === true || (msg.user_id === null && !isSystem);
                 const time = new Date(msg.created_at).toLocaleString('he-IL', {
                     hour: '2-digit',
                     minute: '2-digit'
                 });
+                
+                if (isSystem) {
+                    return `
+                        <div class="message system-message" style="justify-content: center; margin: 1.5rem 0;">
+                            <div style="background: #fdf2f8; border: 1px solid #f9a8d4; border-radius: 15px; padding: 1rem 1.5rem; max-width: 85%; box-shadow: 0 4px 12px rgba(219, 39, 119, 0.1); text-align: center;">
+                                <div style="font-weight: bold; color: #db2777; margin-bottom: 0.5rem; display: flex; align-items: center; justify-content: center; gap: 0.5rem;">
+                                    <span>🤖</span> ${msg.sender_name || 'סוכן אקדמי'}
+                                </div>
+                                <div style="color: #333; line-height: 1.6; white-space: pre-line; font-size: 0.95em;">${escapeHtml(msg.message)}</div>
+                                <div style="color: #999; font-size: 0.75em; margin-top: 0.5rem;">${time}</div>
+                            </div>
+                        </div>
+                    `;
+                }
                 
                 if (isAgent) {
                     return `
@@ -395,10 +410,10 @@
                             <div class="message-avatar">🤖</div>
                             <div class="message-content">
                                 <div class="message-header">
-                                    <span class="message-sender">סוכן AI</span>
+                                    <span class="message-sender">${msg.sender_name || 'סוכן AI'}</span>
                                     <span class="message-time">${time}</span>
                                 </div>
-                                <div class="message-text">${escapeHtml(msg.message)}</div>
+                                <div class="message-text" style="white-space: pre-line;">${escapeHtml(msg.message)}</div>
                             </div>
                         </div>
                     `;
@@ -415,7 +430,7 @@
                                 <span class="message-sender">${escapeHtml(senderEmail)}</span>
                                 <span class="message-time">${time}</span>
                             </div>
-                            <div class="message-text">${escapeHtml(msg.message)}</div>
+                            <div class="message-text" style="white-space: pre-line;">${escapeHtml(msg.message)}</div>
                         </div>
                     </div>
                 `;

@@ -607,31 +607,11 @@
         
         .assignments-header {
             margin-bottom: 1.5rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
         }
         
         .assignments-header h3 {
             margin-bottom: 0.5rem;
             color: #333;
-        }
-        
-        .add-assignment-btn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            padding: 0.5rem 1rem;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 0.9rem;
-            font-weight: 500;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        
-        .add-assignment-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
         }
         
         .assignment-card {
@@ -813,25 +793,9 @@
         <section class="section">
             <div class="section-header">
                 <div class="section-icon">📚</div>
-                <div style="flex: 1;">
+                <div>
                     <h2 class="section-title">הקורסים שלי</h2>
                     <p class="section-subtitle">נהל את הקורסים שלך ובחר סמסטר לכל קורס</p>
-                </div>
-                <div class="current-semester-selector" style="display: flex; align-items: center; gap: 1rem;">
-                    <label for="currentSemesterSelect" style="font-weight: 500; color: #333;">סמסטר נוכחי:</label>
-                    <select id="currentSemesterSelect" style="padding: 0.5rem 1rem; border-radius: 8px; border: 2px solid #667eea; font-size: 1rem; background: white; cursor: pointer;">
-                        <option value="">-- בחר סמסטר --</option>
-                        <option value="חורף">חורף</option>
-                        <option value="אביב">אביב</option>
-                        <option value="קיץ">קיץ</option>
-                    </select>
-                    <label for="currentYearSelect" style="font-weight: 500; color: #333;">שנה:</label>
-                    <select id="currentYearSelect" style="padding: 0.5rem 1rem; border-radius: 8px; border: 2px solid #667eea; font-size: 1rem; background: white; cursor: pointer;">
-                        <option value="">-- בחר שנה --</option>
-                    </select>
-                    <button onclick="saveCurrentSemesterAndYear()" style="padding: 0.5rem 1.5rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500;">
-                        שמור
-                    </button>
                 </div>
             </div>
             
@@ -904,54 +868,6 @@
         </div>
     </div>
     
-    <!-- Add Assignment Modal -->
-    <div id="addAssignmentModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>הוסף מטלה חדשה</h3>
-                <button class="close-btn" onclick="closeAddAssignmentModal()">×</button>
-            </div>
-            <form id="addAssignmentForm" onsubmit="createAssignment(event)">
-                <input type="hidden" id="assignmentCourseNumber" />
-                <input type="hidden" id="assignmentCourseName" />
-                
-                <div class="form-group">
-                    <label>קורס</label>
-                    <input type="text" id="assignmentCourseDisplay" readonly style="background: #f5f5f5;" />
-                </div>
-                
-                <div class="form-group">
-                    <label>כותרת המטלה *</label>
-                    <input type="text" id="assignmentTitle" required placeholder="למשל: תרגיל 1 - משתנים וקלט" />
-                </div>
-                
-                <div class="form-group">
-                    <label>תיאור (אופציונלי)</label>
-                    <textarea id="assignmentDescription" rows="3" placeholder="תיאור המטלה, הוראות הגשה וכו'..."></textarea>
-                </div>
-                
-                <div class="form-group">
-                    <label>תאריך הגשה *</label>
-                    <input type="date" id="assignmentDueDate" required />
-                </div>
-                
-                <div class="form-group">
-                    <label>עדיפות</label>
-                    <select id="assignmentPriority">
-                        <option value="low">נמוכה</option>
-                        <option value="medium" selected>בינונית</option>
-                        <option value="high">גבוהה</option>
-                    </select>
-                </div>
-                
-                <div class="modal-actions">
-                    <button type="submit" class="btn-primary">הוסף מטלה</button>
-                    <button type="button" class="btn-secondary" onclick="closeAddAssignmentModal()">ביטול</button>
-                </div>
-            </form>
-        </div>
-    </div>
-    
     <script>
         // Debug logging
         console.log('🔍 [DEBUG] my_courses.html script started');
@@ -978,12 +894,12 @@
                 loginBtn.onclick = () => {
                     if (confirm('האם אתה בטוח שברצונך להתנתק?')) {
                         console.log('🔍 [DEBUG] User clicked logout - removing token');
-                localStorage.removeItem('auth_token');
-                localStorage.removeItem('user_id');
-                localStorage.removeItem('user_email');
-                window.location.href = '/login';
+                        localStorage.removeItem('auth_token');
+                        localStorage.removeItem('user_id');
+                        localStorage.removeItem('user_email');
+                        window.location.href = '/login';
                     }
-            };
+                };
                 console.log('🔍 [DEBUG] Button updated successfully');
             } else {
                 console.error('🔍 [DEBUG] ERROR: loginBtn not found!');
@@ -993,7 +909,7 @@
         // Days array
         const days = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
         
-        // Courses array - will be loaded from user's courses table (filtered by current semester)
+        // Courses are loaded from Supabase only
         let courses = [];
         
         // Store groups data
@@ -1024,6 +940,38 @@
                 }
             } catch (error) {
                 console.error('Error loading notifications:', error);
+            }
+        }
+
+        // Load courses from Supabase (no hardcoded data)
+        async function loadCourses() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                courses = [];
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/user-data', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    courses = Array.isArray(data.courses) ? data.courses : [];
+                    console.log('✅ Loaded courses from Supabase:', courses.length);
+                } else if (response.status === 401) {
+                    console.log('Not authenticated - skipping courses');
+                    courses = [];
+                } else {
+                    console.error('Error loading courses:', response.status);
+                    courses = [];
+                }
+            } catch (error) {
+                console.error('Error loading courses:', error);
+                courses = [];
             }
         }
         
@@ -1377,9 +1325,8 @@
         
         // Display My Courses with Tabs
         async function displayMyCourses() {
-            console.log('🔍 [DEBUG] ========== displayMyCourses() called ==========');
+            console.log('🔍 [DEBUG] displayMyCourses() called');
             console.log('🔍 [DEBUG] courses.length:', courses.length);
-            console.log('🔍 [DEBUG] courses array:', courses);
             
             const courseTabs = document.getElementById('courseTabs');
             const courseTabContent = document.getElementById('courseTabContent');
@@ -1394,32 +1341,13 @@
             
             if (courses.length === 0) {
                 console.warn('🔍 [DEBUG] WARNING: courses array is empty!');
-                const token = localStorage.getItem('auth_token');
-                let message = '';
-                if (token) {
-                    // User is logged in but no courses to show
-                    message = `
-                        <div class="empty-state">
-                            <div class="empty-state-icon">📚</div>
-                            <p>אין קורסים להצגה</p>
-                            <p style="font-size: 0.9em; color: #999; margin-top: 0.5rem;">
-                                בחר סמסטר נוכחי למעלה כדי לראות את הקורסים של הסמסטר הנבחר
-                            </p>
-                            <p style="font-size: 0.9em; color: #999; margin-top: 0.5rem;">
-                                או הוסף קורסים לטבלת courses ב-Supabase
-                            </p>
-                        </div>
-                    `;
-                } else {
-                    message = `
+                courseTabContent.innerHTML = `
                     <div class="empty-state">
                         <div class="empty-state-icon">📚</div>
                         <p>הקורסים שלך יופיעו כאן</p>
-                            <p style="font-size: 0.9em; color: #999; margin-top: 0.5rem;">אנא התחבר כדי לראות את הקורסים שלך</p>
+                        <p style="font-size: 0.9em; color: #999; margin-top: 0.5rem;">לאחר שתשבץ קורסים במערכת השבועית, הם יופיעו כאן עם אפשרות לבחור סמסטר לכל קורס</p>
                     </div>
                 `;
-                }
-                courseTabContent.innerHTML = message;
                 return;
             }
             
@@ -1427,283 +1355,80 @@
             await loadUserGroups();
             
             // Create tabs
-            console.log('🔍 [DEBUG] Creating tabs for', courses.length, 'courses');
-            const tabsHTML = courses.map((course, index) => {
+            courseTabs.innerHTML = courses.map((course, index) => {
                 const courseId = course.course_number || course.id || index;
                 const courseName = course.course_name || course.name || 'קורס ללא שם';
-                
-                // Check if course has groups (ONLY by course_number)
-                // Use the same logic as courseGroups matching
-                let hasGroup = false;
-                if (userGroups && Object.keys(userGroups).length > 0 && course.course_number) {
-                    const courseNum = course.course_number;
-                    const courseNumStr = String(courseNum).trim();
-                    
-                    // Check all groups to see if any match this course_number
-                    for (const key in userGroups) {
-                        const groups = userGroups[key];
-                        if (Array.isArray(groups) && groups.length > 0) {
-                            const hasMatchingGroup = groups.some(group => {
-                                const groupCourseId = group.course_id;
-                                const groupCourseIdStr = String(groupCourseId).trim();
-                                
-                                return (
-                                    groupCourseId === courseNum ||
-                                    groupCourseId === courseNumStr ||
-                                    groupCourseIdStr === courseNumStr ||
-                                    groupCourseIdStr === String(courseNum).trim()
-                                );
-                            });
-                            
-                            if (hasMatchingGroup) {
-                                hasGroup = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-                
-                console.log(`🔍 [DEBUG] Creating tab ${index}: ${courseName}, course_number: ${course.course_number}, hasGroup: ${hasGroup}`);
+                const hasGroup = userGroups[courseId] && userGroups[courseId].length > 0;
                 return `
                     <div class="course-tab ${index === 0 ? 'active' : ''}" onclick="switchCourseTab(${index})" data-course-index="${index}">
                         ${courseName} ${hasGroup ? '👥' : ''}
                     </div>
                 `;
             }).join('');
-            courseTabs.innerHTML = tabsHTML;
-            console.log('🔍 [DEBUG] Tabs HTML created, length:', tabsHTML.length);
             
             // Create tab content
-            console.log('🔍 [DEBUG] Creating tab content for', courses.length, 'courses');
-            const contentHTML = courses.map((course, index) => {
-                console.log(`🔍 [DEBUG] Creating content for course ${index}:`, course);
-                // Use course_number as primary identifier for groups (not course.id UUID)
+            courseTabContent.innerHTML = courses.map((course, index) => {
                 const courseId = course.course_number || course.id || index;
                 const courseName = course.course_name || course.name || 'קורס ללא שם';
+                const courseGroups = userGroups[courseId] || [];
+                const courseAssignments = (typeof getCourseAssignments === 'function') ? getCourseAssignments(courseId) || [] : [];
                 
-                // Match groups by course_number ONLY
-                // Groups are already filtered by user membership in /api/groups/my-groups
-                let courseGroups = [];
-                if (userGroups && Object.keys(userGroups).length > 0 && course.course_number) {
-                    const courseNum = course.course_number;
-                    const courseNumStr = String(courseNum).trim();
-                    
-                    // Try to find groups by course_number (handle type mismatches)
-                    // Check all possible keys in userGroups
-                    for (const key in userGroups) {
-                        const groups = userGroups[key];
-                        if (Array.isArray(groups) && groups.length > 0) {
-                            // Check if any group in this array matches the course_number
-                            const matchingGroups = groups.filter(group => {
-                                const groupCourseId = group.course_id;
-                                const groupCourseIdStr = String(groupCourseId).trim();
-                                
-                                // Match by exact value or string comparison
-                                return (
-                                    groupCourseId === courseNum ||
-                                    groupCourseId === courseNumStr ||
-                                    groupCourseIdStr === courseNumStr ||
-                                    groupCourseIdStr === String(courseNum).trim()
-                                );
-                            });
-                            
-                            if (matchingGroups.length > 0) {
-                                courseGroups = matchingGroups;
-                                console.log(`✅ [GROUPS] Found ${courseGroups.length} groups for course "${courseName}" (course_number: ${courseNum})`);
-                                break;
-                            }
-                        }
-                    }
-                    
-                    if (courseGroups.length === 0) {
-                        console.log(`❌ [GROUPS] No groups found for course "${courseName}" (course_number: ${courseNum})`);
-                        console.log(`   Available group keys:`, Object.keys(userGroups));
-                        console.log(`   Groups by key:`, Object.keys(userGroups).map(key => ({
-                            key: key,
-                            groups: userGroups[key].map(g => ({ name: g.group_name, course_id: g.course_id }))
-                        })));
-                    }
-                } else {
-                    if (!course.course_number) {
-                        console.log(`⚠️ [GROUPS] Course "${courseName}" has no course_number`);
-                    }
-                    if (!userGroups || Object.keys(userGroups).length === 0) {
-                        console.log(`⚠️ [GROUPS] No userGroups available`);
-                    }
-                }
-                // Match assignments by course_number ONLY
-                let courseAssignments = [];
+                // Render assignments HTML
+                let assignmentsHTML = '';
                 
-                // Make sure assignmentsData exists and has data
-                if (assignmentsData && typeof assignmentsData === 'object' && Object.keys(assignmentsData).length > 0) {
-                    const courseNumber = course.course_number;
-                    const courseNumberStr = String(courseNumber).trim();
-                    
-                    console.log('🔍 [ASSIGNMENTS MATCH] Looking for assignments for course:', {
-                        courseName: course.course_name,
-                        courseNumber: courseNumber,
-                        courseNumberStr: courseNumberStr,
-                        availableKeys: Object.keys(assignmentsData)
-                    });
-                    
-                    // Match assignments by course_number
-                    // The API groups assignments by course_number (from course_catalog)
-                    // We need to match course.course_number with assignment.course_catalog.course_number
-                    if (courseNumber) {
-                        const courseNumberStr = String(courseNumber).trim();
-                        
-                        // First try direct key lookup (assignments are keyed by course_number from API)
-                        if (assignmentsData[courseNumber]) {
-                            courseAssignments = assignmentsData[courseNumber];
-                            console.log(`✅ [ASSIGNMENTS MATCH] Found by direct key (courseNumber): ${courseNumber}`);
-                        } else if (assignmentsData[courseNumberStr]) {
-                            courseAssignments = assignmentsData[courseNumberStr];
-                            console.log(`✅ [ASSIGNMENTS MATCH] Found by direct key (courseNumberStr): ${courseNumberStr}`);
-                        } else {
-                            // If direct lookup fails, iterate through all assignments and match by course_number
-                            console.log(`🔍 [ASSIGNMENTS MATCH] Direct lookup failed for course_number "${courseNumber}", trying iteration through all assignments...`);
-                            console.log(`   Available keys in assignmentsData:`, Object.keys(assignmentsData));
-                            
-                            for (const key in assignmentsData) {
-                                const assignments = assignmentsData[key];
-                                if (Array.isArray(assignments) && assignments.length > 0) {
-                                    // Check if any assignment in this array matches the course_number
-                                    const matchingAssignments = assignments.filter(assignment => {
-                                        // Prefer course_number directly from assignment, then from course_info/course_catalog
-                                        const assignmentCourseNumberDirect = assignment.course_number; // Direct field in assignment
-                                        const assignmentCourseInfo = assignment.course_info || assignment.course_catalog || {};
-                                        const assignmentCourseNumberFromCatalog = assignmentCourseInfo.course_number;
-                                        
-                                        // Use direct course_number first, then fallback to course_catalog
-                                        const assignmentCourseNumber = assignmentCourseNumberDirect || assignmentCourseNumberFromCatalog;
-                                        
-                                        if (!assignmentCourseNumber) {
-                                            console.log(`   ⚠️ Assignment "${assignment.title}" has no course_number (direct: ${assignmentCourseNumberDirect}, from_catalog: ${assignmentCourseNumberFromCatalog})`);
-                                            return false;
-                                        }
-                                        
-                                        const assignmentCourseNumberStr = String(assignmentCourseNumber).trim();
-                                        
-                                        // Match by course_number (try all type combinations)
-                                        const matches = (
-                                            assignmentCourseNumber === courseNumber ||
-                                            assignmentCourseNumber === courseNumberStr ||
-                                            assignmentCourseNumberStr === courseNumberStr ||
-                                            assignmentCourseNumberStr === String(courseNumber).trim()
-                                        );
-                                        
-                                        if (matches) {
-                                            console.log(`   ✅ Match found: assignment "${assignment.title}" has course_number "${assignmentCourseNumber}" (direct: ${assignmentCourseNumberDirect || 'none'}, from_catalog: ${assignmentCourseNumberFromCatalog || 'none'}) matching course "${course.course_name}" with course_number "${courseNumber}"`);
-                                        }
-                                        
-                                        return matches;
-                                    });
-                                    
-                                    if (matchingAssignments.length > 0) {
-                                        courseAssignments = matchingAssignments;
-                                        console.log(`✅ [ASSIGNMENTS MATCH] Found ${courseAssignments.length} assignments for course "${course.course_name}" (course_number: ${courseNumber}) by iteration, key: ${key}`);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        console.log(`⚠️ [ASSIGNMENTS MATCH] Course "${course.course_name}" has no course_number!`);
-                    }
-                    
-                    if (courseAssignments.length === 0) {
-                        console.log(`❌ [ASSIGNMENTS MATCH] No assignments found for course "${course.course_name}" (course_number: ${courseNumber})`);
-                        console.log(`   Available assignment keys:`, Object.keys(assignmentsData));
-                        console.log(`   Assignments by key:`, Object.keys(assignmentsData).map(key => {
-                            const assignments = assignmentsData[key];
-                            if (Array.isArray(assignments) && assignments.length > 0) {
-                                const first = assignments[0];
-                                const courseInfo = first.course_info || first.course_catalog || {};
-                                return {
-                                    key: key,
-                                    course_number: courseInfo.course_number,
-                                    course_name: courseInfo.course_name,
-                                    count: assignments.length
-                                };
-                            }
-                            return { key: key, count: 0 };
-                        }));
-                    }
-                } else {
-                    console.log('⚠️ [ASSIGNMENTS MATCH] assignmentsData is empty or invalid');
-                }
-                
-                // Render assignments HTML - always show section
-                let assignmentsHTML = `
+                // Only show assignments if they exist
+                if (courseAssignments && courseAssignments.length > 0) {
+                    assignmentsHTML = `
                         <div class="assignments-section">
                             <div class="assignments-header">
-                            <h3>📝 מטלות להגשה ${courseAssignments && courseAssignments.length > 0 ? `(${courseAssignments.length})` : '(0)'}</h3>
-                            <button class="add-assignment-btn" onclick="openAddAssignmentModal('${course.course_number || course.id}', '${courseName}')" title="הוסף מטלה חדשה">
-                                ➕ הוסף מטלה
-                            </button>
+                                <h3>📝 מטלות (${courseAssignments.length})</h3>
                             </div>
                             <div>
-                            ${courseAssignments && courseAssignments.length > 0 ? courseAssignments.map(assignment => {
-                                const daysRemaining = assignment.days_remaining !== undefined ? assignment.days_remaining : 0;
+                                ${courseAssignments.map(assignment => {
+                                    const daysRemaining = assignment.days_remaining || 0;
                                     const isOverdue = daysRemaining < 0;
                                     const isUrgent = daysRemaining <= 3 && daysRemaining >= 0;
-                                const priorityClass = `${assignment.priority || 'medium'}-priority`;
+                                    const priorityClass = `${assignment.priority}-priority`;
                                     const completedClass = assignment.is_completed ? 'completed' : '';
-                                
-                                // Format due date for display
-                                let dueDateDisplay = assignment.due_date || 'לא צוין';
-                                if (assignment.due_date) {
-                                    try {
-                                        const date = new Date(assignment.due_date);
-                                        dueDateDisplay = date.toLocaleDateString('he-IL', { 
-                                            year: 'numeric', 
-                                            month: 'long', 
-                                            day: 'numeric' 
-                                        });
-                                    } catch (e) {
-                                        dueDateDisplay = assignment.due_date;
-                                    }
-                                }
                                     
                                     let daysClass = 'days-plenty';
-                                let daysText = '';
+                                    let daysText = daysRemaining + ' ימים';
                                     
                                     if (isOverdue) {
                                         daysClass = 'days-overdue';
                                         daysText = '⚠️ ' + Math.abs(daysRemaining) + ' ימים עברו';
                                     } else if (daysRemaining === 0) {
                                         daysClass = 'days-urgent';
-                                    daysText = '⏰ היום!';
+                                        daysText = 'היום!';
                                     } else if (daysRemaining === 1) {
                                         daysClass = 'days-urgent';
-                                    daysText = '⏰ מחר!';
-                                } else if (daysRemaining === 2) {
-                                    daysClass = 'days-urgent';
-                                    daysText = '⏰ עוד 2 ימים';
+                                        daysText = 'מחר!';
                                     } else if (isUrgent) {
                                         daysClass = 'days-soon';
-                                    daysText = '⏰ עוד ' + daysRemaining + ' ימים';
-                                } else {
-                                    daysText = '⏰ עוד ' + daysRemaining + ' ימים';
+                                        daysText = daysRemaining + ' ימים';
                                     }
                                     
                                     return '<div class="assignment-card ' + priorityClass + ' ' + completedClass + '">' +
                                         '<div class="assignment-info">' +
-                                    '<div class="assignment-title">' + (assignment.title || 'מטלה ללא כותרת') + '</div>' +
-                                    (assignment.description ? '<div class="assignment-description">' + assignment.description + '</div>' : '') +
+                                        '<div class="assignment-title">' + assignment.title + '</div>' +
+                                        '<div class="assignment-description">' + assignment.description + '</div>' +
                                         '<div class="assignment-meta">' +
-                                    '<span class="assignment-due-date">📅 תאריך הגשה: ' + dueDateDisplay + '</span>' +
+                                        '<span class="assignment-due-date">📅 ' + assignment.due_date + '</span>' +
                                         '<span class="days-remaining ' + daysClass + '">' + daysText + '</span>' +
+                                        '<span class="assignment-priority priority-' + assignment.priority + '">' + 
+                                        (assignment.priority === 'high' ? '🔴 גבוהה' : assignment.priority === 'medium' ? '🟡 בינונית' : '🟢 נמוכה') + 
+                                        '</span>' +
                                         '</div>' +
                                         '</div>' +
                                         '<div class="assignment-status">' +
                                         '<input type="checkbox" class="assignment-checkbox" ' + (assignment.is_completed ? 'checked' : '') + ' onchange="updateAssignmentStatus(\'' + assignment.id + '\', this.checked)" title="סמן כהושלם">' +
                                         '</div>' +
                                         '</div>';
-                            }).join('') : '<div class="empty-assignments">אין מטלות להגשה עבור קורס זה</div>'}
+                                }).join('')}
                             </div>
                         </div>
                     `;
+                }
                 
                 return `
                     <div class="course-tab-panel ${index === 0 ? 'active' : ''}" data-course-index="${index}">
@@ -1747,10 +1472,7 @@
                             <h3 style="margin-bottom: 1rem; color: #333;">קבוצות לימוד</h3>
                             ${courseGroups.length > 0 ? `
                                 <div class="groups-list">
-                                    ${courseGroups.map(group => {
-                                        // Groups are already matched by course_number in courseGroups
-                                        // No need to verify again - just render them
-                                        return `
+                                    ${courseGroups.map(group => `
                                         <div class="group-card">
                                             <div onclick="viewGroup('${group.id}')" style="flex: 1; cursor: pointer;">
                                                 <div class="group-name">${group.group_name}</div>
@@ -1771,23 +1493,18 @@
                                                 🗑️ מחק
                                             </button>
                                         </div>
-                                    `;
-                                    }).join('')}
+                                    `).join('')}
                                 </div>
                             ` : `
                                 <p style="color: #666; margin-bottom: 1rem;">אין קבוצות לימוד עבור קורס זה</p>
                             `}
-                            <button class="btn-create-group" onclick="openCreateGroupModal('${course.course_number || course.id || courseId}', '${courseName}')" style="background: #667eea; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 8px; cursor: pointer; font-weight: bold; width: 100%; margin-top: 1rem;">
+                            <button class="btn-create-group" onclick="openCreateGroupModal('${courseId}', '${courseName}')" style="background: #667eea; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 8px; cursor: pointer; font-weight: bold; width: 100%; margin-top: 1rem;">
                                 👥 צור קבוצת לימוד חדשה
                             </button>
                         </div>
                     </div>
                 `;
             }).join('');
-            
-            courseTabContent.innerHTML = contentHTML;
-            console.log('🔍 [DEBUG] Content HTML created, length:', contentHTML.length);
-            console.log('🔍 [DEBUG] First 500 chars of content:', contentHTML.substring(0, 500));
         }
         
         // Switch course tab
@@ -1819,74 +1536,28 @@
         
         // Load user groups
         async function loadUserGroups() {
-            console.log('👥 [FRONTEND] loadUserGroups() called');
             const token = localStorage.getItem('auth_token');
-            if (!token) {
-                console.log('👥 [FRONTEND] No token, skipping groups');
-                return;
-            }
+            if (!token) return;
             
             try {
-                console.log('👥 [FRONTEND] Fetching /api/groups/my-groups');
                 const response = await fetch('/api/groups/my-groups', {
                     headers: {
                         'Authorization': `Bearer ${token}`
                     }
                 });
-                console.log('👥 [FRONTEND] Response status:', response.status);
                 
                 if (response.ok) {
                     const data = await response.json();
-                    console.log('👥 [GROUPS] Loaded groups from API:', data.groups?.length || 0);
-                    console.log('👥 [GROUPS] All groups:', data.groups);
-                    
-                    // Group groups by course_id (ONLY by course_id, not by course_name to avoid false matches)
-                    // course_id should be course_number
+                    // Group groups by course_id
                     userGroups = {};
                     (data.groups || []).forEach(group => {
-                        const courseId = group.course_id;
-                        console.log(`👥 [GROUPS] Processing group "${group.group_name}"`);
-                        console.log(`👥 [GROUPS]   - course_id: "${courseId}" (type: ${typeof courseId})`);
-                        console.log(`👥 [GROUPS]   - course_name: "${group.course_name}"`);
-                        
-                        // Index ONLY by course_id (this should be course_number)
-                        // Don't index by course_name to avoid false matches
-                        // Index by both original and string version to handle type mismatches
-                        if (!userGroups[courseId]) {
-                            userGroups[courseId] = [];
+                        const courseKey = group.course_id != null ? String(group.course_id).trim() : '';
+                        if (!courseKey) return;
+                        if (!userGroups[courseKey]) {
+                            userGroups[courseKey] = [];
                         }
-                        userGroups[courseId].push(group);
-                        
-                        // Also index by string version of course_id (in case of type mismatch)
-                        const courseIdStr = String(courseId);
-                        if (courseIdStr !== courseId) {
-                            if (!userGroups[courseIdStr]) {
-                                userGroups[courseIdStr] = [];
-                            }
-                            // Only add if not already in the array (avoid duplicates)
-                            if (!userGroups[courseIdStr].some(g => g.id === group.id)) {
-                                userGroups[courseIdStr].push(group);
-                            }
-                        }
-                        
-                        // Also index by number version if course_id is a numeric string
-                        if (typeof courseId === 'string' && !isNaN(courseId) && courseId.trim() !== '') {
-                            const courseIdNum = Number(courseId);
-                            if (!userGroups[courseIdNum]) {
-                                userGroups[courseIdNum] = [];
-                            }
-                            // Only add if not already in the array (avoid duplicates)
-                            if (!userGroups[courseIdNum].some(g => g.id === group.id)) {
-                                userGroups[courseIdNum].push(group);
-                            }
-                        }
+                        userGroups[courseKey].push(group);
                     });
-                    console.log('👥 [GROUPS] Grouped by keys:', Object.keys(userGroups));
-                    console.log('👥 [GROUPS] Groups per key:', Object.keys(userGroups).map(key => ({
-                        key: key,
-                        count: userGroups[key].length,
-                        groups: userGroups[key].map(g => ({ name: g.group_name, course_id: g.course_id, course_name: g.course_name }))
-                    })));
                 } else if (response.status === 401) {
                     // Token expired or invalid - don't redirect automatically, just skip
                     console.log('Not authenticated - skipping groups');
@@ -1897,499 +1568,26 @@
             }
         }
         
-        // Extract semester season from string (e.g., "חורף תשפ"ו" -> "חורף")
-        function extractSemesterSeason(semesterString) {
-            if (!semesterString || typeof semesterString !== 'string') {
-                return null;
-            }
-            
-            const trimmed = semesterString.trim();
-            
-            // Check if it starts with one of the season names
-            if (trimmed.startsWith('חורף')) {
-                return 'חורף';
-            } else if (trimmed.startsWith('אביב')) {
-                return 'אביב';
-            } else if (trimmed.startsWith('קיץ')) {
-                return 'קיץ';
-            }
-            
-            // If it's just the season name, return as is
-            if (trimmed === 'חורף' || trimmed === 'אביב' || trimmed === 'קיץ') {
-                return trimmed;
-            }
-            
-            return null;
-        }
-        
-        // Load courses from user's courses table - only for current semester
-        async function loadCourses() {
-            const token = localStorage.getItem('auth_token');
-            if (!token) {
-                console.log('📚 [COURSES] No token, using empty courses');
-                courses = []; // No hardcoded fallback - user must be logged in
-                return;
-            }
-            
-            try {
-                // Load user's data (profile + courses) from /api/user-data
-                const userResponse = await fetch('/api/user-data', {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
-                });
-                
-                if (userResponse.ok) {
-                    const userData = await userResponse.json();
-                    const userCourses = userData.courses || [];
-                    const currentSemester = userData.student_info?.current_semester;
-                    
-                    console.log('📚 [COURSES] Loaded', userCourses.length, 'courses from user_data');
-                    console.log('📚 [COURSES] Current semester from profile:', currentSemester);
-                    
-                    // Update the current semester and year selectors
-                    const semesterSelect = document.getElementById('currentSemesterSelect');
-                    const yearSelect = document.getElementById('currentYearSelect');
-                    if (semesterSelect) {
-                        semesterSelect.value = currentSemester || '';
-                    }
-                    if (yearSelect) {
-                        const currentYear = userData.student_info?.current_year;
-                        yearSelect.value = currentYear || '';
-                    }
-                    
-                    if (userCourses.length > 0) {
-                        console.log('📚 [COURSES] All user courses:', userCourses);
-                        console.log('📚 [COURSES] Courses by semester:', userCourses.map(c => ({ name: c.course_name, semester: c.semester, year: c.year })));
-                        
-                        // Only show courses if current_semester is defined
-                        if (currentSemester) {
-                            const currentYear = userData.student_info?.current_year;
-                            
-                            // Extract season from current_semester (e.g., "חורף" from "חורף תשפ"ו")
-                            const currentSemesterSeason = extractSemesterSeason(currentSemester);
-                            console.log('📚 [COURSES] Filtering by semester:', currentSemester, '-> season:', currentSemesterSeason, 'and year:', currentYear);
-                            
-                            // Filter courses by current semester season AND year (if year is specified)
-                            const filteredCourses = userCourses.filter(course => {
-                                if (!course.semester) {
-                                    console.log(`📚 [COURSES] Course "${course.course_name}": no semester field`);
-                                    return false;
-                                }
-                                
-                                // Extract season from course semester (e.g., "חורף" from "חורף תשפ"ו")
-                                const courseSemesterSeason = extractSemesterSeason(course.semester);
-                                
-                                // Match by season (not exact string match)
-                                const semesterMatches = courseSemesterSeason === currentSemesterSeason;
-                                
-                                // Match by year (if specified)
-                                const yearMatches = !currentYear || !course.year || course.year === currentYear;
-                                
-                                const matches = semesterMatches && yearMatches;
-                                console.log(`📚 [COURSES] Course "${course.course_name}": semester="${course.semester}" -> season="${courseSemesterSeason}" (${semesterMatches}), year="${course.year}" (${yearMatches}), currentSemester="${currentSemester}" -> season="${currentSemesterSeason}", currentYear="${currentYear}", matches=${matches}`);
-                                return matches;
-                            });
-                            console.log('📚 [COURSES] Filtered to', filteredCourses.length, 'courses for semester season:', currentSemesterSeason, 'year:', currentYear);
-                            
-                            // Convert to display format
-                            courses = filteredCourses.map((course, index) => {
-                                const courseObj = {
-                                    id: course.id || String(index + 1),
-                                    course_name: course.course_name,
-                                    course_number: course.course_number,
-                                    credit_points: course.credit_points,
-                                    semester: course.semester || null
-                                };
-                                console.log(`📚 [COURSES] Mapped course ${index}:`, courseObj);
-                                return courseObj;
-                            });
-                            console.log('📚 [COURSES] Final courses to display:', courses.length, courses);
-                        } else {
-                            console.log('📚 [COURSES] No current_semester in profile - showing nothing');
-                            courses = []; // Empty - don't show anything if no current semester
-                        }
-                    } else {
-                        console.log('📚 [COURSES] No user courses found');
-                        courses = []; // Empty - no hardcoded fallback
-                    }
-                } else {
-                    console.log('📚 [COURSES] Error loading user courses:', userResponse.status);
-                    courses = []; // Empty - no hardcoded fallback
-                }
-            } catch (error) {
-                console.error('📚 [COURSES] Error loading courses:', error);
-                courses = []; // Empty - no hardcoded fallback
-            }
-        }
-        
-        // Load assignments from Supabase
+        // Load assignments for all courses
         async function loadAllAssignments() {
             try {
-                console.log('🔍 [ASSIGNMENTS] Fetching assignments from /api/assignments');
-                const response = await fetch('/api/assignments');
-                
-                console.log('🔍 [ASSIGNMENTS] Response status:', response.status, response.statusText);
+                const response = await fetch('/api/assignments/sample');
                 
                 if (response.ok) {
                     const data = await response.json();
                     assignmentsData = data.assignments || {};
-                    
-                    console.log('🔍 [ASSIGNMENTS] Raw data from API:', data);
-                    console.log('🔍 [ASSIGNMENTS] Assignment keys:', Object.keys(assignmentsData));
-                    
-                    // Debug: log all assignments with their course info
-                    for (const key in assignmentsData) {
-                        const assignments = assignmentsData[key];
-                        if (Array.isArray(assignments) && assignments.length > 0) {
-                            const first = assignments[0];
-                            const courseInfo = first.course_info || first.course_catalog || {};
-                            const directCourseNumber = first.course_number; // Direct field
-                            const catalogCourseNumber = courseInfo.course_number; // From course_catalog
-                            console.log(`🔍 [ASSIGNMENTS] Key "${key}": ${assignments.length} assignments`);
-                            console.log(`   - course_number (direct): "${directCourseNumber}"`);
-                            console.log(`   - course_number (from catalog): "${catalogCourseNumber}"`);
-                            console.log(`   - course_name: "${courseInfo.course_name}"`);
-                        }
-                    }
-                    
-                    // Calculate days remaining for each assignment and create lookups
-                    const today = new Date();
-                    today.setHours(0, 0, 0, 0);
-                    
-                    // Also create a reverse lookup by course name and course_number for easier matching
-                    const assignmentsByCourseName = {};
-                    const assignmentsByCourseNumber = {};
-                    
-                    for (const key in assignmentsData) {
-                        const assignments = assignmentsData[key];
-                        if (Array.isArray(assignments)) {
-                            assignments.forEach(assignment => {
-                                if (assignment.due_date) {
-                                    const dueDate = new Date(assignment.due_date);
-                                    dueDate.setHours(0, 0, 0, 0);
-                                    const diffTime = dueDate - today;
-                                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                                    assignment.days_remaining = diffDays;
+                    console.log('✅ Loaded assignments for all courses:', Object.keys(assignmentsData).length, 'courses');
                 } else {
-                                    assignment.days_remaining = 0;
-                                }
-                            });
-                            
-                            // Create lookups by course name and course_number
-                            if (assignments.length > 0) {
-                                const firstAssignment = assignments[0];
-                                // Prefer course_number directly from assignment, then from course_info/course_catalog
-                                const directCourseNumber = firstAssignment.course_number;
-                                const courseInfo = firstAssignment.course_info || firstAssignment.course_catalog || {};
-                                const courseName = courseInfo.course_name;
-                                const courseNumber = directCourseNumber || courseInfo.course_number;
-                                
-                                console.log('🔍 [ASSIGNMENTS] Processing key:', key, 'courseNumber:', courseNumber, 'direct:', directCourseNumber);
-                                
-                                if (courseName) {
-                                    assignmentsByCourseName[courseName] = assignments;
-                                }
-                                if (courseNumber) {
-                                    const courseNumberStr = String(courseNumber).trim();
-                                    assignmentsByCourseNumber[courseNumber] = assignments;
-                                    assignmentsByCourseNumber[courseNumberStr] = assignments;
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Merge all lookups (by original key, course_number, and course_name)
-                    assignmentsData = { 
-                        ...assignmentsData, 
-                        ...assignmentsByCourseName, 
-                        ...assignmentsByCourseNumber 
-                    };
-                    
-                    console.log('🔍 [ASSIGNMENTS] Final assignment keys:', Object.keys(assignmentsData));
-                    
-                    // Debug: log all assignments with their course info
-                    for (const key in assignmentsData) {
-                        const assignments = assignmentsData[key];
-                        if (Array.isArray(assignments) && assignments.length > 0) {
-                            const first = assignments[0];
-                            console.log(`🔍 [ASSIGNMENTS DEBUG] Key "${key}":`, {
-                                count: assignments.length,
-                                firstAssignmentTitle: first.title,
-                                courseInfo: first.course_info || first.course_catalog || 'NO COURSE INFO',
-                                courseNumber: (first.course_info || first.course_catalog || {}).course_number,
-                                courseName: (first.course_info || first.course_catalog || {}).course_name
-                            });
-                        }
-                    }
-                } else {
-                    console.error('🔍 [ASSIGNMENTS] Error loading assignments:', response.status);
-                    const errorText = await response.text();
-                    console.error('🔍 [ASSIGNMENTS] Error response:', errorText);
-                    assignmentsData = {};
+                    console.error('Error loading assignments:', response.status);
                 }
             } catch (error) {
-                console.error('🔍 [ASSIGNMENTS] Error loading assignments:', error);
-                assignmentsData = {};
-            }
-            
-            // Fallback: If no assignments loaded from Supabase, try sample endpoint
-            if (!assignmentsData || Object.keys(assignmentsData).length === 0) {
-                console.log('🔍 [ASSIGNMENTS] No assignments from Supabase, trying sample endpoint');
-                try {
-                    const sampleResponse = await fetch('/api/assignments/sample');
-                    if (sampleResponse.ok) {
-                        const sampleData = await sampleResponse.json();
-                        assignmentsData = sampleData.assignments || {};
-                        console.log('🔍 [ASSIGNMENTS] Loaded sample assignments:', Object.keys(assignmentsData).length, 'courses');
-                    }
-                } catch (sampleError) {
-                    console.log('🔍 [ASSIGNMENTS] Could not load sample assignments:', sampleError);
-                    assignmentsData = {};
-                }
-            }
-        }
-        
-        // OLD CODE - Hardcoded assignments (kept for reference, not used)
-        function loadAllAssignments_OLD() {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            
-            // Calculate days remaining for each assignment
-            assignmentsData = {
-                '1': [
-                    {
-                        id: 'a1',
-                        course_id: '1',
-                        title: 'תרגיל 1: משתנים וקלט',
-                        description: 'כתוב תוכנית בפייתון לקלט ועיבוד משתנים. הגשה דרך Moodle.',
-                        due_date: new Date(today.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    },
-                    {
-                        id: 'a2',
-                        course_id: '1',
-                        title: 'תרגיל 2: לולאות וביטויים',
-                        description: 'פתרון תרגילים על לולאות for ו-while, תנאים if/else',
-                        due_date: new Date(today.getTime() + 10 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    },
-                    {
-                        id: 'a3',
-                        course_id: '1',
-                        title: 'תרגיל 3: פונקציות ורשימות',
-                        description: 'מימוש פונקציות ועבודה עם רשימות בפייתון',
-                        due_date: new Date(today.getTime() + 17 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    },
-                    {
-                        id: 'a4',
-                        course_id: '1',
-                        title: 'מבחן מחצה',
-                        description: 'מבחן על כל החומר עד כה - משתנים, לולאות, פונקציות',
-                        due_date: new Date(today.getTime() + 25 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    }
-                ],
-                '2': [
-                    {
-                        id: 'a5',
-                        course_id: '2',
-                        title: 'מימוש LinkedList',
-                        description: 'מימוש מבנה LinkedList עם פעולות בסיסיות: הוספה, מחיקה, חיפוש',
-                        due_date: new Date(today.getTime() + 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    },
-                    {
-                        id: 'a6',
-                        course_id: '2',
-                        title: 'תרגיל Stack ו-Queue',
-                        description: 'מימוש וקריאה תודעה של Stack ו-Queue עם דוגמאות שימוש',
-                        due_date: new Date(today.getTime() + 12 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    },
-                    {
-                        id: 'a7',
-                        course_id: '2',
-                        title: 'מימוש Binary Tree',
-                        description: 'מימוש עץ בינארי עם פעולות: הוספה, חיפוש, מעבר (traversal)',
-                        due_date: new Date(today.getTime() + 19 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    }
-                ],
-                '3': [
-                    {
-                        id: 'a8',
-                        course_id: '3',
-                        title: 'ניתוח מורכבות אלגוריתמים',
-                        description: 'חישוב Big O complexity לאלגוריתמים שונים - מיון, חיפוש, רקורסיה',
-                        due_date: new Date(today.getTime() + 4 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    },
-                    {
-                        id: 'a9',
-                        course_id: '3',
-                        title: 'מימוש אלגוריתמי מיון',
-                        description: 'מימוש QuickSort, MergeSort, HeapSort והשוואה ביניהם',
-                        due_date: new Date(today.getTime() + 11 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    },
-                    {
-                        id: 'a10',
-                        course_id: '3',
-                        title: 'אלגוריתמי גרפים',
-                        description: 'מימוש BFS ו-DFS, Dijkstra, ופתרון בעיות גרפים',
-                        due_date: new Date(today.getTime() + 18 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    }
-                ],
-                '4': [
-                    {
-                        id: 'a11',
-                        course_id: '4',
-                        title: 'שאילתות SQL בסיסיות',
-                        description: 'כתוב שאילתות SELECT, INSERT, UPDATE, DELETE על בסיס נתונים לדוגמה',
-                        due_date: new Date(today.getTime() + 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    },
-                    {
-                        id: 'a12',
-                        course_id: '4',
-                        title: 'עיצוב ER Diagram',
-                        description: 'עיצוב מודל ER לבסיס נתונים - זיהוי ישויות, קשרים, מפתחות',
-                        due_date: new Date(today.getTime() + 9 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: true
-                    },
-                    {
-                        id: 'a13',
-                        course_id: '4',
-                        title: 'נרמול בסיס נתונים',
-                        description: 'נרמול בסיס נתונים ל-3NF - זיהוי תלויות, מפתחות ראשיים',
-                        due_date: new Date(today.getTime() + 16 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    }
-                ],
-                '5': [
-                    {
-                        id: 'a14',
-                        course_id: '5',
-                        title: 'מבנה OOP בסיסי',
-                        description: 'יצירת Classes, Inheritance ו-Polymorphism בשפת Java',
-                        due_date: new Date(today.getTime() + 6 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    },
-                    {
-                        id: 'a15',
-                        course_id: '5',
-                        title: 'מימוש Design Patterns',
-                        description: 'מימוש Singleton, Factory, Observer patterns',
-                        due_date: new Date(today.getTime() + 13 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    },
-                    {
-                        id: 'a16',
-                        course_id: '5',
-                        title: 'פרויקט סופי - מערכת ניהול',
-                        description: 'פיתוח מערכת ניהול מלאה עם OOP - Classes, Interfaces, Abstract Classes',
-                        due_date: new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    }
-                ],
-                '6': [
-                    {
-                        id: 'a17',
-                        course_id: '6',
-                        title: 'פרוטוקולי TCP/IP',
-                        description: 'מטלה על פרוטוקולי תקשורת - TCP, UDP, HTTP, HTTPS',
-                        due_date: new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    },
-                    {
-                        id: 'a18',
-                        course_id: '6',
-                        title: 'מימוש Client-Server',
-                        description: 'כתיבת תוכנית Client-Server עם Sockets - TCP ו-UDP',
-                        due_date: new Date(today.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    },
-                    {
-                        id: 'a19',
-                        course_id: '6',
-                        title: 'אבטחת רשתות',
-                        description: 'ניתוח אבטחה ברשתות - Firewall, VPN, Encryption',
-                        due_date: new Date(today.getTime() + 21 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                        is_completed: false
-                    }
-                ]
-            };
-            
-            // Calculate days remaining for each assignment
-            for (const courseId in assignmentsData) {
-                assignmentsData[courseId].forEach(assignment => {
-                    if (assignment.due_date) {
-                        const dueDate = new Date(assignment.due_date);
-                        dueDate.setHours(0, 0, 0, 0);
-                        const diffTime = dueDate - today;
-                        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                        assignment.days_remaining = diffDays;
-                    } else {
-                        assignment.days_remaining = 0;
-                    }
-                });
+                console.error('Error loading assignments:', error);
             }
         }
         
         // Get assignments for a specific course
         function getCourseAssignments(courseId) {
-            // Try multiple ways to match
-            let assignments = [];
-            
-            // Build list of all possible keys to try
-            const possibleKeys = new Set();
-            
-            // Add the courseId in various formats
-            possibleKeys.add(courseId);
-            possibleKeys.add(String(courseId));
-            if (!isNaN(courseId)) {
-                possibleKeys.add(Number(courseId));
-            }
-            
-            // Find the course object to get more keys
-            const course = courses.find(c => {
-                return c.id === courseId || 
-                       c.course_number === courseId || 
-                       String(c.id) === String(courseId) ||
-                       String(c.course_number) === String(courseId);
-            });
-            
-            if (course) {
-                // Add course.id in various formats
-                if (course.id !== undefined) {
-                    possibleKeys.add(course.id);
-                    possibleKeys.add(String(course.id));
-                    if (!isNaN(course.id)) {
-                        possibleKeys.add(Number(course.id));
-                    }
-                }
-                // Add course.course_number in various formats
-                if (course.course_number) {
-                    possibleKeys.add(course.course_number);
-                    possibleKeys.add(String(course.course_number));
-                    if (!isNaN(course.course_number)) {
-                        possibleKeys.add(Number(course.course_number));
-                    }
-                }
-            }
-            
-            // Try each key
-            for (const key of possibleKeys) {
-                if (assignmentsData && assignmentsData[key] && Array.isArray(assignmentsData[key]) && assignmentsData[key].length > 0) {
-                    assignments = assignmentsData[key];
-                    break;
-                }
-            }
-            
-            return assignments;
+            return assignmentsData[courseId] || [];
         }
         
         // View group details
@@ -2398,147 +1596,7 @@
             window.location.href = `/group/${groupId}`;
         }
         
-        // Initialize year selector with current year and nearby years
-        function initializeYearSelector() {
-            const yearSelect = document.getElementById('currentYearSelect');
-            if (!yearSelect) return;
-            
-            const currentYear = new Date().getFullYear();
-            yearSelect.innerHTML = '<option value="">-- בחר שנה --</option>';
-            
-            // Add years: current year and ±2 years
-            for (let year = currentYear - 2; year <= currentYear + 2; year++) {
-                const option = document.createElement('option');
-                option.value = year;
-                option.textContent = year;
-                yearSelect.appendChild(option);
-            }
-        }
-        
-        // Save current semester and year to user profile
-        async function saveCurrentSemesterAndYear() {
-            const token = localStorage.getItem('auth_token');
-            if (!token) {
-                alert('אנא התחבר כדי לשמור את הסמסטר הנוכחי');
-                window.location.href = '/login';
-                return;
-            }
-            
-            // Check if token looks valid
-            if (!token.includes('.') || token.length < 50) {
-                console.error('💾 [SAVE SEMESTER] Invalid token format');
-                alert('טוקן לא תקין. אנא התחבר מחדש.');
-                localStorage.removeItem('auth_token');
-                localStorage.removeItem('user_id');
-                localStorage.removeItem('user_email');
-                window.location.href = '/login';
-                return;
-            }
-            
-            const semester = document.getElementById('currentSemesterSelect')?.value;
-            const year = document.getElementById('currentYearSelect')?.value;
-            
-            if (!semester) {
-                alert('אנא בחר סמסטר');
-                return;
-            }
-            
-            if (!year) {
-                alert('אנא בחר שנה');
-                return;
-            }
-            
-            try {
-                console.log('💾 [SAVE SEMESTER] Saving current semester:', semester, 'and year:', year);
-                console.log('💾 [SAVE SEMESTER] Token length:', token.length, 'Token preview:', token.substring(0, 30) + '...');
-                
-                // Load current user data
-                console.log('💾 [SAVE SEMESTER] Fetching /api/user-data');
-                const userResponse = await fetch('/api/user-data', {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
-                });
-                
-                console.log('💾 [SAVE SEMESTER] Response status:', userResponse.status);
-                
-                if (!userResponse.ok) {
-                    const errorText = await userResponse.text();
-                    console.error('💾 [SAVE SEMESTER] Error response:', errorText);
-                    
-                    // If 401, token is invalid - redirect to login
-                    if (userResponse.status === 401) {
-                        alert('הטוקן פג תוקף. אנא התחבר מחדש.');
-                        localStorage.removeItem('auth_token');
-                        localStorage.removeItem('user_id');
-                        localStorage.removeItem('user_email');
-                        window.location.href = '/login';
-                        return;
-                    }
-                    
-                    let errorMessage = 'Failed to load user data';
-                    try {
-                        const errorJson = JSON.parse(errorText);
-                        errorMessage = errorJson.detail || errorMessage;
-                    } catch (e) {
-                        errorMessage = errorText || errorMessage;
-                    }
-                    throw new Error(errorMessage);
-                }
-                
-                const userData = await userResponse.json();
-                const studentInfo = userData.student_info || {};
-                
-                // Update current_semester and current_year
-                const updatedData = {
-                    name: studentInfo.name || '',
-                    id_number: studentInfo.id_number || '',
-                    faculty: studentInfo.faculty,
-                    study_track: studentInfo.study_track,
-                    cumulative_average: studentInfo.cumulative_average,
-                    success_rate: studentInfo.success_rate,
-                    current_semester: semester,
-                    current_year: parseInt(year),
-                    courses: userData.courses || []
-                };
-                
-                // Save to Supabase
-                console.log('💾 [SAVE SEMESTER] Saving to /api/save-user:', updatedData);
-                const saveResponse = await fetch('/api/save-user', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
-                    },
-                    body: JSON.stringify(updatedData)
-                });
-                
-                console.log('💾 [SAVE SEMESTER] Save response status:', saveResponse.status);
-                
-                if (saveResponse.ok) {
-                    console.log('✅ Current semester and year saved successfully');
-                    alert('✅ הסמסטר והשנה נשמרו בהצלחה');
-                    // Reload courses to show filtered results
-                    await loadCourses();
-                    await displayMyCourses();
-                } else {
-                    const errorText = await saveResponse.text();
-                    console.error('❌ Error saving current semester:', errorText);
-                    let errorMessage = 'שגיאה לא ידועה';
-                    try {
-                        const error = JSON.parse(errorText);
-                        errorMessage = error.detail || errorMessage;
-                    } catch (e) {
-                        errorMessage = errorText || errorMessage;
-                    }
-                    alert('שגיאה בשמירת הסמסטר: ' + errorMessage);
-                }
-            } catch (error) {
-                console.error('❌ Error updating current semester:', error);
-                alert('שגיאה בעדכון הסמסטר: ' + error.message);
-            }
-        }
-        
+        // Update course semester
         function updateCourseSemester(courseIndex, semester) {
             if (!courses || !courses[courseIndex]) {
                 console.error('Invalid course index:', courseIndex);
@@ -2559,8 +1617,8 @@
         }
         
         // Update assignment status
-        async function updateAssignmentStatus(assignmentId, isCompleted) {
-            // Update local data immediately for UI responsiveness
+        function updateAssignmentStatus(assignmentId, isCompleted) {
+            // Find and update the assignment in our data
             for (const courseId in assignmentsData) {
                 const assignments = assignmentsData[courseId];
                 const assignment = assignments.find(a => a.id === assignmentId);
@@ -2571,136 +1629,8 @@
                 }
             }
             
-            // Save to database
-            try {
-                const token = localStorage.getItem('auth_token');
-                const response = await fetch(`/api/assignments/${assignmentId}`, {
-                    method: 'PATCH',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': token ? `Bearer ${token}` : ''
-                    },
-                    body: JSON.stringify({
-                        is_completed: isCompleted
-                    })
-                });
-                
-                if (!response.ok) {
-                    const error = await response.json();
-                    console.error('❌ Error updating assignment status:', error);
-                    // Revert local change on error
-                    for (const courseId in assignmentsData) {
-                        const assignments = assignmentsData[courseId];
-                        const assignment = assignments.find(a => a.id === assignmentId);
-                        if (assignment) {
-                            assignment.is_completed = !isCompleted;
-                            break;
-                        }
-                    }
-                    alert('❌ שגיאה בעדכון סטטוס המטלה');
-                    await displayMyCourses(); // Refresh to show correct state
-                    return;
-                }
-                
-                const result = await response.json();
-                console.log('✅ Assignment status saved to database:', result);
-            } catch (error) {
-                console.error('❌ Error saving assignment status:', error);
-                // Revert local change on error
-                for (const courseId in assignmentsData) {
-                    const assignments = assignmentsData[courseId];
-                    const assignment = assignments.find(a => a.id === assignmentId);
-                    if (assignment) {
-                        assignment.is_completed = !isCompleted;
-                        break;
-                    }
-                }
-                alert('❌ שגיאה בשמירת סטטוס המטלה');
-                await displayMyCourses(); // Refresh to show correct state
-                return;
-            }
-            
             // Refresh the display
-            await displayMyCourses();
-        }
-        
-        // Add Assignment Modal Functions
-        function openAddAssignmentModal(courseNumber, courseName) {
-            const modal = document.getElementById('addAssignmentModal');
-            document.getElementById('assignmentCourseNumber').value = courseNumber;
-            document.getElementById('assignmentCourseName').value = courseName;
-            document.getElementById('assignmentCourseDisplay').value = courseName;
-            
-            // Set default due date to tomorrow
-            const tomorrow = new Date();
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            document.getElementById('assignmentDueDate').value = tomorrow.toISOString().split('T')[0];
-            
-            // Clear form
-            document.getElementById('assignmentTitle').value = '';
-            document.getElementById('assignmentDescription').value = '';
-            document.getElementById('assignmentPriority').value = 'medium';
-            
-            modal.classList.add('active');
-        }
-        
-        function closeAddAssignmentModal() {
-            const modal = document.getElementById('addAssignmentModal');
-            modal.classList.remove('active');
-        }
-        
-        async function createAssignment(event) {
-            event.preventDefault();
-            
-            const courseNumber = document.getElementById('assignmentCourseNumber').value;
-            const title = document.getElementById('assignmentTitle').value;
-            const description = document.getElementById('assignmentDescription').value;
-            const dueDate = document.getElementById('assignmentDueDate').value;
-            const priority = document.getElementById('assignmentPriority').value;
-            
-            if (!title || !dueDate) {
-                alert('❌ יש למלא את כל השדות החובה');
-                return;
-            }
-            
-            try {
-                console.log('📤 Creating assignment:', { courseNumber, title, dueDate, priority });
-                
-                const response = await fetch('/api/assignments', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        course_number: courseNumber,
-                        title: title,
-                        description: description || null,
-                        due_date: dueDate,
-                        priority: priority
-                    })
-                });
-                
-                if (!response.ok) {
-                    const error = await response.json();
-                    console.error('❌ Error response:', error);
-                    alert('❌ ' + (error.detail || 'שגיאה ביצירת המטלה'));
-                    return;
-                }
-                
-                const result = await response.json();
-                console.log('✅ Assignment created:', result);
-                
-                alert('✅ המטלה נוצרה בהצלחה!');
-                closeAddAssignmentModal();
-                
-                // Reload assignments and refresh display
-                await loadAllAssignments();
             displayMyCourses();
-                
-            } catch (error) {
-                console.error('❌ Error creating assignment:', error);
-                alert('שגיאה ביצירת המטלה: ' + error.message);
-            }
         }
         
         // Create Group Modal Functions
@@ -2876,46 +1806,28 @@
         
         // Initialize - display courses and notifications
         async function initializePage() {
-            console.log('🔍 [FRONTEND] initializePage() called');
-            // Show/hide current semester selector based on auth status
-            const token = localStorage.getItem('auth_token');
-            console.log('🔍 [FRONTEND] Token exists:', !!token);
-            const semesterSelector = document.querySelector('.current-semester-selector');
-            if (semesterSelector) {
-                semesterSelector.style.display = token ? 'flex' : 'none';
-            }
+            console.log('🔍 [DEBUG] initializePage() called');
+            console.log('🔍 [DEBUG] courses array length:', courses.length);
+            console.log('🔍 [DEBUG] Token at initializePage:', localStorage.getItem('auth_token') ? 'EXISTS' : 'MISSING');
             
-            // Initialize year selector
-            initializeYearSelector();
-            
-            // Load courses from catalog first
-            console.log('🔍 [FRONTEND] About to call loadCourses()');
-            await loadCourses();
-            console.log('🔍 [FRONTEND] loadCourses() completed, courses.length:', courses.length);
-            
-            // Load assignments
-            console.log('🔍 [FRONTEND] Checking if loadAllAssignments exists...');
-            console.log('🔍 [FRONTEND] typeof loadAllAssignments:', typeof loadAllAssignments);
+            try {
+                // Load assignments
                 if (typeof loadAllAssignments === 'function') {
-                console.log('✅ [FRONTEND] loadAllAssignments is a function - calling it now');
-                try {
+                    console.log('🔍 [DEBUG] Loading assignments...');
                     await loadAllAssignments();
-                    console.log('✅ [FRONTEND] loadAllAssignments() completed successfully');
-                } catch (error) {
-                    console.error('❌ [FRONTEND] Error in loadAllAssignments():', error);
                 }
-            } else {
-                console.error('❌ [FRONTEND] loadAllAssignments is NOT a function! It is:', typeof loadAllAssignments);
+            } catch (e) {
+                console.error('🔍 [DEBUG] Error in initializePage:', e);
             }
             
-            // Load groups
-            console.log('🔍 [FRONTEND] About to call loadUserGroups()');
-            await loadUserGroups();
-            
-            // Display courses
-            console.log('🔍 [FRONTEND] About to call displayMyCourses()');
+            // Load courses then display
+            console.log('🔍 [DEBUG] Loading courses...');
+            await loadCourses();
+            console.log('🔍 [DEBUG] Calling displayMyCourses()...');
             await displayMyCourses();
+            console.log('🔍 [DEBUG] Calling loadNotifications()...');
             loadNotifications();
+            console.log('🔍 [DEBUG] initializePage() completed');
         }
         
         // Wait for DOM to be ready before initializing
@@ -2940,7 +1852,7 @@
             document.addEventListener('DOMContentLoaded', function() {
                 console.log('🔍 [DEBUG] DOMContentLoaded fired - calling initializePage');
                 console.log('🔍 [DEBUG] Token at DOMContentLoaded:', localStorage.getItem('auth_token') ? 'EXISTS' : 'MISSING');
-        initializePage();
+                initializePage();
             });
         } else {
             // DOM is already ready

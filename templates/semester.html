@@ -827,6 +827,40 @@
                 <button class="submit-button" onclick="saveToDatabase()" style="margin-top: 20px;">💾 שמור במאגר (עם דריסה אם קיים)</button>
             </div>
         </section>
+        
+        <!-- Study Preferences Section -->
+        <section class="section" id="preferencesSection">
+            <div class="section-header">
+                <span style="font-size: 2em;">📝</span>
+                <h1>העדפות לימוד אישיות</h1>
+            </div>
+            <div style="background: #f8f9ff; padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem; border-right: 4px solid #667eea;">
+                <p style="font-size: 1.1em; line-height: 1.8; color: #555;">
+                    ספר לנו על הרגלי הלימוד שלך כדי שנוכל לבנות לך מערכת לימודים אופטימלית! 🎯<br>
+                    <strong>למשל:</strong> אני אוהב ללמוד בבוקר, מעדיף מפגשים ארוכים של 2-3 שעות, צריך הפסקות כל שעה, לא אוהב ללמוד בימי שישי.
+                </p>
+            </div>
+            
+            <div style="margin-bottom: 2rem;">
+                <label style="display: block; font-size: 1.1em; font-weight: bold; margin-bottom: 0.5rem; color: #333;">
+                    🕐 מתי אתה לומד הכי טוב? מה הסגנון שלך?
+                </label>
+                <textarea 
+                    id="studyPreferencesText" 
+                    placeholder="לדוגמה: אני לומד הכי טוב בבוקר בין 8:00-12:00. אני מעדיף לימוד בבלוקים ארוכים של 2-3 שעות עם הפסקה של 15 דקות כל שעה. אני לא אוהב ללמוד בימי שישי. עבור קורס 'מבוא למדעי המחשב' אני מעדיף בוקר מוקדם כי זה דורש ריכוז."
+                    style="width: 100%; min-height: 200px; padding: 1rem; border: 2px solid #ddd; border-radius: 12px; font-size: 1em; resize: vertical; font-family: inherit; direction: rtl;"
+                ></textarea>
+            </div>
+            
+            <div id="preferencesStatus" style="display: none; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;"></div>
+            
+            <button 
+                class="submit-button" 
+                onclick="saveStudyPreferences()" 
+                style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); font-size: 1.1em;">
+                💾 שמור העדפות
+            </button>
+        </section>
     </div>
     
     <!-- Floating Chat Widget -->
@@ -1654,16 +1688,92 @@
             }
         }
         
+        // Study Preferences Functions
+        async function saveStudyPreferences() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                alert('❌ יש להתחבר כדי לשמור העדפות');
+                return;
+            }
+            
+            const preferencesText = document.getElementById('studyPreferencesText').value.trim();
+            const statusDiv = document.getElementById('preferencesStatus');
+            
+            if (!preferencesText) {
+                statusDiv.style.display = 'block';
+                statusDiv.style.background = '#fff3cd';
+                statusDiv.style.color = '#856404';
+                statusDiv.textContent = '⚠️ אנא כתוב את העדפות הלימוד שלך';
+                return;
+            }
+            
+            try {
+                statusDiv.style.display = 'block';
+                statusDiv.style.background = '#cfe2ff';
+                statusDiv.style.color = '#084298';
+                statusDiv.textContent = '⏳ שומר העדפות...';
+                
+                const response = await fetch('/api/user/preferences', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        study_preferences_raw: preferencesText
+                    })
+                });
+                
+                if (response.ok) {
+                    statusDiv.style.background = '#d1e7dd';
+                    statusDiv.style.color = '#0f5132';
+                    statusDiv.textContent = '✅ העדפות נשמרו בהצלחה! המערכת תשתמש בהן ליצירת לוח זמנים אופטימלי עבורך.';
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'שגיאה בשמירת העדפות');
+                }
+            } catch (error) {
+                console.error('Error saving preferences:', error);
+                statusDiv.style.background = '#f8d7da';
+                statusDiv.style.color = '#842029';
+                statusDiv.textContent = '❌ שגיאה בשמירת העדפות: ' + error.message;
+            }
+        }
+        
+        async function loadStudyPreferences() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            
+            try {
+                const response = await fetch('/api/user/preferences', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.study_preferences_raw) {
+                        document.getElementById('studyPreferencesText').value = data.study_preferences_raw;
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading preferences:', error);
+            }
+        }
+        
         // Run on page load - wait for DOM to be ready
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', function() {
                 checkAuthStatus();
                 loadUserData();
+                loadStudyPreferences();
             });
         } else {
             // DOM is already loaded
             checkAuthStatus();
             loadUserData();
+            loadStudyPreferences();
         }
     </script>
 </body>
