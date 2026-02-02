@@ -252,6 +252,33 @@
             background: #9b59b6 !important;  /* Purple for group work */
         }
         
+        /* Highlight for change request blocks */
+        .highlight-change-request {
+            animation: pulse-highlight 1.5s ease-in-out infinite;
+            box-shadow: 0 0 15px rgba(255, 193, 7, 0.8) !important;
+            border: 3px solid #ffc107 !important;
+            z-index: 10;
+        }
+        
+        @keyframes pulse-highlight {
+            0%, 100% { box-shadow: 0 0 10px rgba(255, 193, 7, 0.6); }
+            50% { box-shadow: 0 0 20px rgba(255, 193, 7, 1); }
+        }
+        
+        /* Change request notification styling */
+        .change-request-notification {
+            background: linear-gradient(135deg, #fff9e6, #fff3cd) !important;
+            border-radius: 8px;
+            padding: 0.75rem !important;
+            margin-bottom: 0.5rem;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .change-request-notification:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255, 193, 7, 0.3);
+        }
+        
         /* Drag-and-drop styles */
         .schedule-cell[draggable="true"] {
             cursor: grab !important;
@@ -1130,6 +1157,10 @@
 
         function getWeekStartDate() {
             const input = document.getElementById('weekStartDate');
+            // #region agent log
+            const inputValue = input ? input.value : null;
+            fetch('http://127.0.0.1:7242/ingest/d8f8b004-9648-44ca-a8ba-cf19194b68d6',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'schedule.html:1158',message:'getWeekStartDate entry',data:{input_value:inputValue},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+            // #endregion
             let selectedDate;
             
             if (input && input.value) {
@@ -1149,6 +1180,9 @@
             const mm = String(weekStart.getMonth() + 1).padStart(2, '0');
             const dd = String(weekStart.getDate()).padStart(2, '0');
             const value = `${yyyy}-${mm}-${dd}`;
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/d8f8b004-9648-44ca-a8ba-cf19194b68d6',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'schedule.html:1178',message:'getWeekStartDate calculated',data:{calculated_week_start:value,selected_date:selectedDate.toISOString()},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+            // #endregion
             
             // Update input to show the calculated Sunday
             if (input && input.value) {
@@ -1389,36 +1423,35 @@
                         cell.classList.add('course-middle');
                     }
 
+                    // Count consecutive hours for this block
+                    let numHours = 1;
+                    let currentHour = parseInt(time.split(':')[0]);
+                    for (let h = 1; h < 12; h++) {
+                        const nextHour = currentHour + h;
+                        if (nextHour >= 24) break;
+                        const nextTimeStr = `${String(nextHour).padStart(2, '0')}:00`;
+                        const nextBlk = weeklyPlanBlocks.find(b => 
+                            b.day_of_week === day && 
+                            b.start_time === nextTimeStr &&
+                            b.course_number === planBlock.course_number &&
+                            b.work_type === planBlock.work_type
+                        );
+                        if (nextBlk) numHours++;
+                        else break;
+                    }
+
+                    // Store block data for click handling (will be set up in enableDragAndDrop)
+                    if (startsHere) {
+                        cell.dataset.blockCourse = planBlock.course_number;
+                        cell.dataset.blockWorkType = planBlock.work_type;
+                        cell.dataset.blockDuration = numHours;
+                        cell.style.cursor = 'pointer';
+                    }
+                    // Clear any previous onclick to avoid conflicts with addEventListener
+                    cell.onclick = null;
+
                     // Create badge only at the start of the block
                     if (startsHere) {
-                        // Count ONLY consecutive hours from this exact starting point
-                        let numHours = 1;
-                        let currentHour = parseInt(time.split(':')[0]);
-                        
-                        // Check each following hour sequentially
-                        for (let h = 1; h < 12; h++) {
-                            const nextHour = currentHour + h;
-                            if (nextHour >= 24) break; // Don't go past midnight
-                            
-                            const nextTimeStr = `${String(nextHour).padStart(2, '0')}:00`;
-                            
-                            // MUST be the IMMEDIATE next hour for the SAME course and work type
-                            const nextBlock = weeklyPlanBlocks.find(b => 
-                                b.day_of_week === day && 
-                                b.start_time === nextTimeStr &&
-                                b.course_number === planBlock.course_number &&
-                                b.work_type === planBlock.work_type
-                            );
-                            
-                            if (nextBlock) {
-                                numHours++;
-                            } else {
-                                break; // Stop at first gap
-                            }
-                        }
-                        
-                        console.log(`Block for ${planBlock.course_name} (${planBlock.work_type}) on day ${day} at ${time} spans ${numHours} consecutive hours`);
-                        
                         const cellHeight = 80; // matches td height in CSS
                         const badgeHeight = (cellHeight * numHours) - 10; // -10 for padding
                         
@@ -1438,7 +1471,7 @@
                         }
                         
                         badge.textContent = `${typeIcon} ${displayName}`;
-                        badge.title = `${planBlock.course_name} (${typeLabel})`; // Full text on hover
+                        badge.title = `${planBlock.course_name} (${typeLabel}) - לחץ לעריכה`; // Full text on hover
                         cell.appendChild(badge);
                     }
                 }
@@ -2121,6 +2154,7 @@
                 weeklyPlanBlocks.length = 0;
                 weeklyPlanBlocks.push(...(data.blocks || []));
                 updateWeeklyScheduleDisplay();
+                alert('המערכת השבועית נוצרה בהצלחה!');
             } catch (error) {
                 console.error('Error generating weekly plan:', error);
                 alert(error.message);
@@ -2281,14 +2315,26 @@
                 }
                 
                 // Process plan
+                // #region agent log
+                fetch('http://127.0.0.1:7242/ingest/d8f8b004-9648-44ca-a8ba-cf19194b68d6',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'schedule.html:2310',message:'planResponse received',data:{ok:planResponse.ok,status:planResponse.status},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+                // #endregion
                 if (planResponse.ok) {
                     const planData = await planResponse.json();
+                    // #region agent log
+                    fetch('http://127.0.0.1:7242/ingest/d8f8b004-9648-44ca-a8ba-cf19194b68d6',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'schedule.html:2312',message:'planData parsed',data:{blocks_count:planData.blocks ? planData.blocks.length : 0,has_plan:!!planData.plan},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+                    // #endregion
                     weeklyPlanBlocks.length = 0;
                     weeklyPlanBlocks.push(...(planData.blocks || []));
+                    // #region agent log
+                    fetch('http://127.0.0.1:7242/ingest/d8f8b004-9648-44ca-a8ba-cf19194b68d6',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'schedule.html:2313',message:'weeklyPlanBlocks updated',data:{blocks_count:weeklyPlanBlocks.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+                    // #endregion
                 }
                 
                 // If no plan exists yet, show message (don't generate on-demand)
                 if (weeklyPlanBlocks.length === 0) {
+                    // #region agent log
+                    fetch('http://127.0.0.1:7242/ingest/d8f8b004-9648-44ca-a8ba-cf19194b68d6',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'schedule.html:2317',message:'NO BLOCKS - empty plan',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+                    // #endregion
                     console.info('No weekly plan exists yet - will be generated by scheduler');
                 }
                 
@@ -2361,21 +2407,31 @@
                             const requestId = requestIdMatch ? requestIdMatch[1] : null;
                             
                             return `
-                                <div class="notification-item ${!notif.read ? 'unread' : ''}" style="border-right: 4px solid #ffc107;">
-                                    <div class="notification-title">⚠️ ${notif.title}</div>
-                                    <div class="notification-message">${notif.message}</div>
-                                    <div class="notification-time">${time}</div>
+                                <div class="notification-item change-request-notification ${!notif.read ? 'unread' : ''}" 
+                                     onclick="viewChangeRequest('${requestId}')"
+                                     style="border-right: 4px solid #ffc107; cursor: pointer; position: relative;">
+                                    <div class="notification-title" style="font-size: 0.95em; font-weight: bold; color: #333;">
+                                        🔄 ${notif.title}
+                                    </div>
+                                    <div class="notification-message" style="font-size: 0.85em; margin: 0.5rem 0; color: #555; line-height: 1.4;">
+                                        ${notif.message}
+                                    </div>
+                                    <div class="notification-time" style="font-size: 0.75em; color: #999;">${time}</div>
                                     ${requestId ? `
                                         <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
-                                            <button onclick="approveGroupChange('${requestId}')" style="flex: 1; background: #4caf50; color: white; border: none; padding: 0.5rem; border-radius: 6px; cursor: pointer; font-weight: bold;">
+                                            <button onclick="event.stopPropagation(); approveGroupChange('${requestId}')" 
+                                                    style="flex: 1; background: linear-gradient(135deg, #4caf50, #45a049); color: white; border: none; padding: 0.6rem; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 0.9em; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
                                                 ✅ אשר
                                             </button>
-                                            <button onclick="rejectGroupChange('${requestId}')" style="flex: 1; background: #f44336; color: white; border: none; padding: 0.5rem; border-radius: 6px; cursor: pointer; font-weight: bold;">
+                                            <button onclick="event.stopPropagation(); rejectGroupChange('${requestId}')" 
+                                                    style="flex: 1; background: linear-gradient(135deg, #f44336, #d32f2f); color: white; border: none; padding: 0.6rem; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 0.9em; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
                                                 ❌ דחה
                                             </button>
                                         </div>
                                     ` : ''}
-                                    <button onclick="event.stopPropagation(); if(confirm('האם אתה בטוח שברצונך למחוק התראה זו?')) deleteNotification('${notif.id}')" style="position: absolute; top: 0.5rem; left: 0.5rem; background: #f44336; color: white; border: none; padding: 0.3rem 0.6rem; border-radius: 4px; cursor: pointer; font-size: 0.8em;" title="מחק התראה">×</button>
+                                    <button onclick="event.stopPropagation(); if(confirm('למחוק התראה זו?')) deleteNotification('${notif.id}')" 
+                                            style="position: absolute; top: 0.25rem; left: 0.25rem; background: #999; color: white; border: none; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; font-size: 0.8em; line-height: 1;" 
+                                            title="מחק התראה">×</button>
                                 </div>
                             `;
                         }
@@ -2393,6 +2449,59 @@
                         `;
                     }).join('');
                 }
+            }
+        }
+        
+        // View change request - scroll to relevant block and highlight
+        async function viewChangeRequest(requestId) {
+            if (!requestId) return;
+            
+            try {
+                // Fetch request details
+                const response = await fetch(`/api/schedule/group-change-request/${requestId}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    const request = data.request;
+                    
+                    if (request) {
+                        // Scroll to weekly schedule section
+                        const scheduleSection = document.getElementById('weekly-schedule');
+                        if (scheduleSection) {
+                            scheduleSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
+                        
+                        // Highlight the original block
+                        const originalDay = request.original_day_of_week;
+                        const originalTime = request.original_start_time;
+                        
+                        setTimeout(() => {
+                            highlightBlock(originalDay, originalTime, requestId);
+                        }, 500);
+                    }
+                }
+            } catch (error) {
+                console.error('Error viewing change request:', error);
+            }
+        }
+        
+        // Highlight a specific block in the schedule
+        function highlightBlock(day, time, requestId) {
+            // Remove previous highlights
+            document.querySelectorAll('.highlight-change-request').forEach(el => {
+                el.classList.remove('highlight-change-request');
+            });
+            
+            // Find the cell
+            const cell = document.querySelector(`#weekly-schedule-body .schedule-cell[data-day="${day}"][data-time="${time}"]`);
+            if (cell) {
+                cell.classList.add('highlight-change-request');
+                cell.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                
+                // Store the request ID for when user clicks the block
+                cell.dataset.pendingRequestId = requestId;
             }
         }
         
@@ -2415,12 +2524,19 @@
                     await loadNotifications();
                     await loadWeeklyPlan(); // Refresh schedule
                 } else {
-                    const error = await response.json();
-                    alert('❌ שגיאה: ' + (error.detail || 'לא ניתן לאשר'));
+                    let errorMessage = 'לא ניתן לאשר';
+                    try {
+                        const error = await response.json();
+                        errorMessage = error.detail || error.message || errorMessage;
+                    } catch (e) {
+                        const errorText = await response.text();
+                        errorMessage = errorText || errorMessage;
+                    }
+                    alert('❌ שגיאה: ' + errorMessage);
                 }
             } catch (error) {
                 console.error('Error approving change request:', error);
-                alert('❌ שגיאה באישור הבקשה');
+                alert('❌ שגיאה באישור הבקשה: ' + (error.message || 'שגיאה לא ידועה'));
             }
         }
         
@@ -2517,6 +2633,52 @@
         
         let draggedBlockData = null;
         let draggedElement = null;
+        let selectedBlockData = null;
+        
+        // Calculate block duration (consecutive hours for same course/type)
+        function getBlockDuration(day, startTime, courseNumber, workType) {
+            let duration = 0;
+            const startIndex = timeSlots.indexOf(startTime);
+            
+            for (let i = startIndex; i < timeSlots.length; i++) {
+                const block = weeklyPlanBlocks.find(b => 
+                    b.day_of_week === day && 
+                    b.start_time === timeSlots[i] && 
+                    b.course_number === courseNumber && 
+                    b.work_type === workType
+                );
+                if (block) {
+                    duration++;
+                } else {
+                    break;
+                }
+            }
+            return duration;
+        }
+        
+        // Handle block click (open edit menu)
+        function handleBlockClick(e, cell, day, time, planBlock) {
+            // Don't open modal if we're dragging
+            if (draggedBlockData) return;
+            
+            e.stopPropagation();
+            e.preventDefault();
+            
+            // Calculate duration from dataset or compute it
+            const duration = parseInt(cell.dataset.blockDuration) || 
+                             getBlockDuration(day, time, planBlock.course_number, planBlock.work_type);
+            
+            selectedBlockData = {
+                ...planBlock,
+                day: day,
+                startTime: time,
+                duration: duration,
+                // Ensure group_id is included if it exists
+                group_id: planBlock.group_id || null
+            };
+            
+            openBlockEditModal(selectedBlockData);
+        }
         
         // Make schedule blocks draggable
         function enableDragAndDrop() {
@@ -2538,6 +2700,12 @@
                 if (startsHere) {
                     cell.setAttribute('draggable', 'true');
                     cell.style.cursor = 'grab';
+                    
+                    // Add click handler for edit menu (remove existing first to avoid duplicates)
+                    const clickHandler = (e) => handleBlockClick(e, cell, day, time, planBlock);
+                    cell.removeEventListener('click', cell._blockClickHandler);
+                    cell._blockClickHandler = clickHandler;
+                    cell.addEventListener('click', clickHandler);
                     
                     cell.addEventListener('dragstart', (e) => {
                         draggedBlockData = {
@@ -2596,6 +2764,39 @@
                         return;
                     }
                     
+                    // Check for conflicts - is there already a block at this time?
+                    const existingBlock = weeklyPlanBlocks.find(b => 
+                        b.day_of_week === newDay && 
+                        b.start_time === newTime &&
+                        !(b.course_number === draggedBlockData.course_number && b.work_type === draggedBlockData.work_type)
+                    );
+                    
+                    if (existingBlock) {
+                        alert(`❌ לא ניתן להזיז לשעה זו - כבר יש לוז קיים:\n${existingBlock.course_name} (${existingBlock.work_type === 'group' ? 'קבוצתי' : 'אישי'})`);
+                        return;
+                    }
+                    
+                    // Check for weekly constraints (hard constraints)
+                    const hasConstraint = weeklyConstraints.some(c => {
+                        if (!c.is_hard) return false;
+                        let daysArray = c.days;
+                        if (!Array.isArray(daysArray)) {
+                            try { daysArray = JSON.parse(daysArray); } catch { daysArray = []; }
+                        }
+                        if (!daysArray.includes(newDay)) return false;
+                        
+                        // Check time overlap
+                        const [newHour] = newTime.split(':').map(Number);
+                        const [cStartHour] = c.start_time.split(':').map(Number);
+                        const [cEndHour] = c.end_time.split(':').map(Number);
+                        return newHour >= cStartHour && newHour < cEndHour;
+                    });
+                    
+                    if (hasConstraint) {
+                        alert('❌ לא ניתן להזיז לשעה זו - יש אילוץ קשיח בזמן הזה');
+                        return;
+                    }
+                    
                     // Check if it's a group block
                     if (draggedBlockData.work_type === 'group') {
                         // Open group change request modal
@@ -2615,6 +2816,9 @@
                 return;
             }
             
+            // Ask for optional explanation (for learning)
+            const explanation = prompt('רוצה להסביר למה הזזת את הבלוק? (אופציונלי - עוזר ללמוד את ההעדפות שלך)', '');
+            
             try {
                 const response = await fetch('/api/schedule/block/move', {
                     method: 'POST',
@@ -2625,14 +2829,20 @@
                     body: JSON.stringify({
                         block_id: blockData.id,
                         new_day_of_week: newDay,
-                        new_start_time: newTime
+                        new_start_time: newTime,
+                        explanation: explanation || ''
                     })
                 });
                 
                 if (response.ok) {
                     // Refresh schedule
                     await loadWeeklyPlan();
-                    alert('✅ הבלוק הועבר בהצלחה!');
+                    const result = await response.json();
+                    if (result.preferences_updated) {
+                        alert('✅ הבלוק הועבר בהצלחה והעדפותיך עודכנו!');
+                    } else {
+                        alert('✅ הבלוק הועבר בהצלחה!');
+                    }
                 } else {
                     const error = await response.json();
                     if (error.error === 'group_block') {
@@ -2758,6 +2968,253 @@
         // Initial enable
         setTimeout(enableDragAndDrop, 500);
         
+        // ==========================================
+        // BLOCK EDIT MODAL (Resize / Duration Change)
+        // ==========================================
+        
+        async function openBlockEditModal(blockData) {
+            const modal = document.getElementById('blockEditModal');
+            const dayNames = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+            
+            // Get course name - use what's in the block data
+            const displayName = blockData.course_name || blockData.course_number;
+            
+            document.getElementById('editBlockCourseName').textContent = displayName;
+            document.getElementById('editBlockWorkType').textContent = 
+                blockData.work_type === 'group' ? '👥 עבודה קבוצתית' : '📚 עבודה עצמית';
+            document.getElementById('editBlockCurrentTime').textContent = 
+                `${dayNames[blockData.day]} ${blockData.startTime}`;
+            document.getElementById('editBlockCurrentDuration').textContent = 
+                `${blockData.duration} שעה/ות`;
+            
+            // Set duration selector
+            const durationSelect = document.getElementById('editBlockNewDuration');
+            durationSelect.value = blockData.duration;
+            
+            // Show/hide group warning
+            const groupWarning = document.getElementById('editBlockGroupWarning');
+            groupWarning.style.display = blockData.work_type === 'group' ? 'block' : 'none';
+            
+            // Load and display pending change requests for group blocks
+            const pendingRequestsContainer = document.getElementById('editBlockPendingRequests');
+            if (blockData.work_type === 'group' && blockData.group_id && pendingRequestsContainer) {
+                await loadPendingRequestsForBlock(blockData.group_id, pendingRequestsContainer);
+            } else if (pendingRequestsContainer) {
+                pendingRequestsContainer.innerHTML = '';
+                pendingRequestsContainer.style.display = 'none';
+            }
+            
+            // Clear explanation
+            document.getElementById('editBlockExplanation').value = '';
+            
+            modal.classList.add('active');
+        }
+        
+        async function loadPendingRequestsForBlock(groupId, container) {
+            if (!token || !groupId) {
+                container.innerHTML = '';
+                container.style.display = 'none';
+                return;
+            }
+            
+            try {
+                const weekStart = getWeekStartDate();
+                const response = await fetch(`/api/schedule/group-change-requests/by-group/${groupId}?week_start=${weekStart}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    const requests = data.requests || [];
+                    
+                    if (requests.length > 0) {
+                        container.style.display = 'block';
+                        container.innerHTML = `
+                            <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 0.75rem; margin-top: 1rem;">
+                                <div style="font-weight: bold; margin-bottom: 0.5rem; color: #856404;">
+                                    🔄 בקשות ממתינות לאישור (${requests.length})
+                                </div>
+                                ${requests.map(req => {
+                                    const requestType = req.request_type === 'resize' ? 'שינוי משך' : 'שינוי זמן';
+                                    const dayNames = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+                                    const originalDay = dayNames[req.original_day_of_week] || `יום ${req.original_day_of_week}`;
+                                    const proposedDay = dayNames[req.proposed_day_of_week] || `יום ${req.proposed_day_of_week}`;
+                                    
+                                    let statusText = '';
+                                    if (req.is_requester) {
+                                        statusText = '<span style="color: #6c757d;">📝 אתה יצרת את הבקשה</span>';
+                                    } else if (req.user_has_responded) {
+                                        statusText = req.user_approved ? 
+                                            '<span style="color: green;">✅ אישרת</span>' : 
+                                            '<span style="color: red;">❌ דחית</span>';
+                                    } else {
+                                        statusText = '<span style="color: orange;">⏳ ממתין לאישורך</span>';
+                                    }
+                                    
+                                    return `
+                                        <div style="background: white; padding: 0.5rem; margin: 0.5rem 0; border-radius: 4px; border-left: 3px solid #ffc107;">
+                                            <div style="font-size: 0.9em;">
+                                                <strong>${requestType}:</strong> ${originalDay} ${req.original_start_time}
+                                                ${req.request_type === 'resize' ? 
+                                                    `(${req.original_duration_hours}h)` : 
+                                                    `→ ${proposedDay} ${req.proposed_start_time}`
+                                                }
+                                            </div>
+                                            <div style="font-size: 0.85em; color: #666; margin-top: 0.25rem;">
+                                                ${statusText} • ${req.approved_count}/${req.total_members} אישרו
+                                            </div>
+                                            ${req.reason ? `<div style="font-size: 0.85em; color: #555; margin-top: 0.25rem; font-style: italic;">"${req.reason}"</div>` : ''}
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        `;
+                    } else {
+                        container.innerHTML = '';
+                        container.style.display = 'none';
+                    }
+                } else {
+                    container.innerHTML = '';
+                    container.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error loading pending requests:', error);
+                container.innerHTML = '';
+                container.style.display = 'none';
+            }
+        }
+        
+        function closeBlockEditModal() {
+            const modal = document.getElementById('blockEditModal');
+            modal.classList.remove('active');
+            selectedBlockData = null;
+        }
+        
+        async function submitBlockDurationChange() {
+            if (!selectedBlockData || !token) {
+                alert('אנא התחבר');
+                return;
+            }
+            
+            const newDuration = parseInt(document.getElementById('editBlockNewDuration').value);
+            const explanation = document.getElementById('editBlockExplanation').value.trim();
+            const weekStart = getWeekStartDate();
+            
+            // If duration didn't change
+            if (newDuration === selectedBlockData.duration) {
+                closeBlockEditModal();
+                return;
+            }
+            
+            // Check if it's a group block
+            if (selectedBlockData.work_type === 'group') {
+                // Need to send change request
+                await submitGroupResizeRequest(selectedBlockData, newDuration, explanation, weekStart);
+            } else {
+                // Personal block - update directly
+                await updatePersonalBlockDuration(selectedBlockData, newDuration, explanation, weekStart);
+            }
+        }
+        
+        async function updatePersonalBlockDuration(blockData, newDuration, explanation, weekStart) {
+            try {
+                const response = await fetch('/api/schedule/block/resize', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        course_number: blockData.course_number,
+                        day_of_week: blockData.day,
+                        start_time: blockData.startTime,
+                        old_duration: blockData.duration,
+                        new_duration: newDuration,
+                        explanation: explanation,
+                        week_start: weekStart
+                    })
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    closeBlockEditModal();
+                    await loadWeeklyPlan();
+                    alert('✅ משך הבלוק עודכן בהצלחה!');
+                    
+                    // If user provided explanation, show that preferences were updated
+                    if (explanation && result.preferences_updated) {
+                        console.log('User preferences updated based on schedule change');
+                    }
+                } else {
+                    const error = await response.json();
+                    alert('❌ שגיאה בעדכון משך הבלוק: ' + (error.detail || 'שגיאה לא ידועה'));
+                }
+            } catch (error) {
+                console.error('Error resizing block:', error);
+                alert('❌ שגיאה בעדכון משך הבלוק');
+            }
+        }
+        
+        async function submitGroupResizeRequest(blockData, newDuration, explanation, weekStart) {
+            // Find the group_id for this course
+            let groupId = blockData.group_id;
+            
+            if (!groupId) {
+                try {
+                    const groupsResponse = await fetch('/api/groups/my-groups', {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    if (groupsResponse.ok) {
+                        const groupsData = await groupsResponse.json();
+                        const courseGroups = groupsData.groups.filter(g => g.course_id === blockData.course_number);
+                        if (courseGroups.length > 0) {
+                            groupId = courseGroups[0].id;
+                        }
+                    }
+                } catch (e) {
+                    console.error('Error finding group:', e);
+                }
+            }
+            
+            if (!groupId) {
+                alert('❌ לא ניתן למצוא את הקבוצה');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/schedule/group-change-request/create', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        group_id: groupId,
+                        week_start: weekStart,
+                        request_type: 'resize',
+                        original_day_of_week: blockData.day,
+                        original_start_time: blockData.startTime,
+                        original_duration_hours: blockData.duration,
+                        proposed_duration_hours: newDuration,
+                        reason: explanation,
+                        hours_explanation: explanation
+                    })
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    closeBlockEditModal();
+                    alert(`✅ בקשת השינוי נשלחה! ממתינים לאישור מ-${result.members_to_approve} חברי קבוצה.`);
+                } else {
+                    const error = await response.json();
+                    alert('❌ שגיאה ביצירת בקשת שינוי: ' + (error.detail || 'שגיאה לא ידועה'));
+                }
+            } catch (error) {
+                console.error('Error creating resize request:', error);
+                alert('❌ שגיאה ביצירת בקשת שינוי');
+            }
+        }
+        
     </script>
     <!-- Invitation Dialog Modal -->
     <div id="invitationModal" class="modal">
@@ -2822,6 +3279,78 @@
             <div class="modal-actions">
                 <button class="btn-primary" onclick="submitGroupChangeRequest()">📤 שלח בקשה</button>
                 <button class="btn-secondary" onclick="closeGroupChangeRequestModal()">ביטול</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Block Edit Modal (Duration Change) -->
+    <div id="blockEditModal" class="modal">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3>✏️ עריכת בלוק לימוד</h3>
+                <button class="close-btn" onclick="closeBlockEditModal()">×</button>
+            </div>
+            <div style="padding: 1.5rem 0;">
+                <!-- Course Info -->
+                <div style="margin-bottom: 1.5rem; padding: 1rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white;">
+                    <div style="font-size: 1.2em; font-weight: bold;" id="editBlockCourseName"></div>
+                    <div style="opacity: 0.9; margin-top: 0.5rem;" id="editBlockWorkType"></div>
+                </div>
+                
+                <!-- Current Info -->
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
+                    <div>
+                        <strong style="color: #666; font-size: 0.9em;">זמן:</strong>
+                        <div id="editBlockCurrentTime" style="font-size: 1.1em; margin-top: 0.25rem;"></div>
+                    </div>
+                    <div>
+                        <strong style="color: #666; font-size: 0.9em;">משך נוכחי:</strong>
+                        <div id="editBlockCurrentDuration" style="font-size: 1.1em; margin-top: 0.25rem;"></div>
+                    </div>
+                </div>
+                
+                <!-- Group Warning -->
+                <div id="editBlockPendingRequests" style="display: none;"></div>
+                
+                <div id="editBlockGroupWarning" style="background: #fff9e6; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-right: 4px solid #ffc107; display: none;">
+                    <p style="margin: 0; color: #856404;">
+                        ⚠️ <strong>שים לב:</strong> שינוי משך מפגש קבוצתי דורש אישור מכל חברי הקבוצה.
+                    </p>
+                </div>
+                
+                <!-- Duration Selector -->
+                <div style="margin-bottom: 1.5rem;">
+                    <label style="font-weight: bold; display: block; margin-bottom: 0.5rem;">
+                        משך חדש (שעות):
+                    </label>
+                    <select id="editBlockNewDuration" style="width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 8px; font-size: 1em;">
+                        <option value="1">1 שעה</option>
+                        <option value="2">2 שעות</option>
+                        <option value="3">3 שעות</option>
+                        <option value="4">4 שעות</option>
+                        <option value="5">5 שעות</option>
+                        <option value="6">6 שעות</option>
+                    </select>
+                </div>
+                
+                <!-- Explanation Text -->
+                <div style="margin-bottom: 1rem;">
+                    <label style="font-weight: bold; display: block; margin-bottom: 0.5rem;">
+                        💡 הסבר לסוכן (למה צריך יותר/פחות שעות):
+                    </label>
+                    <textarea 
+                        id="editBlockExplanation" 
+                        placeholder="למשל: הקורס קשה ואני צריך יותר זמן לתרגל...&#10;או: הבנתי את החומר ואני לא צריך כל כך הרבה שעות..."
+                        style="width: 100%; min-height: 100px; padding: 0.75rem; border: 2px solid #ddd; border-radius: 8px; font-size: 1em; resize: vertical; font-family: inherit;"
+                    ></textarea>
+                    <p style="margin: 0.5rem 0 0; font-size: 0.85em; color: #666;">
+                        ההסבר יעזור לסוכן להבין את הצרכים שלך ולשפר את התכנון בעתיד.
+                    </p>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-primary" onclick="submitBlockDurationChange()">💾 שמור שינויים</button>
+                <button class="btn-secondary" onclick="closeBlockEditModal()">ביטול</button>
             </div>
         </div>
     </div>

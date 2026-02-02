@@ -37,3 +37,5 @@ else:
     print(f"❌ Login failed: {login_response.status_code}")
     print("Please update email and password in this script")
 
+
+

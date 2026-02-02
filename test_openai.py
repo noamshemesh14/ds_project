@@ -65,3 +65,5 @@ print("   The LLM should work in your schedule generation.")
 print("\n📝 Next step: Run schedule generation again:")
 print('   curl.exe -X POST "http://localhost:8000/api/weekly-plan/run-immediately"')
 
+
+

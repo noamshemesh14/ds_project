@@ -137,3 +137,5 @@ if not blocks:
     print("   3. Run: python generate_schedule.py")
 print("   4. Go to http://localhost:8000/schedule and test drag-and-drop!")
 
+
+

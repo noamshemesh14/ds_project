@@ -20,3 +20,5 @@ CHECK (
 -- Optional: verify existing types
 -- SELECT DISTINCT type FROM notifications;
 
+
+
