@@ -448,6 +448,33 @@ async def save_user(
                 logging.info(f"   Inserting {len(courses_data)} courses for user {user_id}")
                 courses_result = client.table("courses").insert(courses_data).execute()
                 logging.info(f"   Courses inserted: {len(courses_result.data) if courses_result.data else 0}")
+                
+                # Create course_time_preferences for each new course (default 50/50 split)
+                if courses_result.data:
+                    try:
+                        prefs_data = []
+                        for course in courses_result.data:
+                            course_number = course.get("course_number")
+                            if course_number:
+                                # Calculate default hours based on credit points
+                                credit_points = course.get("credit_points") or 3
+                                total_hours = credit_points * 3
+                                default_personal_hours = max(1, int(total_hours * 0.5))  # Default 50%
+                                default_group_hours = max(1, total_hours - default_personal_hours)
+                                
+                                prefs_data.append({
+                                    "user_id": user_id,
+                                    "course_number": course_number,
+                                    "personal_hours_per_week": default_personal_hours,
+                                    "group_hours_per_week": default_group_hours
+                                })
+                        
+                        if prefs_data:
+                            client.table("course_time_preferences").insert(prefs_data).execute()
+                            logging.info(f"   Created course_time_preferences for {len(prefs_data)} courses")
+                    except Exception as pref_err:
+                        # If preferences already exist, that's okay (upsert would handle it, but we use insert for new courses)
+                        logging.warning(f"   Could not create course_time_preferences (may already exist): {pref_err}")
             except Exception as e:
                 logging.error(f"   Error inserting courses: {e}")
                 import traceback
@@ -1302,7 +1329,9 @@ def _ensure_group_blocks_for_week(client, user_id: str, week_start: str, availab
                     }).execute()
 
                     # System message in group chat (use a real user_id to avoid NOT NULL issues)
-                    system_user_id = member_ids[0] if member_ids else user_id
+                    # Get first member of the group to use as system user
+                    group_members_result = client.table("group_members").select("user_id").eq("group_id", group_id).eq("status", "approved").limit(1).execute()
+                    system_user_id = group_members_result.data[0]["user_id"] if group_members_result.data else user_id
                     client.table("group_messages").insert({
                         "group_id": group_id,
                         "user_id": system_user_id,
@@ -1386,21 +1415,20 @@ async def _refine_schedule_with_llm(
             # Count group blocks already allocated
             group_hours = sum(1 for b in skeleton_blocks if b.get("course_number") == course_number and b.get("work_type") == "group")
             
-            # Try to get user's preferred distribution from course_time_preferences
+            # Try to get user's preferred hours from course_time_preferences
             # This is updated when user requests more/less hours
-            personal_ratio = 0.5  # Default 50/50 split
+            personal_hours_preferred = max(1, int(total_hours * 0.5))  # Default 50% of total
             if user_id:
                 try:
-                    pref_result = client.table("course_time_preferences").select("personal_ratio").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
-                    if pref_result.data and pref_result.data[0].get("personal_ratio") is not None:
-                        personal_ratio = pref_result.data[0]["personal_ratio"]
-                        logging.info(f"Using course_time_preferences for {course_number}: personal_ratio={personal_ratio}")
+                    pref_result = client.table("course_time_preferences").select("personal_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
+                    if pref_result.data and pref_result.data[0].get("personal_hours_per_week") is not None:
+                        personal_hours_preferred = pref_result.data[0]["personal_hours_per_week"]
+                        logging.info(f"Using course_time_preferences for {course_number}: personal_hours_per_week={personal_hours_preferred}")
                 except Exception as pref_err:
                     logging.warning(f"Could not load course_time_preferences: {pref_err}")
             
-            # Calculate personal hours based on user's preferred ratio
-            # If user requested more personal hours, personal_ratio will be higher
-            personal_hours_needed = max(0, int(total_hours * personal_ratio) - group_hours)
+            # Calculate personal hours needed: preferred hours minus already allocated group hours
+            personal_hours_needed = max(0, personal_hours_preferred - group_hours)
             
             course_requirements.append({
                 "course_number": course_number,
@@ -1649,36 +1677,52 @@ async def _summarize_user_preferences_with_llm(
         
         openai_client = OpenAI(api_key=api_key, base_url=llm_base_url)
         
-        # Build input for LLM
+        # Build input for LLM - only use the LAST note (most recent) to keep prompt short
+        # This prevents token limit issues with reasoning models
         notes_text = ""
         if schedule_change_notes:
-            notes_list = []
-            for note in schedule_change_notes[-10:]:  # Last 10 notes
-                if isinstance(note, dict):
-                    notes_list.append(f"- Course {note.get('course', '?')}: {note.get('change', '?')} - {note.get('explanation', 'no reason')}")
-            if notes_list:
-                notes_text = "\\n\\nSchedule change history:\\n" + "\\n".join(notes_list)
+            # Only use the most recent note to avoid token limit issues
+            last_note = schedule_change_notes[-1] if schedule_change_notes else None
+            if last_note and isinstance(last_note, dict):
+                course = last_note.get('course', '?')
+                change = last_note.get('change', '?')
+                explanation = last_note.get('explanation', 'no reason')
+                notes_text = f"\\n\\nMost recent schedule change:\\nCourse {course}: {change}\\nExplanation: {explanation}"
         
-        system_prompt = """You are a study preferences analyzer. Extract structured preferences from user input.
+        system_prompt = """You are a study preferences analyzer. Your task is to classify user explanations and extract structured preferences.
 
-The user may write in Hebrew or English. Understand their preferences and return a structured JSON summary.
+STEP 1: CLASSIFICATION - First, determine what type of update is needed:
+- "hours_distribution": The user wants to change how many hours they spend on a course (more/less time needed)
+- "general_preferences": The user wants to change study habits, timing, breaks, concentration style, etc.
 
-IMPORTANT: Pay special attention to general preferences mentioned in explanations, such as:
-- "fewer breaks" or "פחות הפסקות" → break_preference: "few"
-- "more breaks" or "יותר הפסקות" → break_preference: "frequent"
-- "I need breaks" or "אני צריך הפסקות" → break_preference: "frequent"
-- Any mention of break frequency should be captured in break_preference
+STEP 2: EXTRACTION - Based on the classification, extract the relevant information:
+
+If classification is "hours_distribution":
+- Identify which course(s) the user is referring to
+- Determine if they want MORE hours or LESS hours
+- Set "hours_change": "more" or "less" in course_notes
+- Example: "לא צריך כל כך הרבה שעות" → hours_change: "less"
+- Example: "צריך יותר זמן" → hours_change: "more"
+
+If classification is "general_preferences":
+- Extract preferences about: study times, break frequency, session length, concentration style
+- Update the relevant preference fields
+- Example: "פחות הפסקות" → break_preference: "few"
+- Example: "אני צריך הפסקות" → break_preference: "frequent"
+
+The user may write in Hebrew or English. Understand the intent and context, not just keywords.
 
 Output ONLY valid JSON with these fields:
 {
-  "preferred_study_times": ["morning", "afternoon", "evening"],  // when they prefer to study
-  "session_length_preference": "short" | "medium" | "long",  // 1h, 2-3h, or 4h+
-  "break_preference": "frequent" | "moderate" | "few",  // how often they want breaks (extract from explanations about breaks)
-  "concentration_style": "scattered" | "balanced" | "concentrated",  // spread vs grouped sessions
-  "course_notes": [  // specific notes per course
-    {"course": "10407", "note": "needs more time"}
+  "update_type": "hours_distribution" | "general_preferences",  // CRITICAL: First classify the intent
+  "preferred_study_times": ["morning", "afternoon", "evening"],  // when they prefer to study (for general_preferences)
+  "session_length_preference": "short" | "medium" | "long",  // 1h, 2-3h, or 4h+ (for general_preferences)
+  "break_preference": "frequent" | "moderate" | "few",  // how often they want breaks (for general_preferences)
+  "concentration_style": "scattered" | "balanced" | "concentrated",  // spread vs grouped sessions (for general_preferences)
+  "course_notes": [  // REQUIRED if update_type is "hours_distribution"
+    {"course": "10407", "note": "user wants less hours", "hours_change": "less"}  // hours_change: "more" | "less"
   ],
-  "general_notes": "summary of other preferences including break preferences"
+  "general_notes": "summary of preferences (for general_preferences type)"
 }"""
         
         user_prompt = f"""User's preferences:
@@ -1686,6 +1730,14 @@ Output ONLY valid JSON with these fields:
 {notes_text}
 
 Extract structured preferences as JSON."""
+        
+        # LOG: Input to LLM
+        logging.info(f"🔍 [LLM CLASSIFICATION] Input to LLM:")
+        logging.info(f"   - preferences_raw length: {len(preferences_raw or '')}")
+        logging.info(f"   - schedule_change_notes count: {len(schedule_change_notes)}")
+        if schedule_change_notes:
+            last_note = schedule_change_notes[-1] if schedule_change_notes else {}
+            logging.info(f"   - Last note: course={last_note.get('course')}, change={last_note.get('change')}, explanation={last_note.get('explanation', '')[:100]}")
         
         # Set temperature based on model
         temperature = 1 if ("gpt-5" in llm_model.lower() or "llmod.ai" in llm_base_url.lower()) else 0.3
@@ -1697,16 +1749,41 @@ Extract structured preferences as JSON."""
                 {"role": "user", "content": user_prompt}
             ],
             temperature=temperature,
-            max_tokens=1000,
+            max_tokens=2000,  # Increased for models with reasoning tokens (gpt-5)
             response_format={"type": "json_object"}
         )
         
         content = response.choices[0].message.content
         if not content:
+            logging.warning(f"⚠️ [LLM CLASSIFICATION] LLM returned empty content")
+            logging.warning(f"⚠️ [LLM CLASSIFICATION] Response object: {response}")
+            logging.warning(f"⚠️ [LLM CLASSIFICATION] Choices count: {len(response.choices) if response.choices else 0}")
+            if response.choices:
+                logging.warning(f"⚠️ [LLM CLASSIFICATION] First choice finish_reason: {response.choices[0].finish_reason}")
             return None
         
-        summary = json.loads(content)
-        logging.info(f"Generated preferences summary with {len(summary)} fields")
+        try:
+            summary = json.loads(content)
+        except json.JSONDecodeError as json_err:
+            logging.error(f"❌ [LLM CLASSIFICATION] Failed to parse JSON response: {json_err}")
+            logging.error(f"❌ [LLM CLASSIFICATION] Content received (first 500 chars): {content[:500]}")
+            return None
+        
+        # LOG: LLM Response
+        update_type = summary.get("update_type", "unknown")
+        course_notes = summary.get("course_notes", [])
+        logging.info(f"✅ [LLM CLASSIFICATION] LLM Response:")
+        logging.info(f"   - update_type: {update_type}")
+        logging.info(f"   - course_notes count: {len(course_notes)}")
+        if course_notes:
+            for note in course_notes:
+                logging.info(f"   - course_note: course={note.get('course')}, hours_change={note.get('hours_change')}, note={note.get('note', '')[:50]}")
+        if update_type == "general_preferences":
+            logging.info(f"   - break_preference: {summary.get('break_preference')}")
+            logging.info(f"   - preferred_study_times: {summary.get('preferred_study_times')}")
+            logging.info(f"   - general_notes: {summary.get('general_notes', '')[:100]}")
+        logging.info(f"   - All summary keys: {list(summary.keys())}")
+        
         return summary
         
     except Exception as e:
@@ -1999,16 +2076,46 @@ async def get_weekly_constraints(
     try:
         user_id = current_user.get("id") or current_user.get("sub")
         client = supabase_admin if supabase_admin else supabase
-        response = client.table("weekly_constraints").select("*").eq("user_id", user_id).eq("week_start", week_start).execute()
-        constraints_list = []
-        for constraint in (response.data or []):
+        
+        # Get weekly constraints (one-time constraints for this week)
+        weekly_response = client.table("weekly_constraints").select("*").eq("user_id", user_id).eq("week_start", week_start).execute()
+        weekly_constraints_list = []
+        for constraint in (weekly_response.data or []):
             constraint_copy = constraint.copy()
             constraint_copy["days"] = _parse_days(constraint.get("days"))
-            constraints_list.append(constraint_copy)
-        return {"constraints": constraints_list}
+            constraint_copy["is_permanent"] = False  # Mark as weekly (not permanent)
+            weekly_constraints_list.append(constraint_copy)
+        
+        # Get permanent constraints (recurring constraints)
+        permanent_response = client.table("constraints").select("*").eq("user_id", user_id).execute()
+        permanent_constraints_list = []
+        import json
+        for constraint in (permanent_response.data or []):
+            constraint_copy = constraint.copy()
+            # Parse days
+            days_list = []
+            try:
+                if isinstance(constraint.get("days"), str):
+                    days_list = json.loads(constraint["days"])
+                elif isinstance(constraint.get("days"), list):
+                    days_list = constraint["days"]
+            except:
+                days_list = []
+            constraint_copy["days"] = days_list
+            constraint_copy["is_permanent"] = True  # Mark as permanent
+            permanent_constraints_list.append(constraint_copy)
+        
+        # Combine both types
+        all_constraints = weekly_constraints_list + permanent_constraints_list
+        
+        return {
+            "constraints": all_constraints,
+            "weekly_constraints": weekly_constraints_list,
+            "permanent_constraints": permanent_constraints_list
+        }
     except Exception as e:
-        logging.error(f"Error fetching weekly constraints: {e}")
-        raise HTTPException(status_code=500, detail=f"Error fetching weekly constraints: {str(e)}")
+        logging.error(f"Error fetching constraints: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching constraints: {str(e)}")
 
 
 @app.post("/api/weekly-constraints")
@@ -2149,12 +2256,66 @@ async def get_weekly_plan(
         if plan_ids_for_week:
             blocks_result = client.table("weekly_plan_blocks").select("*").in_("plan_id", plan_ids_for_week).order("day_of_week").order("start_time").execute()
             blocks = blocks_result.data or []
+            logging.info(f"📋 [GET_WEEKLY_PLAN] Found {len(blocks)} blocks via plan_ids: {plan_ids_for_week}")
             # #region agent log
             try:
                 with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"app/main.py:2150","message":"blocks fetched for week","data":{"blocks_count":len(blocks),"plan_ids_count":len(plan_ids_for_week),"week_start":week_start},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"app/main.py:2150","message":"blocks fetched for week","data":{"blocks_count":len(blocks),"plan_ids_count":len(plan_ids_for_week),"week_start":week_start,"plan_ids":plan_ids_for_week},"timestamp":int(__import__('time').time()*1000)}) + '\n')
             except: pass
             # #endregion
+        else:
+            logging.warning(f"⚠️ [GET_WEEKLY_PLAN] No plan_ids found for user {user_id} and week {week_start}")
+        
+        # ALSO check for blocks directly by user_id (in case blocks exist but plan is missing or wrong)
+        # This is a fallback to ensure we don't miss any blocks
+        direct_blocks_result = client.table("weekly_plan_blocks").select("*").eq("user_id", user_id).order("day_of_week").order("start_time").execute()
+        all_user_blocks = direct_blocks_result.data or []
+        
+        # Filter to only blocks that belong to plans with the correct week_start
+        if all_user_blocks:
+            all_plans_map = {}
+            all_plans_result = client.table("weekly_plans").select("id, week_start").eq("user_id", user_id).execute()
+            for p in (all_plans_result.data or []):
+                all_plans_map[p["id"]] = p["week_start"]
+            
+            direct_blocks_for_week = []
+            for b in all_user_blocks:
+                block_plan_id = b.get("plan_id")
+                if block_plan_id and all_plans_map.get(block_plan_id) == week_start:
+                    # Check if this block is already in blocks (to avoid duplicates)
+                    if not any(existing.get("id") == b.get("id") for existing in blocks):
+                        direct_blocks_for_week.append(b)
+                        logging.info(f"🔍 [GET_WEEKLY_PLAN] Found additional block via direct query: {b.get('course_name')} ({b.get('work_type')}), day={b.get('day_of_week')}, time={b.get('start_time')}, plan_id={block_plan_id}")
+            
+            if direct_blocks_for_week:
+                blocks.extend(direct_blocks_for_week)
+                logging.info(f"✅ [GET_WEEKLY_PLAN] Added {len(direct_blocks_for_week)} additional blocks found via direct query")
+        
+        # Remove duplicates (in case same block was found both ways)
+        seen_ids = set()
+        unique_blocks = []
+        for b in blocks:
+            block_id = b.get("id")
+            if block_id and block_id not in seen_ids:
+                seen_ids.add(block_id)
+                unique_blocks.append(b)
+        blocks = unique_blocks
+        
+        # If no blocks found via plan_ids, check directly by user_id (fallback)
+        if not blocks:
+            logging.warning(f"⚠️ No blocks found via plan_ids for user {user_id} and week {week_start}, checking directly")
+            # Check if there are any blocks for this user and week (regardless of plan_id)
+            all_user_blocks = client.table("weekly_plan_blocks").select("*").eq("user_id", user_id).execute()
+            # Filter by week_start by checking if blocks belong to plans with this week_start
+            all_plans = client.table("weekly_plans").select("id, week_start").eq("user_id", user_id).execute()
+            plan_week_map = {p["id"]: p["week_start"] for p in (all_plans.data or [])}
+            blocks_for_week = [b for b in (all_user_blocks.data or []) if plan_week_map.get(b.get("plan_id")) == week_start]
+            if blocks_for_week:
+                logging.warning(f"⚠️ Found {len(blocks_for_week)} blocks for week {week_start} but no plan - using these blocks anyway")
+                blocks = blocks_for_week
+                # Create a dummy plan for response
+                if not plan:
+                    plan = {"id": None, "user_id": user_id, "week_start": week_start, "source": "orphaned_blocks"}
         
         # For group blocks, add group_id by looking up group_plan_blocks (batch query for performance)
         group_blocks = [b for b in blocks if b.get("work_type") == "group"]
@@ -2186,30 +2347,90 @@ async def get_weekly_plan(
                 groups_map = {g["id"]: g.get("course_id") for g in (groups_result.data or [])}
             
             # Match blocks to groups
+            # First, get user's group IDs to filter only relevant group_plan_blocks
+            user_groups = client.table("group_members").select("group_id").eq("user_id", user_id).eq("status", "approved").execute()
+            user_group_ids = [g["group_id"] for g in (user_groups.data or [])]
+            
+            # Filter group_plan_blocks to only those belonging to user's groups
+            relevant_group_blocks = [gb for gb in (all_group_blocks.data or []) if gb.get("group_id") in user_group_ids]
+            
             matched_count = 0
             for block in group_blocks:
                 matched = False
-                for gb in (all_group_blocks.data or []):
-                    if (gb.get("day_of_week") == block["day_of_week"] and 
-                        gb.get("start_time") == block["start_time"]):
+                block_course = str(block.get("course_number")).strip()
+                block_day = block.get("day_of_week")
+                block_start = block.get("start_time")
+                
+                # Normalize time format (remove seconds if present)
+                def normalize_time(time_str):
+                    if not time_str:
+                        return None
+                    # Remove seconds if present (HH:MM:SS -> HH:MM)
+                    if isinstance(time_str, str) and len(time_str) > 5:
+                        return time_str[:5]
+                    return time_str
+                
+                block_start_normalized = normalize_time(block_start)
+                
+                # Try exact match first (with normalized time)
+                for gb in relevant_group_blocks:
+                    gb_start_normalized = normalize_time(gb.get("start_time"))
+                    if (gb.get("day_of_week") == block_day and 
+                        gb_start_normalized == block_start_normalized):
                         group_course = groups_map.get(gb.get("group_id"))
-                        if group_course and str(group_course).strip() == str(block.get("course_number")).strip():
+                        if group_course and str(group_course).strip() == block_course:
                             block["group_id"] = gb.get("group_id")
                             matched = True
                             matched_count += 1
                             break
+                
+                # If no exact match, try matching by course_number and day only (for same group)
+                if not matched:
+                    for gb in relevant_group_blocks:
+                        group_course = groups_map.get(gb.get("group_id"))
+                        if group_course and str(group_course).strip() == block_course and gb.get("day_of_week") == block_day:
+                            # Check if this group_id already has blocks on this day - if so, this block belongs to it
+                            block["group_id"] = gb.get("group_id")
+                            matched = True
+                            matched_count += 1
+                            logging.info(f"✅ Matched group block by course and day: course={block_course}, day={block_day}, group_id={gb.get('group_id')}")
+                            break
+                
                 # #region agent log
                 if not matched:
                     try:
                         with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"C","location":"app/main.py:2127","message":"group block NOT matched","data":{"block_course":block.get("course_number"),"block_day":block.get("day_of_week"),"block_time":block.get("start_time")},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"C","location":"app/main.py:2127","message":"group block NOT matched","data":{"block_course":block_course,"block_day":block_day,"block_time":block_start,"block_time_normalized":block_start_normalized,"relevant_group_blocks_count":len(relevant_group_blocks)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
                     except: pass
+                    logging.warning(f"⚠️ Could not match group block: course={block_course}, day={block_day}, time={block_start} (normalized: {block_start_normalized})")
                 # #endregion
+        
+        # Log detailed info about blocks before returning
+        logging.info(f"📊 [GET_WEEKLY_PLAN] Returning {len(blocks)} blocks for user {user_id}, week {week_start}")
+        if blocks:
+            group_count = len([b for b in blocks if b.get("work_type") == "group"])
+            personal_count = len([b for b in blocks if b.get("work_type") == "personal"])
+            logging.info(f"   - Group blocks: {group_count}, Personal blocks: {personal_count}")
+            # Log sample blocks
+            sample_blocks = blocks[:5]
+            for b in sample_blocks:
+                logging.info(f"   - Sample block: {b.get('course_name')} ({b.get('work_type')}), day={b.get('day_of_week')}, time={b.get('start_time')}, plan_id={b.get('plan_id')}")
+        else:
+            logging.warning(f"⚠️ [GET_WEEKLY_PLAN] No blocks found for user {user_id}, week {week_start}")
+            # Double-check: query directly from Supabase
+            direct_check = client.table("weekly_plan_blocks").select("id, course_name, work_type, day_of_week, start_time, plan_id").eq("user_id", user_id).limit(20).execute()
+            if direct_check.data:
+                logging.warning(f"   But found {len(direct_check.data)} blocks for this user in total (not filtered by week)")
+                # Check which plans these blocks belong to
+                all_plan_ids = list(set([b.get("plan_id") for b in direct_check.data if b.get("plan_id")]))
+                if all_plan_ids:
+                    plans_check = client.table("weekly_plans").select("id, week_start").in_("id", all_plan_ids).execute()
+                    logging.warning(f"   These blocks belong to plans: {[(p.get('id'), p.get('week_start')) for p in (plans_check.data or [])]}")
         
         # #region agent log
         try:
             with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"ALL","location":"app/main.py:2129","message":"returning result","data":{"blocks_count":len(blocks),"plan_id":plan.get("id") if plan else None},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"ALL","location":"app/main.py:2129","message":"returning result","data":{"blocks_count":len(blocks),"plan_id":plan.get("id") if plan else None,"group_blocks":len([b for b in blocks if b.get("work_type") == "group"]),"personal_blocks":len([b for b in blocks if b.get("work_type") == "personal"])},"timestamp":int(__import__('time').time()*1000)}) + '\n')
         except: pass
         # #endregion
         return {"plan": plan, "blocks": blocks}
@@ -2982,19 +3203,31 @@ async def update_weekly_plan_block(
         course_number = block["course_number"]
         blocks_result = client.table("weekly_plan_blocks").select("work_type").eq("plan_id", plan_id).eq("course_number", course_number).execute()
         blocks = blocks_result.data or []
-        total = len(blocks) if blocks else 0
-        if total > 0:
-            personal_count = sum(1 for b in blocks if b.get("work_type") == "personal")
-            group_count = sum(1 for b in blocks if b.get("work_type") == "group")
-            personal_ratio = personal_count / total
-            group_ratio = group_count / total
+        if blocks:
+            new_personal_hours = sum(1 for b in blocks if b.get("work_type") == "personal")
+            new_group_hours = sum(1 for b in blocks if b.get("work_type") == "group")
+            
+            if new_personal_hours > 0 or new_group_hours > 0:
+                # Get current preferences for weighted average (80% existing, 20% new)
+                current_pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
+                if current_pref_result.data and current_pref_result.data[0].get("personal_hours_per_week") is not None:
+                    current_personal_hours = current_pref_result.data[0]["personal_hours_per_week"]
+                    current_group_hours = current_pref_result.data[0].get("group_hours_per_week", 0)
+                    
+                    # Weighted average: 80% existing, 20% new
+                    personal_hours = int(0.8 * current_personal_hours + 0.2 * new_personal_hours)
+                    group_hours = int(0.8 * current_group_hours + 0.2 * new_group_hours)
+                else:
+                    # No existing preferences, use new values
+                    personal_hours = new_personal_hours
+                    group_hours = new_group_hours
 
-            client.table("course_time_preferences").upsert({
-                "user_id": user_id,
-                "course_number": course_number,
-                "personal_ratio": personal_ratio,
-                "group_ratio": group_ratio
-            }, on_conflict="user_id,course_number").execute()
+                client.table("course_time_preferences").upsert({
+                    "user_id": user_id,
+                    "course_number": course_number,
+                    "personal_hours_per_week": personal_hours,
+                    "group_hours_per_week": group_hours
+                }, on_conflict="user_id,course_number").execute()
 
         return {"message": "Plan block updated", "block": update_result.data[0]}
     except HTTPException:
@@ -3109,6 +3342,88 @@ async def move_schedule_block(
             )
         
         # It's a personal block - move it immediately
+        # First, check for conflicts with hard constraints (both weekly and permanent)
+        
+        # Get week_start from the block's plan
+        plan_result = client.table("weekly_plans").select("week_start").eq("id", block["plan_id"]).limit(1).execute()
+        week_start = plan_result.data[0]["week_start"] if plan_result.data else None
+        
+        conflict_reasons = []
+        
+        # Check 1: Weekly hard constraints
+        if week_start:
+            weekly_constraints = client.table("weekly_constraints").select("*").eq("user_id", user_id).eq("week_start", week_start).execute()
+            for constraint in (weekly_constraints.data or []):
+                if not constraint.get("is_hard", True):
+                    continue  # Skip soft constraints
+                
+                days_array = constraint.get("days", [])
+                if isinstance(days_array, str):
+                    try:
+                        import json
+                        days_array = json.loads(days_array)
+                    except:
+                        days_array = []
+                
+                if new_day in days_array:
+                    # Check time overlap
+                    c_start = _time_to_minutes(constraint.get("start_time", "00:00"))
+                    c_end = _time_to_minutes(constraint.get("end_time", "00:00"))
+                    p_start = _time_to_minutes(new_start_time) if new_start_time else 0
+                    p_end = p_start + 60  # 1 hour block
+                    
+                    if p_start < c_end and p_end > c_start:
+                        conflict_reasons.append(f"אילוץ קשיח שבועי: {constraint.get('title', 'אילוץ')} ({constraint.get('start_time')}-{constraint.get('end_time')})")
+        
+        # Check 2: Permanent hard constraints
+        permanent_constraints = client.table("constraints").select("*").eq("user_id", user_id).execute()
+        import json
+        for constraint in (permanent_constraints.data or []):
+            if not constraint.get("is_hard", True):
+                continue  # Skip soft constraints
+            
+            days_array = constraint.get("days", [])
+            if isinstance(days_array, str):
+                try:
+                    days_array = json.loads(days_array)
+                except:
+                    days_array = []
+            elif not isinstance(days_array, list):
+                days_array = []
+            
+            if new_day in days_array:
+                # Check time overlap
+                c_start = _time_to_minutes(constraint.get("start_time", "00:00"))
+                c_end = _time_to_minutes(constraint.get("end_time", "00:00"))
+                p_start = _time_to_minutes(new_start_time) if new_start_time else 0
+                p_end = p_start + 60  # 1 hour block
+                
+                if p_start < c_end and p_end > c_start:
+                    conflict_reasons.append(f"אילוץ קשיח קבוע: {constraint.get('title', 'אילוץ')} ({constraint.get('start_time')}-{constraint.get('end_time')})")
+        
+        # Check 3: Existing blocks (other courses at the same time)
+        if week_start:
+            user_plan = client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).limit(1).execute()
+            if user_plan.data:
+                user_plan_id = user_plan.data[0]["id"]
+                existing_blocks = client.table("weekly_plan_blocks").select("course_name, start_time, end_time").eq("plan_id", user_plan_id).eq("day_of_week", new_day).neq("id", block_id).execute()
+                for existing_block in (existing_blocks.data or []):
+                    e_start = _time_to_minutes(existing_block.get("start_time", "00:00"))
+                    e_end = _time_to_minutes(existing_block.get("end_time", "00:00"))
+                    p_start = _time_to_minutes(new_start_time) if new_start_time else 0
+                    p_end = p_start + 60
+                    
+                    if p_start < e_end and p_end > e_start:
+                        conflict_reasons.append(f"בלוק קיים: {existing_block.get('course_name', 'קורס')} ({existing_block.get('start_time')}-{existing_block.get('end_time')})")
+        
+        # If there are conflicts, reject the move
+        if conflict_reasons:
+            conflict_message = "לא ניתן להזיז את הבלוק - יש התנגשויות:\n" + "\n".join(conflict_reasons)
+            raise HTTPException(
+                status_code=400,
+                detail=conflict_message
+            )
+        
         # Calculate new end time (1 hour after start)
         new_end_time = _minutes_to_time(_time_to_minutes(new_start_time) + 60)
         
@@ -3120,7 +3435,10 @@ async def move_schedule_block(
             "source": "manual"  # Mark as manually edited
         }).eq("id", block_id).execute()
         
-        logging.info(f"User {user_id} moved personal block {block_id} to day {new_day} at {new_start_time}")
+        if not update_result.data:
+            raise HTTPException(status_code=500, detail="Failed to update block in database")
+        
+        logging.info(f"✅ User {user_id} moved personal block {block_id} to day {new_day} at {new_start_time}")
         
         # If explanation provided, save it to user preferences for learning
         preferences_updated = False
@@ -3134,7 +3452,7 @@ async def move_schedule_block(
                 if not isinstance(current_notes, list):
                     current_notes = []
                 
-                # Add new note
+                # Add new note (for LLM analysis, but we'll route based on LLM decision)
                 new_note = {
                     "date": datetime.now().isoformat(),
                     "course": block.get("course_number", "?"),
@@ -3143,24 +3461,155 @@ async def move_schedule_block(
                 }
                 current_notes.append(new_note)
                 
-                # Update profile
+                # Save notes first (for LLM to analyze)
                 client.table("user_profiles").update({
                     "schedule_change_notes": current_notes
                 }).eq("id", user_id).execute()
                 
-                # Re-summarize preferences with LLM
+                # ALWAYS call LLM to summarize preferences - this is what we use for scheduling
+                # The summary is saved to study_preferences_summary and used when generating schedules
                 try:
+                    logging.info(f"🔄 [MOVE BLOCK] Calling LLM for classification - course: {block.get('course_number')}, explanation: {explanation[:100] if explanation else 'none'}")
                     summary = await _summarize_user_preferences_with_llm(current_prefs, current_notes)
                     if summary:
-                        client.table("user_profiles").update({
-                            "study_preferences_summary": summary
-                        }).eq("id", user_id).execute()
-                        logging.info(f"Updated LLM summary with move change")
+                        update_type = summary.get("update_type", "general_preferences")
+                        course_number = block.get("course_number")
+                        logging.info(f"📊 [MOVE BLOCK] LLM classified as: {update_type} for course {course_number}")
+                        
+                        if update_type == "hours_distribution":
+                            # Update course_time_preferences based on LLM classification
+                            course_notes = summary.get("course_notes", [])
+                            
+                            # Find the note for this course
+                            course_note = None
+                            for note in course_notes:
+                                if str(note.get("course", "")).strip() == str(course_number).strip():
+                                    course_note = note
+                                    break
+                            
+                            if course_note:
+                                hours_change = course_note.get("hours_change")  # "more" or "less"
+                                logging.info(f"📝 [MOVE BLOCK] Found course_note: hours_change={hours_change}, note={course_note.get('note', '')[:50]}")
+                                
+                                # Get current preferences
+                                current_pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
+                                
+                                if current_pref_result.data and current_pref_result.data[0].get("personal_hours_per_week") is not None:
+                                    current_personal_hours = current_pref_result.data[0]["personal_hours_per_week"]
+                                    current_group_hours = current_pref_result.data[0].get("group_hours_per_week", 0)
+                                    logging.info(f"📊 [MOVE BLOCK] Current preferences: personal={current_personal_hours}h, group={current_group_hours}h")
+                                    
+                                    # Calculate adjustment based on LLM classification
+                                    # If LLM classified as "less", reduce by ~20% (or 1-2 hours minimum)
+                                    # If LLM classified as "more", increase by ~20% (or 1-2 hours minimum)
+                                    if hours_change == "less":
+                                        # Reduce personal hours
+                                        adjustment = max(1, int(current_personal_hours * 0.2))  # Reduce by 20% or at least 1 hour
+                                        new_personal_hours = max(1, current_personal_hours - adjustment)
+                                        # Keep group hours the same (or adjust proportionally if needed)
+                                        new_group_hours = current_group_hours
+                                        logging.info(f"➖ [MOVE BLOCK] Reducing hours: adjustment={adjustment}, new_personal_hours={new_personal_hours}")
+                                    elif hours_change == "more":
+                                        # Increase personal hours
+                                        adjustment = max(1, int(current_personal_hours * 0.2))  # Increase by 20% or at least 1 hour
+                                        new_personal_hours = current_personal_hours + adjustment
+                                        # Keep group hours the same (or adjust proportionally if needed)
+                                        new_group_hours = current_group_hours
+                                        logging.info(f"➕ [MOVE BLOCK] Increasing hours: adjustment={adjustment}, new_personal_hours={new_personal_hours}")
+                                    else:
+                                        # No specific change direction, use current distribution from blocks
+                                        logging.info(f"🔄 [MOVE BLOCK] No specific hours_change direction, using current blocks distribution")
+                                        plan_result = client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).limit(1).execute()
+                                        if plan_result.data:
+                                            plan_id = plan_result.data[0]["id"]
+                                            all_course_blocks = client.table("weekly_plan_blocks").select("work_type").eq("plan_id", plan_id).eq("course_number", course_number).execute()
+                                            new_personal_hours = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "personal")
+                                            new_group_hours = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "group")
+                                            logging.info(f"📊 [MOVE BLOCK] From blocks: personal={new_personal_hours}h, group={new_group_hours}h")
+                                        else:
+                                            new_personal_hours = current_personal_hours
+                                            new_group_hours = current_group_hours
+                                    
+                                    # Apply weighted average: 80% existing, 20% new
+                                    personal_hours = int(0.8 * current_personal_hours + 0.2 * new_personal_hours)
+                                    group_hours = int(0.8 * current_group_hours + 0.2 * new_group_hours)
+                                    logging.info(f"⚖️ [MOVE BLOCK] Weighted average: personal={personal_hours}h (80% of {current_personal_hours} + 20% of {new_personal_hours}), group={group_hours}h")
+                                    
+                                    # Update course_time_preferences
+                                    client.table("course_time_preferences").upsert({
+                                        "user_id": user_id,
+                                        "course_number": course_number,
+                                        "personal_hours_per_week": personal_hours,
+                                        "group_hours_per_week": group_hours
+                                    }, on_conflict="user_id,course_number").execute()
+                                    
+                                    logging.info(f"✅ [MOVE BLOCK] Updated course_time_preferences for {course_number}: personal={personal_hours}h (was {current_personal_hours}h, LLM classified as {hours_change}), group={group_hours}h")
+                                    preferences_updated = True
+                                else:
+                                    # No existing preferences, create new ones based on LLM classification
+                                    # Get course credit_points to calculate defaults
+                                    course_result = client.table("courses").select("credit_points").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
+                                    credit_points = course_result.data[0].get("credit_points") if course_result.data else 3
+                                    total_hours = credit_points * 3
+                                    
+                                    if hours_change == "less":
+                                        default_personal_hours = max(1, int(total_hours * 0.4))  # Less hours
+                                    elif hours_change == "more":
+                                        default_personal_hours = max(1, int(total_hours * 0.6))  # More hours
+                                    else:
+                                        default_personal_hours = max(1, int(total_hours * 0.5))  # Default
+                                    
+                                    default_group_hours = max(1, total_hours - default_personal_hours)
+                                    
+                                    client.table("course_time_preferences").insert({
+                                        "user_id": user_id,
+                                        "course_number": course_number,
+                                        "personal_hours_per_week": default_personal_hours,
+                                        "group_hours_per_week": default_group_hours
+                                    }).execute()
+                                    
+                                    logging.info(f"✅ [MOVE BLOCK] Created course_time_preferences for {course_number}: personal={default_personal_hours}h, group={default_group_hours}h (LLM classified as {hours_change})")
+                                    preferences_updated = True
+                            else:
+                                logging.warning(f"⚠️ [MOVE BLOCK] LLM classified as hours_distribution but no course_notes found for course {course_number}")
+                        else:
+                            logging.info(f"📝 [MOVE BLOCK] update_type is '{update_type}' - only saving summary, not updating hours")
+                        
+                        # ALWAYS save the LLM summary to study_preferences_summary
+                        # This is what we use when generating schedules (not the raw notes)
+                        # The summary contains the classification (update_type) and extracted preferences
+                        try:
+                            update_result = client.table("user_profiles").update({
+                                "study_preferences_summary": summary
+                            }).eq("id", user_id).execute()
+                            
+                            if update_result.data:
+                                logging.info(f"💾 [MOVE BLOCK] ✅ Successfully saved study_preferences_summary to database")
+                                logging.info(f"   - update_type: {update_type}")
+                                logging.info(f"   - summary_keys: {list(summary.keys())}")
+                                logging.info(f"   - Updated rows: {len(update_result.data)}")
+                                # Verify the update
+                                verify_result = client.table("user_profiles").select("study_preferences_summary").eq("id", user_id).limit(1).execute()
+                                if verify_result.data:
+                                    saved_summary = verify_result.data[0].get("study_preferences_summary")
+                                    if saved_summary:
+                                        logging.info(f"   - ✅ Verified: study_preferences_summary exists in DB with {len(str(saved_summary))} chars")
+                                    else:
+                                        logging.warning(f"   - ⚠️ WARNING: study_preferences_summary is NULL in DB after update!")
+                            else:
+                                logging.error(f"❌ [MOVE BLOCK] Update returned no data - update may have failed")
+                        except Exception as update_err:
+                            logging.error(f"❌ [MOVE BLOCK] Failed to update study_preferences_summary: {update_err}", exc_info=True)
+                        
+                        preferences_updated = True
+                    else:
+                        logging.warning(f"⚠️ [MOVE BLOCK] LLM summary returned None - preferences not updated")
+                        logging.warning(f"   - This means the LLM call failed or returned empty content")
+                        logging.warning(f"   - Check previous logs for LLM CLASSIFICATION errors")
+                            
                 except Exception as sum_err:
-                    logging.warning(f"Could not update LLM summary: {sum_err}")
-                
-                preferences_updated = True
-                logging.info(f"Updated user preferences with move note for course {block.get('course_number')}")
+                    logging.error(f"❌ Failed to update LLM summary: {sum_err}", exc_info=True)
+                    # Even if LLM fails, we keep the notes for future summarization
                 
             except Exception as pref_err:
                 logging.error(f"Failed to update preferences: {pref_err}")
@@ -3229,14 +3678,66 @@ async def resize_schedule_block(
             if block_idx >= start_idx and block_idx < start_idx + old_duration:
                 blocks_to_delete.append(block["id"])
         
-        # Check for conflicts with OTHER blocks (different courses) before resizing
-        # Get all blocks for this day to check for overlaps
-        all_blocks = client.table("weekly_plan_blocks").select("id, course_number, course_name, start_time, end_time").eq("plan_id", plan_id).eq("day_of_week", day_of_week).execute()
+        # Check for conflicts with hard constraints (both weekly and permanent) before resizing
+        conflict_reasons = []
         
         # Calculate the time range that the new blocks would occupy
         new_start_time_obj = time_slots[start_idx] if start_idx < len(time_slots) else None
         new_end_idx = start_idx + new_duration
         new_end_time_obj = time_slots[new_end_idx] if new_end_idx < len(time_slots) else "21:00"
+        
+        new_start_minutes = _time_to_minutes(new_start_time_obj) if new_start_time_obj else 0
+        new_end_minutes = _time_to_minutes(new_end_time_obj) if new_end_time_obj else 0
+        
+        # Check 1: Weekly hard constraints
+        weekly_constraints = client.table("weekly_constraints").select("*").eq("user_id", user_id).eq("week_start", week_start).execute()
+        for constraint in (weekly_constraints.data or []):
+            if not constraint.get("is_hard", True):
+                continue  # Skip soft constraints
+            
+            days_array = constraint.get("days", [])
+            if isinstance(days_array, str):
+                try:
+                    import json
+                    days_array = json.loads(days_array)
+                except:
+                    days_array = []
+            
+            if day_of_week in days_array:
+                # Check time overlap
+                c_start = _time_to_minutes(constraint.get("start_time", "00:00"))
+                c_end = _time_to_minutes(constraint.get("end_time", "00:00"))
+                
+                if new_start_minutes < c_end and new_end_minutes > c_start:
+                    conflict_reasons.append(f"אילוץ קשיח שבועי: {constraint.get('title', 'אילוץ')} ({constraint.get('start_time')}-{constraint.get('end_time')})")
+        
+        # Check 2: Permanent hard constraints
+        permanent_constraints = client.table("constraints").select("*").eq("user_id", user_id).execute()
+        import json
+        for constraint in (permanent_constraints.data or []):
+            if not constraint.get("is_hard", True):
+                continue  # Skip soft constraints
+            
+            days_array = constraint.get("days", [])
+            if isinstance(days_array, str):
+                try:
+                    days_array = json.loads(days_array)
+                except:
+                    days_array = []
+            elif not isinstance(days_array, list):
+                days_array = []
+            
+            if day_of_week in days_array:
+                # Check time overlap
+                c_start = _time_to_minutes(constraint.get("start_time", "00:00"))
+                c_end = _time_to_minutes(constraint.get("end_time", "00:00"))
+                
+                if new_start_minutes < c_end and new_end_minutes > c_start:
+                    conflict_reasons.append(f"אילוץ קשיח קבוע: {constraint.get('title', 'אילוץ')} ({constraint.get('start_time')}-{constraint.get('end_time')})")
+        
+        # Check 3: Conflicts with OTHER blocks (different courses) before resizing
+        # Get all blocks for this day to check for overlaps
+        all_blocks = client.table("weekly_plan_blocks").select("id, course_number, course_name, start_time, end_time").eq("plan_id", plan_id).eq("day_of_week", day_of_week).execute()
         
         # Check if any OTHER blocks (not the ones we're deleting) overlap with the new time range
         conflicting_blocks = []
@@ -3264,13 +3765,13 @@ async def resize_schedule_block(
                     "end_time": block_end
                 })
         
+        # Add block conflicts to conflict_reasons
+        for conflict in conflicting_blocks:
+            conflict_reasons.append(f"בלוק קיים: {conflict['course_name']} ({conflict['start_time']}-{conflict['end_time']})")
+        
         # If there are conflicts, reject the resize and inform the user
-        if conflicting_blocks:
-            conflict_details = []
-            for conflict in conflicting_blocks:
-                conflict_details.append(f"{conflict['course_name']} ({conflict['start_time']}-{conflict['end_time']})")
-            
-            conflict_message = "לא ניתן להגדיל את הבלוק - הוא דורס בלוקים קיימים:\n" + "\n".join(conflict_details)
+        if conflict_reasons:
+            conflict_message = "לא ניתן להגדיל את הבלוק - יש התנגשויות:\n" + "\n".join(conflict_reasons)
             raise HTTPException(
                 status_code=400,
                 detail=conflict_message
@@ -3303,31 +3804,6 @@ async def resize_schedule_block(
         
         preferences_updated = False
         
-        # Update course hours distribution based on the change
-        # If user requested more/less hours, update course_time_preferences
-        try:
-            # Get current blocks for this course to calculate new distribution
-            all_course_blocks = client.table("weekly_plan_blocks").select("work_type").eq("plan_id", plan_id).eq("course_number", course_number).execute()
-            personal_count = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "personal")
-            group_count = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "group")
-            total_count = personal_count + group_count
-            
-            if total_count > 0:
-                personal_ratio = personal_count / total_count
-                group_ratio = group_count / total_count
-                
-                # Update course_time_preferences to reflect the new distribution
-                client.table("course_time_preferences").upsert({
-                    "user_id": user_id,
-                    "course_number": course_number,
-                    "personal_ratio": personal_ratio,
-                    "group_ratio": group_ratio
-                }, on_conflict="user_id,course_number").execute()
-                
-                logging.info(f"Updated course_time_preferences for {course_number}: personal={personal_ratio:.2f}, group={group_ratio:.2f}")
-        except Exception as dist_err:
-            logging.warning(f"Failed to update course hours distribution: {dist_err}")
-        
         # If explanation provided, update user preferences summary (not raw notes)
         if explanation.strip():
             try:
@@ -3348,24 +3824,113 @@ async def resize_schedule_block(
                 }
                 current_notes.append(new_note)
                 
-                # Update profile with new note
+                # Save notes first (for LLM to analyze)
                 client.table("user_profiles").update({
                     "schedule_change_notes": current_notes
                 }).eq("id", user_id).execute()
                 
-                # Re-summarize preferences with LLM - THIS IS WHAT WE USE FOR SCHEDULING
+                # ALWAYS call LLM to summarize preferences - this is what we use for scheduling
+                # The summary is saved to study_preferences_summary and used when generating schedules
                 try:
+                    logging.info(f"🔄 [RESIZE BLOCK] Calling LLM for classification - course: {course_number}, explanation: {explanation[:100] if explanation else 'none'}")
                     summary = await _summarize_user_preferences_with_llm(current_prefs, current_notes)
                     if summary:
-                        client.table("user_profiles").update({
-                            "study_preferences_summary": summary
-                        }).eq("id", user_id).execute()
-                        logging.info(f"Updated study_preferences_summary (used for scheduling) with schedule change for course {course_number}")
+                        update_type = summary.get("update_type", "general_preferences")
+                        logging.info(f"📊 [RESIZE BLOCK] LLM classified as: {update_type} for course {course_number}")
+                        
+                        if update_type == "hours_distribution":
+                            logging.info(f"🔧 [RESIZE BLOCK] Processing hours_distribution update for course {course_number}")
+                            # Update course_time_preferences based on LLM classification
+                            course_notes = summary.get("course_notes", [])
+                            
+                            # Find the note for this course
+                            course_note = None
+                            for note in course_notes:
+                                if str(note.get("course", "")).strip() == str(course_number).strip():
+                                    course_note = note
+                                    break
+                            
+                            if course_note:
+                                hours_change = course_note.get("hours_change")  # "more" or "less"
+                                logging.info(f"📝 [RESIZE BLOCK] Found course_note: hours_change={hours_change}, note={course_note.get('note', '')[:50]}")
+                                
+                                # Get current preferences
+                                current_pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
+                                
+                                if current_pref_result.data and current_pref_result.data[0].get("personal_hours_per_week") is not None:
+                                    current_personal_hours = current_pref_result.data[0]["personal_hours_per_week"]
+                                    current_group_hours = current_pref_result.data[0].get("group_hours_per_week", 0)
+                                    logging.info(f"📊 [RESIZE BLOCK] Current preferences: personal={current_personal_hours}h, group={current_group_hours}h")
+                                    
+                                    # Calculate adjustment based on LLM classification
+                                    if hours_change == "less":
+                                        adjustment = max(1, int(current_personal_hours * 0.2))
+                                        new_personal_hours = max(1, current_personal_hours - adjustment)
+                                        new_group_hours = current_group_hours
+                                        logging.info(f"➖ [RESIZE BLOCK] Reducing hours: adjustment={adjustment}, new_personal_hours={new_personal_hours}")
+                                    elif hours_change == "more":
+                                        adjustment = max(1, int(current_personal_hours * 0.2))
+                                        new_personal_hours = current_personal_hours + adjustment
+                                        new_group_hours = current_group_hours
+                                        logging.info(f"➕ [RESIZE BLOCK] Increasing hours: adjustment={adjustment}, new_personal_hours={new_personal_hours}")
+                                    else:
+                                        # Use current distribution from blocks
+                                        logging.info(f"🔄 [RESIZE BLOCK] No specific hours_change direction, using current blocks distribution")
+                                        all_course_blocks = client.table("weekly_plan_blocks").select("work_type").eq("plan_id", plan_id).eq("course_number", course_number).execute()
+                                        new_personal_hours = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "personal")
+                                        new_group_hours = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "group")
+                                        logging.info(f"📊 [RESIZE BLOCK] From blocks: personal={new_personal_hours}h, group={new_group_hours}h")
+                                    
+                                    # Apply weighted average: 80% existing, 20% new
+                                    personal_hours = int(0.8 * current_personal_hours + 0.2 * new_personal_hours)
+                                    group_hours = int(0.8 * current_group_hours + 0.2 * new_group_hours)
+                                    logging.info(f"⚖️ [RESIZE BLOCK] Weighted average: personal={personal_hours}h (80% of {current_personal_hours} + 20% of {new_personal_hours}), group={group_hours}h")
+                                    
+                                    # Update course_time_preferences
+                                    client.table("course_time_preferences").upsert({
+                                        "user_id": user_id,
+                                        "course_number": course_number,
+                                        "personal_hours_per_week": personal_hours,
+                                        "group_hours_per_week": group_hours
+                                    }, on_conflict="user_id,course_number").execute()
+                                    
+                                    logging.info(f"✅ [RESIZE BLOCK] Updated course_time_preferences for {course_number}: personal={personal_hours}h (was {current_personal_hours}h, LLM classified as {hours_change}), group={group_hours}h")
+                                    preferences_updated = True
+                        
+                        # ALWAYS save the LLM summary to study_preferences_summary
+                        # This is what we use when generating schedules (not the raw notes)
+                        # The summary contains the classification (update_type) and extracted preferences
+                        try:
+                            update_result = client.table("user_profiles").update({
+                                "study_preferences_summary": summary
+                            }).eq("id", user_id).execute()
+                            
+                            if update_result.data:
+                                logging.info(f"💾 [RESIZE BLOCK] ✅ Successfully saved study_preferences_summary to database")
+                                logging.info(f"   - update_type: {update_type}")
+                                logging.info(f"   - summary_keys: {list(summary.keys())}")
+                                logging.info(f"   - Updated rows: {len(update_result.data)}")
+                                # Verify the update
+                                verify_result = client.table("user_profiles").select("study_preferences_summary").eq("id", user_id).limit(1).execute()
+                                if verify_result.data:
+                                    saved_summary = verify_result.data[0].get("study_preferences_summary")
+                                    if saved_summary:
+                                        logging.info(f"   - ✅ Verified: study_preferences_summary exists in DB with {len(str(saved_summary))} chars")
+                                    else:
+                                        logging.warning(f"   - ⚠️ WARNING: study_preferences_summary is NULL in DB after update!")
+                            else:
+                                logging.error(f"❌ [RESIZE BLOCK] Update returned no data - update may have failed")
+                        except Exception as update_err:
+                            logging.error(f"❌ [RESIZE BLOCK] Failed to update study_preferences_summary: {update_err}", exc_info=True)
+                        
+                        preferences_updated = True
+                    else:
+                        logging.warning(f"⚠️ [RESIZE BLOCK] LLM summary returned None - preferences not updated")
+                        logging.warning(f"   - This means the LLM call failed or returned empty content")
+                        logging.warning(f"   - Check previous logs for LLM CLASSIFICATION errors")
                 except Exception as sum_err:
-                    logging.warning(f"Could not update LLM summary: {sum_err}")
-                
-                preferences_updated = True
-                logging.info(f"Updated user preferences summary with schedule change note for course {course_number}")
+                    logging.error(f"❌ Failed to update LLM summary: {sum_err}", exc_info=True)
+                    # Even if LLM fails, we keep the notes for future summarization
                 
             except Exception as pref_err:
                 logging.error(f"Failed to update preferences: {pref_err}")
@@ -3638,14 +4203,23 @@ async def approve_group_change_request(
         proposed_start = change_request["proposed_start_time"]
         proposed_duration = change_request.get("proposed_duration_hours", 1)
         request_type = change_request.get("request_type", "move")
+        original_day = change_request.get("original_day_of_week")
+        original_start = change_request.get("original_start_time")
+        original_duration = change_request.get("original_duration_hours", 1)
         
-        # For move requests, check if the new time slot has conflicts
-        if request_type == "move":
+        # For move and resize requests, check if the new time slot has conflicts
+        if request_type == "move" or request_type == "resize":
             conflict_reasons = []
             
+            # For resize, use original day/start (the meeting stays in place, just duration changes)
+            # For move, use proposed day/start (the meeting moves to a new location)
+            check_day = original_day if (request_type == "resize" and original_day is not None) else proposed_day
+            check_start = original_start if (request_type == "resize" and original_start) else proposed_start
+            check_duration = proposed_duration  # Always check the new duration
+            
             # Check 1: Weekly constraints (hard constraints)
-            constraints = client.table("weekly_constraints").select("*").eq("user_id", user_id).eq("week_start", week_start).execute()
-            for constraint in (constraints.data or []):
+            weekly_constraints = client.table("weekly_constraints").select("*").eq("user_id", user_id).eq("week_start", week_start).execute()
+            for constraint in (weekly_constraints.data or []):
                 if not constraint.get("is_hard", True):
                     continue  # Skip soft constraints
                 
@@ -3656,22 +4230,48 @@ async def approve_group_change_request(
                     except:
                         days_array = []
                 
-                if proposed_day in days_array:
+                if check_day in days_array:
                     # Check time overlap
                     c_start = _time_to_minutes(constraint.get("start_time", "00:00"))
                     c_end = _time_to_minutes(constraint.get("end_time", "00:00"))
-                    p_start = _time_to_minutes(proposed_start) if proposed_start else 0
-                    p_end = p_start + (proposed_duration * 60) if proposed_duration else p_start + 60
+                    p_start = _time_to_minutes(check_start) if check_start else 0
+                    p_end = p_start + (check_duration * 60) if check_duration else p_start + 60
                     
                     if p_start < c_end and p_end > c_start:
-                        conflict_reasons.append(f"אילוץ קשיח: {constraint.get('title', 'אילוץ')} ({constraint.get('start_time')}-{constraint.get('end_time')})")
+                        conflict_reasons.append(f"אילוץ קשיח שבועי: {constraint.get('title', 'אילוץ')} ({constraint.get('start_time')}-{constraint.get('end_time')})")
+            
+            # Check 1b: Permanent constraints (hard constraints)
+            permanent_constraints = client.table("constraints").select("*").eq("user_id", user_id).execute()
+            import json
+            for constraint in (permanent_constraints.data or []):
+                if not constraint.get("is_hard", True):
+                    continue  # Skip soft constraints
+                
+                days_array = constraint.get("days", [])
+                if isinstance(days_array, str):
+                    try:
+                        days_array = json.loads(days_array)
+                    except:
+                        days_array = []
+                elif not isinstance(days_array, list):
+                    days_array = []
+                
+                if check_day in days_array:
+                    # Check time overlap
+                    c_start = _time_to_minutes(constraint.get("start_time", "00:00"))
+                    c_end = _time_to_minutes(constraint.get("end_time", "00:00"))
+                    p_start = _time_to_minutes(check_start) if check_start else 0
+                    p_end = p_start + (check_duration * 60) if check_duration else p_start + 60
+                    
+                    if p_start < c_end and p_end > c_start:
+                        conflict_reasons.append(f"אילוץ קשיח קבוע: {constraint.get('title', 'אילוץ')} ({constraint.get('start_time')}-{constraint.get('end_time')})")
             
             # Check 2: Existing blocks (other courses)
             # First get the plan_id for this week
             user_plan = client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).limit(1).execute()
             if user_plan.data:
                 user_plan_id = user_plan.data[0]["id"]
-                existing_blocks = client.table("weekly_plan_blocks").select("*").eq("plan_id", user_plan_id).eq("day_of_week", proposed_day).execute()
+                existing_blocks = client.table("weekly_plan_blocks").select("*").eq("plan_id", user_plan_id).eq("day_of_week", check_day).execute()
             else:
                 existing_blocks = type('obj', (object,), {'data': []})()
             
@@ -3680,7 +4280,7 @@ async def approve_group_change_request(
             group_course_number = group_info_for_conflict.data[0].get("course_id") if group_info_for_conflict.data else None
             
             for block in (existing_blocks.data or []):
-                # Skip if it's the same group's block (we're moving it)
+                # Skip if it's the same group's block (we're moving/resizing it)
                 if block.get("work_type") == "group" and block.get("course_number") == group_course_number:
                     continue
                 
@@ -3691,8 +4291,8 @@ async def approve_group_change_request(
                     b_end = _time_to_minutes(block_end_time)
                 else:
                     b_end = b_start + 60  # Each block is 1 hour
-                p_start = _time_to_minutes(proposed_start) if proposed_start else 0
-                p_end = p_start + (proposed_duration * 60) if proposed_duration else p_start + 60
+                p_start = _time_to_minutes(check_start) if check_start else 0
+                p_end = p_start + (check_duration * 60) if check_duration else p_start + 60
                 
                 if p_start < b_end and p_end > b_start:
                     conflict_reasons.append(f"לוז קיים: {block.get('course_name', 'קורס')} ({block.get('start_time')})")
@@ -3716,17 +4316,42 @@ async def approve_group_change_request(
                     "resolved_at": datetime.now().isoformat()
                 }).eq("id", request_id).execute()
                 
+                # Delete all existing notifications about this change request for all members
+                all_members = client.table("group_members").select("user_id").eq("group_id", group_id).eq("status", "approved").execute()
+                member_ids = [m["user_id"] for m in (all_members.data or [])]
+                request_link_pattern = f"/schedule?change_request={request_id}"
+                for mid in member_ids:
+                    try:
+                        # Delete notifications of type "group_change_request" that link to this request
+                        existing_notifications = client.table("notifications").select("id, link").eq("user_id", mid).eq("type", "group_change_request").execute()
+                        for notif in (existing_notifications.data or []):
+                            # Check if the link contains this request_id
+                            notif_link = notif.get("link", "")
+                            if request_id in notif_link:
+                                client.table("notifications").delete().eq("id", notif["id"]).execute()
+                                logging.info(f"🗑️ Deleted notification {notif['id']} for user {mid} (auto-rejected request {request_id} due to conflict)")
+                    except Exception as del_err:
+                        logging.warning(f"Failed to delete existing notifications for member {mid}: {del_err}")
+                
                 # Notify the requester about the rejection
                 requester_id = change_request.get("requested_by")
                 if requester_id:
                     group_result = client.table("study_groups").select("group_name").eq("id", group_id).limit(1).execute()
                     group_name = group_result.data[0].get("group_name", "Group") if group_result.data else "Group"
                     
+                    # Create appropriate message based on request type
+                    if request_type == "resize":
+                        action_text = f"להאריך מפגש ל-{proposed_duration} שעות"
+                        time_text = f"ביום {day_names[check_day]} {check_start}"
+                    else:
+                        action_text = "להזיז מפגש"
+                        time_text = f"ליום {day_names[check_day]} {check_start}"
+                    
                     client.table("notifications").insert({
                         "user_id": requester_id,
                         "type": "group_change_rejected",
                         "title": f"בקשת שינוי נדחתה: {group_name}",
-                        "message": f"הבקשה להזיז מפגש ליום {day_names[proposed_day]} {proposed_start} נדחתה בגלל התנגשות בלוז של אחד החברים.",
+                        "message": f"הבקשה {action_text} {time_text} נדחתה בגלל התנגשות בלוז של אחד החברים.",
                         "link": f"/schedule?week={week_start}",
                         "read": False
                     }).execute()
@@ -4010,11 +4635,17 @@ async def approve_group_change_request(
                             history_entry["reason"] = hours_explanation
                         current_history.append(history_entry)
                         
+                        # Calculate weighted average: 80% existing, 20% new
+                        current_hours = gp.data[0].get("preferred_hours_per_week", 4)
+                        weighted_hours = int(0.8 * current_hours + 0.2 * proposed_duration)
+                        
                         client.table("group_preferences").update({
-                            "preferred_hours_per_week": proposed_duration,
+                            "preferred_hours_per_week": weighted_hours,
                             "hours_change_history": current_history,
                             "updated_at": datetime.now().isoformat()
                         }).eq("group_id", group_id).execute()
+                        
+                        logging.info(f"✅ Updated group_preferences: {current_hours}h -> {weighted_hours}h (weighted average: 80% existing, 20% new)")
                     else:
                         # Create new group preferences
                         history_entry = {
@@ -4026,65 +4657,207 @@ async def approve_group_change_request(
                         if hours_explanation:
                             history_entry["reason"] = hours_explanation
                         
+                        # For new group preferences, use proposed_duration directly (no existing value to average)
                         client.table("group_preferences").insert({
                             "group_id": group_id,
                             "preferred_hours_per_week": proposed_duration,
                             "hours_change_history": [history_entry]
                         }).execute()
+                        
+                        logging.info(f"✅ Created group_preferences: {proposed_duration}h per week (new group)")
+                        weighted_hours = proposed_duration
+                    
+                    # IMPORTANT: Also update course_time_preferences.group_hours_per_week for all members
+                    # This ensures consistency between group_preferences and course_time_preferences
+                    try:
+                        # Get course_number from group
+                        group_info = client.table("study_groups").select("course_id").eq("id", group_id).limit(1).execute()
+                        if group_info.data:
+                            course_number = group_info.data[0].get("course_id")
+                            
+                            # Update course_time_preferences for all members
+                            for member_id in member_ids:
+                                try:
+                                    # Get current course_time_preferences for this member
+                                    member_pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", member_id).eq("course_number", course_number).limit(1).execute()
+                                    
+                                    if member_pref_result.data:
+                                        current_personal_hours = member_pref_result.data[0].get("personal_hours_per_week", 0)
+                                        current_group_hours = member_pref_result.data[0].get("group_hours_per_week", 0)
+                                        
+                                        # Apply weighted average: 80% existing, 20% new group hours
+                                        new_group_hours = int(0.8 * current_group_hours + 0.2 * weighted_hours)
+                                        
+                                        # Update with weighted average
+                                        client.table("course_time_preferences").update({
+                                            "group_hours_per_week": new_group_hours
+                                        }).eq("user_id", member_id).eq("course_number", course_number).execute()
+                                        
+                                        logging.info(f"✅ Updated course_time_preferences for member {member_id}, course {course_number}: group_hours={new_group_hours}h (weighted average)")
+                                    else:
+                                        # Create new entry with default personal hours and new group hours
+                                        # Get course credit_points to calculate default personal hours
+                                        course_result = client.table("courses").select("credit_points").eq("user_id", member_id).eq("course_number", course_number).limit(1).execute()
+                                        credit_points = course_result.data[0].get("credit_points") if course_result.data else 3
+                                        total_hours = credit_points * 3
+                                        default_personal_hours = max(1, int(total_hours * 0.5))
+                                        
+                                        client.table("course_time_preferences").insert({
+                                            "user_id": member_id,
+                                            "course_number": course_number,
+                                            "personal_hours_per_week": default_personal_hours,
+                                            "group_hours_per_week": weighted_hours
+                                        }).execute()
+                                        
+                                        logging.info(f"✅ Created course_time_preferences for member {member_id}, course {course_number}: personal={default_personal_hours}h, group={weighted_hours}h")
+                                except Exception as member_err:
+                                    logging.warning(f"⚠️ Failed to update course_time_preferences for member {member_id}: {member_err}")
+                    except Exception as course_pref_err:
+                        logging.warning(f"⚠️ Failed to update course_time_preferences for group members: {course_pref_err}")
                     
                     logging.info(f"✅ Updated group preferences for group {group_id}: {original_duration}h -> {proposed_duration}h per week")
                 except Exception as gp_err:
                     logging.error(f"Failed to update group preferences: {gp_err}")
             else:
                 # Handle move: update time/day
-                # Update all group_plan_blocks for this group and week
-                client.table("group_plan_blocks").update({
-                    "day_of_week": proposed_day,
-                    "start_time": proposed_start,
-                    "end_time": proposed_end
-                }).eq("group_id", group_id).eq("week_start", week_start).execute()
+                # Get original time/day from the request
+                original_day = change_request.get("original_day_of_week")
+                original_start = change_request.get("original_start_time")
+                original_duration = change_request.get("original_duration_hours", 1)
+                
+                # Calculate original end time
+                original_end = _minutes_to_time(_time_to_minutes(original_start) + (original_duration * 60)) if original_start else None
                 
                 # Get course_number from group
-                group_info_for_move = client.table("study_groups").select("course_id").eq("id", group_id).limit(1).execute()
+                group_info_for_move = client.table("study_groups").select("course_id, course_name").eq("id", group_id).limit(1).execute()
                 course_number_for_move = group_info_for_move.data[0].get("course_id") if group_info_for_move.data else ""
+                course_name_for_move = group_info_for_move.data[0].get("course_name") if group_info_for_move.data else ""
                 
-                # Update all member's weekly_plan_blocks
+                # Step 1: Delete old group_plan_blocks at original location
+                if original_day is not None and original_start:
+                    old_group_blocks = client.table("group_plan_blocks").select("id").eq("group_id", group_id).eq("week_start", week_start).eq("day_of_week", original_day).eq("start_time", original_start).execute()
+                    for old_block in (old_group_blocks.data or []):
+                        client.table("group_plan_blocks").delete().eq("id", old_block["id"]).execute()
+                    logging.info(f"✅ Deleted {len(old_group_blocks.data or [])} old group_plan_blocks at original location")
+                
+                # Step 2: Create new group_plan_blocks at new location
+                time_slots = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
+                new_group_blocks = []
+                
+                # Find the closest time slot or use the proposed_start directly
+                if proposed_start:
+                    if proposed_start in time_slots:
+                        start_idx = time_slots.index(proposed_start)
+                    else:
+                        # Find the closest time slot
+                        proposed_minutes = _time_to_minutes(proposed_start)
+                        closest_idx = 0
+                        min_diff = abs(_time_to_minutes(time_slots[0]) - proposed_minutes)
+                        for i, slot in enumerate(time_slots):
+                            diff = abs(_time_to_minutes(slot) - proposed_minutes)
+                            if diff < min_diff:
+                                min_diff = diff
+                                closest_idx = i
+                        start_idx = closest_idx
+                        logging.info(f"⚠️ proposed_start {proposed_start} not in time_slots, using closest: {time_slots[start_idx]}")
+                    
+                    duration = proposed_duration if proposed_duration else 1
+                    for i in range(duration):
+                        if start_idx + i < len(time_slots):
+                            new_time = time_slots[start_idx + i]
+                            new_end = time_slots[start_idx + i + 1] if (start_idx + i + 1) < len(time_slots) else "21:00"
+                            new_group_blocks.append({
+                                "group_id": group_id,
+                                "week_start": week_start,
+                                "course_number": course_number_for_move,
+                                "day_of_week": proposed_day,
+                                "start_time": new_time,
+                                "end_time": new_end,
+                                "created_by": requester_id
+                            })
+                
+                if new_group_blocks:
+                    insert_result = client.table("group_plan_blocks").insert(new_group_blocks).execute()
+                    logging.info(f"✅ Created {len(new_group_blocks)} new group_plan_blocks at new location (day={proposed_day}, start={proposed_start})")
+                else:
+                    logging.error(f"❌ Failed to create group_plan_blocks: proposed_start={proposed_start}, proposed_duration={proposed_duration}")
+                
+                # Step 3: Update all member's weekly_plan_blocks
                 for mid in member_ids:
                     # Get plan_id for this member
                     member_plan = client.table("weekly_plans").select("id").eq("user_id", mid).eq("week_start", week_start).limit(1).execute()
                     if member_plan.data:
                         plan_id = member_plan.data[0]["id"]
-                        # Update all group blocks for this course
-                        update_result = client.table("weekly_plan_blocks").update({
-                            "day_of_week": proposed_day,
-                            "start_time": proposed_start,
-                            "end_time": proposed_end
-                        }).eq("plan_id", plan_id).eq("work_type", "group").eq("course_number", course_number_for_move).execute()
                         
-                        # If no blocks were updated, we might need to create them
-                        if not update_result.data or len(update_result.data) == 0:
-                            # Get course name
-                            group_info_with_name = client.table("study_groups").select("course_name").eq("id", group_id).limit(1).execute()
-                            course_name_for_move = group_info_with_name.data[0].get("course_name") if group_info_with_name.data else ""
+                        # Delete old blocks at original location
+                        if original_day is not None and original_start:
+                            old_member_blocks = client.table("weekly_plan_blocks").select("id").eq("plan_id", plan_id).eq("work_type", "group").eq("course_number", course_number_for_move).eq("day_of_week", original_day).eq("start_time", original_start).execute()
+                            for old_block in (old_member_blocks.data or []):
+                                client.table("weekly_plan_blocks").delete().eq("id", old_block["id"]).execute()
+                            logging.info(f"✅ Deleted {len(old_member_blocks.data or [])} old weekly_plan_blocks for member {mid} at original location")
+                        
+                        # Create new blocks at new location
+                        new_member_blocks = []
+                        if proposed_start:
+                            if proposed_start in time_slots:
+                                start_idx = time_slots.index(proposed_start)
+                            else:
+                                # Find the closest time slot
+                                proposed_minutes = _time_to_minutes(proposed_start)
+                                closest_idx = 0
+                                min_diff = abs(_time_to_minutes(time_slots[0]) - proposed_minutes)
+                                for i, slot in enumerate(time_slots):
+                                    diff = abs(_time_to_minutes(slot) - proposed_minutes)
+                                    if diff < min_diff:
+                                        min_diff = diff
+                                        closest_idx = i
+                                start_idx = closest_idx
                             
-                            # Create the block
-                            client.table("weekly_plan_blocks").insert({
-                                "plan_id": plan_id,
-                                "user_id": mid,
-                                "course_number": course_number_for_move,
-                                "course_name": course_name_for_move,
-                                "work_type": "group",
-                                "day_of_week": proposed_day,
-                                "start_time": proposed_start,
-                                "end_time": proposed_end,
-                                "source": "group"
-                            }).execute()
+                            duration = proposed_duration if proposed_duration else 1
+                            for i in range(duration):
+                                if start_idx + i < len(time_slots):
+                                    new_time = time_slots[start_idx + i]
+                                    new_end = time_slots[start_idx + i + 1] if (start_idx + i + 1) < len(time_slots) else "21:00"
+                                    new_member_blocks.append({
+                                        "plan_id": plan_id,
+                                        "user_id": mid,
+                                        "course_number": course_number_for_move,
+                                        "course_name": course_name_for_move,
+                                        "work_type": "group",
+                                        "day_of_week": proposed_day,
+                                        "start_time": new_time,
+                                        "end_time": new_end,
+                                        "source": "group"
+                                    })
+                        
+                        if new_member_blocks:
+                            insert_result = client.table("weekly_plan_blocks").insert(new_member_blocks).execute()
+                            logging.info(f"✅ Created {len(new_member_blocks)} new weekly_plan_blocks for member {mid} at new location (day={proposed_day}, start={proposed_start})")
+                        else:
+                            logging.error(f"❌ Failed to create weekly_plan_blocks for member {mid}: proposed_start={proposed_start}, proposed_duration={proposed_duration}")
+                    else:
+                        logging.warning(f"⚠️ No plan found for member {mid} for week {week_start}")
             
             # Mark request as approved
             client.table("group_meeting_change_requests").update({
                 "status": "approved",
                 "resolved_at": datetime.now().isoformat()
             }).eq("id", request_id).execute()
+            
+            # Delete all existing notifications about this change request for all members
+            request_link_pattern = f"/schedule?change_request={request_id}"
+            for mid in member_ids:
+                try:
+                    # Delete notifications of type "group_change_request" that link to this request
+                    existing_notifications = client.table("notifications").select("id, link").eq("user_id", mid).eq("type", "group_change_request").execute()
+                    for notif in (existing_notifications.data or []):
+                        # Check if the link contains this request_id
+                        notif_link = notif.get("link", "")
+                        if request_id in notif_link:
+                            client.table("notifications").delete().eq("id", notif["id"]).execute()
+                            logging.info(f"🗑️ Deleted notification {notif['id']} for user {mid} (approved request {request_id})")
+                except Exception as del_err:
+                    logging.warning(f"Failed to delete existing notifications for member {mid}: {del_err}")
             
             # Notify all members
             group_result = client.table("study_groups").select("group_name").eq("id", group_id).limit(1).execute()
@@ -4186,9 +4959,25 @@ async def reject_group_change_request(
             "resolved_at": "NOW()"
         }).eq("id", request_id).execute()
         
-        # Notify all members
+        # Get all members to delete their notifications and send new ones
         all_members = client.table("group_members").select("user_id").eq("group_id", group_id).eq("status", "approved").execute()
         member_ids = [m["user_id"] for m in (all_members.data or [])]
+        
+        # Delete all existing notifications about this change request for all members
+        # The link contains the request_id: "/schedule?change_request={request_id}"
+        request_link_pattern = f"/schedule?change_request={request_id}"
+        for mid in member_ids:
+            try:
+                # Delete notifications of type "group_change_request" that link to this request
+                existing_notifications = client.table("notifications").select("id").eq("user_id", mid).eq("type", "group_change_request").execute()
+                for notif in (existing_notifications.data or []):
+                    # Check if the link contains this request_id
+                    notif_link = notif.get("link", "")
+                    if request_id in notif_link:
+                        client.table("notifications").delete().eq("id", notif["id"]).execute()
+                        logging.info(f"🗑️ Deleted notification {notif['id']} for user {mid} (rejected request {request_id})")
+            except Exception as del_err:
+                logging.warning(f"Failed to delete existing notifications for member {mid}: {del_err}")
         
         group_result = client.table("study_groups").select("group_name").eq("id", group_id).limit(1).execute()
         group_name = group_result.data[0].get("group_name", "Group") if group_result.data else "Group"
@@ -4677,6 +5466,18 @@ async def create_study_group(
         
         group = group_result.data[0]
         group_id = group['id']
+        
+        # Create group_preferences with default values
+        try:
+            client.table("group_preferences").insert({
+                "group_id": group_id,
+                "preferred_hours_per_week": 4,  # Default 4 hours per week
+                "hours_change_history": []
+            }).execute()
+            logging.info(f"✅ Created group_preferences for group {group_id}")
+        except Exception as gp_err:
+            # If preferences already exist, that's okay
+            logging.warning(f"⚠️ Could not create group_preferences (may already exist): {gp_err}")
         
         # Add creator as an approved member of the group
         try:

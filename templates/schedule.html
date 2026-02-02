@@ -194,21 +194,19 @@
         }
         
         .schedule-cell.has-constraint {
-            background: #ffe0e0;
-            border: 2px solid #ff6b6b;
+            background: white; /* Same as course blocks */
         }
 
         .schedule-cell.has-constraint.constraint-start {
-            border-bottom: none;
+            /* No special border styling - badges handle the visual */
         }
 
         .schedule-cell.has-constraint.constraint-middle {
-            border-top: none;
-            border-bottom: none;
+            /* No special border styling - badges handle the visual */
         }
 
         .schedule-cell.has-constraint.constraint-end {
-            border-top: none;
+            /* No special border styling - badges handle the visual */
         }
         
         /* Cells stay plain - no coloring */
@@ -226,21 +224,35 @@
         }
         
         .constraint-badge {
-            background: #ff6b6b;
+            background: #ff6b6b; /* Red for hard constraints */
             color: white;
-            padding: 0.25rem 0.5rem;
-            border-radius: 4px;
+            padding: 0.5rem;
+            border-radius: 10px;
             font-size: 0.85em;
-            display: inline-block;
+            font-weight: 500;
+            line-height: 1.4;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             position: absolute;
-            left: 50%;
-            top: 50%;
-            transform: translate(-50%, -50%);
+            left: 5%;
+            right: 5%;
+            top: 5px;
             pointer-events: none;
+            box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+            white-space: normal;
+            word-wrap: break-word;
+            text-align: center;
+            z-index: 5;
+            transition: box-shadow 0.2s ease;
+        }
+        
+        .constraint-badge:hover {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }
 
         .constraint-badge.soft {
-            background: #ffb347;
+            background: #ffb347; /* Orange for soft constraints */
         }
 
         /* Course/Study block styles - differentiate personal vs group work */
@@ -361,6 +373,11 @@
             word-wrap: break-word;
             text-align: center;
             z-index: 5;
+            transition: box-shadow 0.2s ease;
+        }
+        
+        .course-badge:hover {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }
         
         /* Constraints Management */
@@ -1350,6 +1367,7 @@
                 const day = parseInt(cell.dataset.day);
                 const time = cell.dataset.time;
 
+                // Check both weekly and permanent constraints
                 const weeklyConstraint = weeklyConstraints.find(c => {
                     let daysArray = c.days;
                     if (!Array.isArray(daysArray)) {
@@ -1368,6 +1386,10 @@
 
                 if (weeklyConstraint) {
                     cell.classList.add('has-constraint');
+                    // Add soft-constraint class if it's a soft constraint
+                    if (weeklyConstraint.is_hard === false) {
+                        cell.classList.add('soft-constraint');
+                    }
                     const slotIndex = timeSlots.indexOf(time);
                     const prevTime = slotIndex > 0 ? timeSlots[slotIndex - 1] : null;
                     const nextTime = slotIndex < timeSlots.length - 1 ? timeSlots[slotIndex + 1] : null;
@@ -1384,14 +1406,40 @@
                         cell.classList.add('constraint-middle');
                     }
 
-                    const middleTime = getConstraintMiddleTime(weeklyConstraint);
-                    if (time === middleTime) {
+                    // Calculate number of hours for this constraint
+                    const constraintStartParts = weeklyConstraint.start_time.split(':').map(Number);
+                    const constraintEndParts = weeklyConstraint.end_time.split(':').map(Number);
+                    const constraintStartMinutes = constraintStartParts[0] * 60 + (constraintStartParts[1] || 0);
+                    const constraintEndMinutes = constraintEndParts[0] * 60 + (constraintEndParts[1] || 0);
+                    const numHours = Math.ceil((constraintEndMinutes - constraintStartMinutes) / 60);
+                    
+                    // Create badge only at the start of the constraint (like course blocks)
+                    if (startsHere) {
+                        const cellHeight = 80; // matches td height in CSS
+                        const badgeHeight = (cellHeight * numHours) - 10; // -10 for padding
+                        
                         const badge = document.createElement('span');
                         badge.className = `constraint-badge ${weeklyConstraint.is_hard === false ? 'soft' : ''}`;
-                        badge.textContent = weeklyConstraint.title;
+                        badge.style.height = `${badgeHeight}px`;
+                        badge.style.minHeight = `${badgeHeight}px`;
+                        
+                        const constraintLabel = weeklyConstraint.is_permanent ? '🔁 ' : '';
+                        const constraintIcon = weeklyConstraint.is_hard === false ? '🟡 ' : '🔒 ';
+                        let displayName = constraintIcon + constraintLabel + weeklyConstraint.title;
+                        if (displayName.length > 35) {
+                            displayName = displayName.substring(0, 32) + '...';
+                        }
+                        
+                        badge.textContent = displayName;
+                        badge.title = `${weeklyConstraint.title} (${weeklyConstraint.is_permanent ? 'אילוץ קבוע' : 'אילוץ שבועי'}, ${weeklyConstraint.is_hard ? 'קשיח' : 'רך'})`;
                         cell.appendChild(badge);
                     }
-                    cell.onclick = () => openWeeklyConstraintModal(null, null, weeklyConstraint.id);
+                    // Only allow editing weekly constraints (not permanent ones)
+                    if (weeklyConstraint.is_permanent) {
+                        cell.onclick = null; // Permanent constraints are read-only in weekly view
+                    } else {
+                        cell.onclick = () => openWeeklyConstraintModal(null, null, weeklyConstraint.id);
+                    }
                 } else {
                     cell.classList.add('available');
                     cell.onclick = () => handleWeeklyCellClick(day, time);
@@ -2522,7 +2570,8 @@
                     const result = await response.json();
                     alert(result.message);
                     await loadNotifications();
-                    await loadWeeklyPlan(); // Refresh schedule
+                    // Refresh all weekly data to see the updated blocks
+                    await loadAllWeeklyData();
                 } else {
                     let errorMessage = 'לא ניתן לאשר';
                     try {
@@ -2730,9 +2779,22 @@
             });
             
             // Make all cells drop targets
+            // Remove old event listeners first to avoid duplicates
             const allCells = document.querySelectorAll('#weekly-schedule-body .schedule-cell');
             allCells.forEach(cell => {
-                cell.addEventListener('dragover', (e) => {
+                // Remove old listeners if they exist
+                if (cell._dragoverHandler) {
+                    cell.removeEventListener('dragover', cell._dragoverHandler);
+                }
+                if (cell._dragleaveHandler) {
+                    cell.removeEventListener('dragleave', cell._dragleaveHandler);
+                }
+                if (cell._dropHandler) {
+                    cell.removeEventListener('drop', cell._dropHandler);
+                }
+                
+                // Create new handlers
+                cell._dragoverHandler = (e) => {
                     e.preventDefault();
                     e.dataTransfer.dropEffect = 'move';
                     if (!draggedBlockData) return;
@@ -2742,14 +2804,14 @@
                         cell.style.backgroundColor = 'rgba(102, 126, 234, 0.2)';
                         cell.style.border = '2px dashed #667eea';
                     }
-                });
+                };
                 
-                cell.addEventListener('dragleave', (e) => {
+                cell._dragleaveHandler = (e) => {
                     cell.style.backgroundColor = '';
                     cell.style.border = '';
-                });
+                };
                 
-                cell.addEventListener('drop', async (e) => {
+                cell._dropHandler = async (e) => {
                     e.preventDefault();
                     cell.style.backgroundColor = '';
                     cell.style.border = '';
@@ -2776,8 +2838,8 @@
                         return;
                     }
                     
-                    // Check for weekly constraints (hard constraints)
-                    const hasConstraint = weeklyConstraints.some(c => {
+                    // Check for hard constraints (both weekly and permanent)
+                    const conflictingConstraint = weeklyConstraints.find(c => {
                         if (!c.is_hard) return false;
                         let daysArray = c.days;
                         if (!Array.isArray(daysArray)) {
@@ -2792,8 +2854,9 @@
                         return newHour >= cStartHour && newHour < cEndHour;
                     });
                     
-                    if (hasConstraint) {
-                        alert('❌ לא ניתן להזיז לשעה זו - יש אילוץ קשיח בזמן הזה');
+                    if (conflictingConstraint) {
+                        const constraintType = conflictingConstraint.is_permanent ? 'קבוע' : 'שבועי';
+                        alert(`❌ לא ניתן להזיז לשעה זו - יש אילוץ קשיח ${constraintType} בזמן הזה: ${conflictingConstraint.title}`);
                         return;
                     }
                     
@@ -2805,7 +2868,12 @@
                         // Move personal block immediately
                         await movePersonalBlock(draggedBlockData, newDay, newTime);
                     }
-                });
+                };
+                
+                // Add new listeners
+                cell.addEventListener('dragover', cell._dragoverHandler);
+                cell.addEventListener('dragleave', cell._dragleaveHandler);
+                cell.addEventListener('drop', cell._dropHandler);
             });
         }
         
@@ -2817,7 +2885,13 @@
             }
             
             // Ask for optional explanation (for learning)
-            const explanation = prompt('רוצה להסביר למה הזזת את הבלוק? (אופציונלי - עוזר ללמוד את ההעדפות שלך)', '');
+            // If user cancels (null), don't proceed with the move
+            const explanation = prompt('רוצה להסביר למה הזזת את הבלוק? (אופציונלי - עוזר ללמוד את ההעדפות שלך)\n\nלחץ "ביטול" כדי לבטל את ההזזה.', '');
+            
+            // If user cancelled (null), don't proceed
+            if (explanation === null) {
+                return; // User cancelled - don't move the block
+            }
             
             try {
                 const response = await fetch('/api/schedule/block/move', {
@@ -2830,27 +2904,54 @@
                         block_id: blockData.id,
                         new_day_of_week: newDay,
                         new_start_time: newTime,
-                        explanation: explanation || ''
+                        explanation: explanation || '' // Empty string if user clicked OK without typing
                     })
                 });
                 
                 if (response.ok) {
-                    // Refresh schedule
-                    await loadWeeklyPlan();
                     const result = await response.json();
+                    
+                    // Update the schedule display immediately without full reload
+                    // Update the block in weeklyPlanBlocks array
+                    const blockIndex = weeklyPlanBlocks.findIndex(b => b.id === blockData.id);
+                    if (blockIndex !== -1 && result.block) {
+                        weeklyPlanBlocks[blockIndex] = {
+                            ...weeklyPlanBlocks[blockIndex],
+                            day_of_week: newDay,
+                            start_time: newTime,
+                            end_time: result.block.end_time || newTime
+                        };
+                    }
+                    
+                    // Refresh the display
+                    updateWeeklyScheduleDisplay();
+                    
+                    // Re-enable drag and drop
+                    setTimeout(() => {
+                        enableDragAndDrop();
+                    }, 100);
+                    
                     if (result.preferences_updated) {
                         alert('✅ הבלוק הועבר בהצלחה והעדפותיך עודכנו!');
                     } else {
                         alert('✅ הבלוק הועבר בהצלחה!');
                     }
                 } else {
-                    const error = await response.json();
-                    if (error.error === 'group_block') {
-                        // Should not happen (we check above), but handle it
-                        openGroupChangeRequestModal(error.block, newDay, newTime);
-                    } else {
-                        alert('❌ שגיאה בהעברת הבלוק: ' + (error.message || 'שגיאה לא ידועה'));
+                    // Try to parse error, but handle case where response might be empty
+                    let errorMessage = 'שגיאה לא ידועה';
+                    try {
+                        const error = await response.json();
+                        errorMessage = error.detail || error.message || errorMessage;
+                        if (error.error === 'group_block') {
+                            // Should not happen (we check above), but handle it
+                            openGroupChangeRequestModal(error.block, newDay, newTime);
+                            return;
+                        }
+                    } catch (e) {
+                        // If JSON parsing fails, use status text
+                        errorMessage = response.statusText || errorMessage;
                     }
+                    alert('❌ שגיאה בהעברת הבלוק: ' + errorMessage);
                 }
             } catch (error) {
                 console.error('Error moving block:', error);
@@ -2958,15 +3059,30 @@
         }
         
         // Re-enable drag-and-drop after schedule updates
+        // Use a flag to prevent multiple simultaneous calls
+        let dragAndDropEnabled = false;
         const originalUpdateWeeklyScheduleDisplay = updateWeeklyScheduleDisplay;
         updateWeeklyScheduleDisplay = function() {
             originalUpdateWeeklyScheduleDisplay();
             // Enable drag-and-drop after a short delay to ensure DOM is ready
-            setTimeout(enableDragAndDrop, 100);
+            // Only enable if not already enabled
+            if (!dragAndDropEnabled) {
+                dragAndDropEnabled = true;
+                setTimeout(() => {
+                    enableDragAndDrop();
+                    dragAndDropEnabled = false;
+                }, 100);
+            }
         };
         
         // Initial enable
-        setTimeout(enableDragAndDrop, 500);
+        setTimeout(() => {
+            if (!dragAndDropEnabled) {
+                dragAndDropEnabled = true;
+                enableDragAndDrop();
+                dragAndDropEnabled = false;
+            }
+        }, 500);
         
         // ==========================================
         // BLOCK EDIT MODAL (Resize / Duration Change)

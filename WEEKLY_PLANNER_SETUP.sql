@@ -56,13 +56,13 @@ CREATE TABLE IF NOT EXISTS group_plan_blocks (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- 5) Course time preferences (personal vs group ratio)
+-- 5) Course time preferences (personal vs group hours)
 CREATE TABLE IF NOT EXISTS course_time_preferences (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
     course_number TEXT NOT NULL,
-    personal_ratio FLOAT DEFAULT 0.5,
-    group_ratio FLOAT DEFAULT 0.5,
+    personal_hours_per_week INTEGER NOT NULL DEFAULT 5,
+    group_hours_per_week INTEGER NOT NULL DEFAULT 4,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     UNIQUE(user_id, course_number)
 );
