@@ -3310,6 +3310,8 @@ async def move_schedule_block(
         new_day = body.get("new_day_of_week")
         new_start_time = body.get("new_start_time")
         explanation = body.get("explanation", "")  # Optional: why user moved the block
+        original_start_time = body.get("original_start_time")  # Optional: for sub-range selection
+        duration_hours = body.get("duration_hours")  # Optional: for sub-range selection
         
         if not all([block_id, new_day is not None, new_start_time]):
             raise HTTPException(status_code=400, detail="block_id, new_day_of_week, and new_start_time are required")
@@ -3350,7 +3352,84 @@ async def move_schedule_block(
         
         conflict_reasons = []
         
-        # Check 1: Weekly hard constraints
+        # Define time slots for calculations
+        time_slots = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
+        
+        # First, find all consecutive blocks that will be moved to check conflicts for all of them
+        original_day = block.get("day_of_week")
+        original_start = block.get("start_time")
+        course_number = block.get("course_number")
+        work_type = block.get("work_type")
+        
+        # If sub-range is specified, use it; otherwise move all consecutive blocks
+        if original_start_time and duration_hours:
+            # User selected a sub-range - move only that range
+            sub_range_start = original_start_time
+            num_hours_to_move = duration_hours
+            
+            # Get all blocks for this plan/course/day to find the sub-range
+            all_blocks_for_conflict = client.table("weekly_plan_blocks").select("id, start_time, end_time").eq("plan_id", block["plan_id"]).eq("course_number", course_number).eq("work_type", work_type).eq("day_of_week", original_day).order("start_time").execute()
+            
+            # Find blocks in the sub-range
+            consecutive_blocks = []
+            sub_range_start_idx = time_slots.index(sub_range_start) if sub_range_start in time_slots else -1
+            
+            if sub_range_start_idx != -1:
+                for i in range(num_hours_to_move):
+                    if sub_range_start_idx + i < len(time_slots):
+                        target_time = time_slots[sub_range_start_idx + i]
+                        for b in (all_blocks_for_conflict.data or []):
+                            if b.get("start_time") == target_time and b["id"] not in [cb["id"] for cb in consecutive_blocks]:
+                                consecutive_blocks.append(b)
+                                break
+            
+            blocks_to_move_ids = [b["id"] for b in consecutive_blocks] if consecutive_blocks else [block_id]
+        else:
+            # No sub-range specified - move all consecutive blocks (original behavior)
+            # Get all blocks for this plan/course/day to find consecutive ones
+            all_blocks_for_conflict = client.table("weekly_plan_blocks").select("id, start_time, end_time").eq("plan_id", block["plan_id"]).eq("course_number", course_number).eq("work_type", work_type).eq("day_of_week", original_day).order("start_time").execute()
+            
+            # Find consecutive blocks
+            consecutive_blocks = []
+            starting_block_for_conflict = None
+            for b in (all_blocks_for_conflict.data or []):
+                if b.get("start_time") == original_start:
+                    starting_block_for_conflict = b
+                    consecutive_blocks.append(b)
+                    break
+            
+            if starting_block_for_conflict:
+                current_end_time = starting_block_for_conflict.get("end_time")
+                for b in (all_blocks_for_conflict.data or []):
+                    if b["id"] == starting_block_for_conflict["id"]:
+                        continue
+                    block_start = b.get("start_time")
+                    if block_start == current_end_time:
+                        consecutive_blocks.append(b)
+                        current_end_time = b.get("end_time")
+                    elif _time_to_minutes(block_start) > _time_to_minutes(current_end_time):
+                        break
+            
+            # Calculate how many hours will be moved
+            num_hours_to_move = len(consecutive_blocks) if consecutive_blocks else 1
+            blocks_to_move_ids = [b["id"] for b in consecutive_blocks] if consecutive_blocks else [block_id]
+        
+        # Calculate time slots for the new location (for conflict checking)
+        # time_slots already defined above
+        if new_start_time in time_slots:
+            new_start_idx = time_slots.index(new_start_time)
+        else:
+            new_start_minutes = _time_to_minutes(new_start_time)
+            closest_idx = 0
+            min_diff = abs(_time_to_minutes(time_slots[0]) - new_start_minutes)
+            for i, slot in enumerate(time_slots):
+                diff = abs(_time_to_minutes(slot) - new_start_minutes)
+                if diff < min_diff:
+                    min_diff = diff
+                    closest_idx = i
+            new_start_idx = closest_idx
+        
+        # Check 1: Weekly hard constraints (for all hours that will be moved)
         if week_start:
             weekly_constraints = client.table("weekly_constraints").select("*").eq("user_id", user_id).eq("week_start", week_start).execute()
             for constraint in (weekly_constraints.data or []):
@@ -3366,16 +3445,22 @@ async def move_schedule_block(
                         days_array = []
                 
                 if new_day in days_array:
-                    # Check time overlap
                     c_start = _time_to_minutes(constraint.get("start_time", "00:00"))
                     c_end = _time_to_minutes(constraint.get("end_time", "00:00"))
-                    p_start = _time_to_minutes(new_start_time) if new_start_time else 0
-                    p_end = p_start + 60  # 1 hour block
                     
-                    if p_start < c_end and p_end > c_start:
-                        conflict_reasons.append(f"אילוץ קשיח שבועי: {constraint.get('title', 'אילוץ')} ({constraint.get('start_time')}-{constraint.get('end_time')})")
+                    # Check each hour that will be moved
+                    for i in range(num_hours_to_move):
+                        if new_start_idx + i < len(time_slots):
+                            new_time = time_slots[new_start_idx + i]
+                            new_end = time_slots[new_start_idx + i + 1] if (new_start_idx + i + 1) < len(time_slots) else "21:00"
+                            p_start = _time_to_minutes(new_time)
+                            p_end = _time_to_minutes(new_end)
+                            
+                            if p_start < c_end and p_end > c_start:
+                                conflict_reasons.append(f"אילוץ קשיח שבועי: {constraint.get('title', 'אילוץ')} ({constraint.get('start_time')}-{constraint.get('end_time')})")
+                                break  # Only report once per constraint
         
-        # Check 2: Permanent hard constraints
+        # Check 2: Permanent hard constraints (for all hours that will be moved)
         permanent_constraints = client.table("constraints").select("*").eq("user_id", user_id).execute()
         import json
         for constraint in (permanent_constraints.data or []):
@@ -3392,29 +3477,53 @@ async def move_schedule_block(
                 days_array = []
             
             if new_day in days_array:
-                # Check time overlap
                 c_start = _time_to_minutes(constraint.get("start_time", "00:00"))
                 c_end = _time_to_minutes(constraint.get("end_time", "00:00"))
-                p_start = _time_to_minutes(new_start_time) if new_start_time else 0
-                p_end = p_start + 60  # 1 hour block
                 
-                if p_start < c_end and p_end > c_start:
-                    conflict_reasons.append(f"אילוץ קשיח קבוע: {constraint.get('title', 'אילוץ')} ({constraint.get('start_time')}-{constraint.get('end_time')})")
+                # Check each hour that will be moved
+                for i in range(num_hours_to_move):
+                    if new_start_idx + i < len(time_slots):
+                        new_time = time_slots[new_start_idx + i]
+                        new_end = time_slots[new_start_idx + i + 1] if (new_start_idx + i + 1) < len(time_slots) else "21:00"
+                        p_start = _time_to_minutes(new_time)
+                        p_end = _time_to_minutes(new_end)
+                        
+                        if p_start < c_end and p_end > c_start:
+                            conflict_reasons.append(f"אילוץ קשיח קבוע: {constraint.get('title', 'אילוץ')} ({constraint.get('start_time')}-{constraint.get('end_time')})")
+                            break  # Only report once per constraint
         
         # Check 3: Existing blocks (other courses at the same time)
+        # Check conflicts for all hours that will be moved
         if week_start:
             user_plan = client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).limit(1).execute()
             if user_plan.data:
                 user_plan_id = user_plan.data[0]["id"]
-                existing_blocks = client.table("weekly_plan_blocks").select("course_name, start_time, end_time").eq("plan_id", user_plan_id).eq("day_of_week", new_day).neq("id", block_id).execute()
-                for existing_block in (existing_blocks.data or []):
-                    e_start = _time_to_minutes(existing_block.get("start_time", "00:00"))
-                    e_end = _time_to_minutes(existing_block.get("end_time", "00:00"))
-                    p_start = _time_to_minutes(new_start_time) if new_start_time else 0
-                    p_end = p_start + 60
-                    
-                    if p_start < e_end and p_end > e_start:
-                        conflict_reasons.append(f"בלוק קיים: {existing_block.get('course_name', 'קורס')} ({existing_block.get('start_time')}-{existing_block.get('end_time')})")
+                existing_blocks = client.table("weekly_plan_blocks").select("course_name, start_time, end_time").eq("plan_id", user_plan_id).eq("day_of_week", new_day).execute()
+                
+                # Check conflicts for each hour that will be moved (time_slots and new_start_idx already calculated above)
+                for i in range(num_hours_to_move):
+                    if new_start_idx + i < len(time_slots):
+                        new_time = time_slots[new_start_idx + i]
+                        new_end = time_slots[new_start_idx + i + 1] if (new_start_idx + i + 1) < len(time_slots) else "21:00"
+                        
+                        # Check if this time slot conflicts with existing blocks
+                        for existing_block in (existing_blocks.data or []):
+                            # Skip if it's one of the blocks we're moving (check by ID if possible, or by time)
+                            existing_block_id = existing_block.get("id")
+                            if existing_block_id and existing_block_id in blocks_to_move_ids:
+                                continue
+                            # Also skip if it's at the original location and same course (we're moving it)
+                            if existing_block.get("start_time") == original_start and existing_block.get("course_number") == course_number:
+                                continue
+                            
+                            e_start = _time_to_minutes(existing_block.get("start_time", "00:00"))
+                            e_end = _time_to_minutes(existing_block.get("end_time", "00:00"))
+                            p_start = _time_to_minutes(new_time)
+                            p_end = _time_to_minutes(new_end)
+                            
+                            if p_start < e_end and p_end > e_start:
+                                conflict_reasons.append(f"בלוק קיים: {existing_block.get('course_name', 'קורס')} ({existing_block.get('start_time')}-{existing_block.get('end_time')})")
+                                break  # Only report once per conflicting block
         
         # If there are conflicts, reject the move
         if conflict_reasons:
@@ -3424,21 +3533,31 @@ async def move_schedule_block(
                 detail=conflict_message
             )
         
-        # Calculate new end time (1 hour after start)
-        new_end_time = _minutes_to_time(_time_to_minutes(new_start_time) + 60)
+        # Use the consecutive blocks we already found for conflict checking
+        logging.info(f"📦 Moving {len(blocks_to_move_ids)} consecutive blocks starting at {original_start}")
         
-        # Update the block
-        update_result = client.table("weekly_plan_blocks").update({
-            "day_of_week": new_day,
-            "start_time": new_start_time,
-            "end_time": new_end_time,
-            "source": "manual"  # Mark as manually edited
-        }).eq("id", block_id).execute()
+        # Use the time_slots and new_start_idx already calculated above for conflict checking
+        # Normalize new_start_time to the closest slot if needed
+        if new_start_time not in time_slots:
+            new_start_time = time_slots[new_start_idx]  # Use the closest slot
         
-        if not update_result.data:
-            raise HTTPException(status_code=500, detail="Failed to update block in database")
+        # Update all consecutive blocks
+        for i, block_id_to_move in enumerate(blocks_to_move_ids):
+            if new_start_idx + i < len(time_slots):
+                new_time = time_slots[new_start_idx + i]
+                new_end = time_slots[new_start_idx + i + 1] if (new_start_idx + i + 1) < len(time_slots) else "21:00"
+                
+                update_result = client.table("weekly_plan_blocks").update({
+                    "day_of_week": new_day,
+                    "start_time": new_time,
+                    "end_time": new_end,
+                    "source": "manual"  # Mark as manually edited
+                }).eq("id", block_id_to_move).execute()
+                
+                if not update_result.data:
+                    logging.warning(f"⚠️ Failed to update block {block_id_to_move}")
         
-        logging.info(f"✅ User {user_id} moved personal block {block_id} to day {new_day} at {new_start_time}")
+        logging.info(f"✅ User {user_id} moved {len(blocks_to_move_ids)} consecutive personal blocks from day {original_day} {original_start} to day {new_day} {new_start_time}")
         
         # If explanation provided, save it to user preferences for learning
         preferences_updated = False
@@ -4069,6 +4188,64 @@ async def create_group_change_request(
                         
                         if proposed_start_minutes < block_end_minutes and proposed_end_minutes > block_start_minutes:
                             requester_conflicts.append(f"לוז קיים: {block.get('course_name', 'קורס')} ({block.get('start_time')})")
+        
+        # Validate that the selected time range contains only consecutive blocks of the same course/group
+        if request_type == "move" and original_day is not None and original_start and original_duration:
+            # Get all group blocks for this group/day/week
+            all_group_blocks = client.table("group_plan_blocks").select("id, start_time, end_time, course_number").eq("group_id", group_id).eq("week_start", week_start).eq("day_of_week", original_day).order("start_time").execute()
+            
+            # Find the starting block
+            starting_block = None
+            for block in (all_group_blocks.data or []):
+                if block.get("start_time") == original_start:
+                    starting_block = block
+                    break
+            
+            if not starting_block:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"לא נמצא בלוק שמתחיל ב-{original_start}. אנא בדוק את הזמן הנבחר."
+                )
+            
+            # Verify all blocks in the range are consecutive and belong to the same course/group
+            blocks_in_range = [starting_block]
+            current_end_time = starting_block.get("end_time")
+            expected_course_number = starting_block.get("course_number")
+            
+            # Find consecutive blocks
+            for block in (all_group_blocks.data or []):
+                if block["id"] == starting_block["id"]:
+                    continue  # Skip the starting block
+                
+                block_start = block.get("start_time")
+                block_course = block.get("course_number")
+                
+                # Check if this block is consecutive (its start_time equals the current end_time)
+                if block_start == current_end_time:
+                    # Verify it's the same course/group
+                    if block_course != expected_course_number:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"הטווח הנבחר מכיל בלוקים של קורסים שונים. לא ניתן להזיז בלוקים של קורסים שונים יחד."
+                        )
+                    blocks_in_range.append(block)
+                    current_end_time = block.get("end_time")
+                # Stop if we've found enough blocks or if there's a gap
+                elif _time_to_minutes(block_start) > _time_to_minutes(current_end_time):
+                    # There's a gap, stop looking
+                    break
+            
+            # Verify we found the right number of blocks
+            if len(blocks_in_range) < original_duration:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"הטווח הנבחר ({original_duration} שעות) מכיל רק {len(blocks_in_range)} בלוקים רצופים. לא ניתן להזיז חלק מבלוק לא רצוף."
+                )
+            elif len(blocks_in_range) > original_duration:
+                # This shouldn't happen, but log it
+                logging.warning(f"Found {len(blocks_in_range)} consecutive blocks but only {original_duration} requested. Using requested duration.")
+            
+            logging.info(f"✅ Validated {original_duration} consecutive blocks starting at {original_start} for group {group_id}")
         
         # Create the change request
         request_data = {
@@ -4734,11 +4911,46 @@ async def approve_group_change_request(
                 course_name_for_move = group_info_for_move.data[0].get("course_name") if group_info_for_move.data else ""
                 
                 # Step 1: Delete old group_plan_blocks at original location
+                # IMPORTANT: Delete ONLY consecutive blocks starting from original_start
                 if original_day is not None and original_start:
-                    old_group_blocks = client.table("group_plan_blocks").select("id").eq("group_id", group_id).eq("week_start", week_start).eq("day_of_week", original_day).eq("start_time", original_start).execute()
-                    for old_block in (old_group_blocks.data or []):
-                        client.table("group_plan_blocks").delete().eq("id", old_block["id"]).execute()
-                    logging.info(f"✅ Deleted {len(old_group_blocks.data or [])} old group_plan_blocks at original location")
+                    # Get all blocks for this group/day/week and sort by start_time
+                    all_blocks = client.table("group_plan_blocks").select("id, start_time, end_time").eq("group_id", group_id).eq("week_start", week_start).eq("day_of_week", original_day).order("start_time").execute()
+                    
+                    # Find the starting block
+                    starting_block = None
+                    for block in (all_blocks.data or []):
+                        if block.get("start_time") == original_start:
+                            starting_block = block
+                            break
+                    
+                    if not starting_block:
+                        logging.warning(f"⚠️ Could not find starting block at {original_start} for group {group_id}")
+                    else:
+                        # Find all consecutive blocks starting from the starting block
+                        blocks_to_delete = [starting_block["id"]]
+                        current_end_time = starting_block.get("end_time")
+                        blocks_deleted_count = 1
+                        
+                        # Continue finding consecutive blocks until we reach the requested duration
+                        for block in (all_blocks.data or []):
+                            if block["id"] in blocks_to_delete:
+                                continue  # Skip already added blocks
+                            
+                            block_start = block.get("start_time")
+                            # Check if this block is consecutive (its start_time equals the current end_time)
+                            if block_start == current_end_time and blocks_deleted_count < original_duration:
+                                blocks_to_delete.append(block["id"])
+                                current_end_time = block.get("end_time")
+                                blocks_deleted_count += 1
+                            # Stop if we've found enough blocks or if there's a gap
+                            elif _time_to_minutes(block_start) > _time_to_minutes(current_end_time):
+                                # There's a gap, stop looking
+                                break
+                        
+                        # Delete all consecutive blocks
+                        for block_id in blocks_to_delete:
+                            client.table("group_plan_blocks").delete().eq("id", block_id).execute()
+                        logging.info(f"✅ Deleted {len(blocks_to_delete)} consecutive group_plan_blocks starting at {original_start} (requested {original_duration}h)")
                 
                 # Step 2: Create new group_plan_blocks at new location
                 time_slots = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
@@ -4790,11 +5002,46 @@ async def approve_group_change_request(
                         plan_id = member_plan.data[0]["id"]
                         
                         # Delete old blocks at original location
+                        # IMPORTANT: Delete ONLY consecutive blocks starting from original_start
                         if original_day is not None and original_start:
-                            old_member_blocks = client.table("weekly_plan_blocks").select("id").eq("plan_id", plan_id).eq("work_type", "group").eq("course_number", course_number_for_move).eq("day_of_week", original_day).eq("start_time", original_start).execute()
-                            for old_block in (old_member_blocks.data or []):
-                                client.table("weekly_plan_blocks").delete().eq("id", old_block["id"]).execute()
-                            logging.info(f"✅ Deleted {len(old_member_blocks.data or [])} old weekly_plan_blocks for member {mid} at original location")
+                            # Get all blocks for this member/day/course and sort by start_time
+                            all_member_blocks = client.table("weekly_plan_blocks").select("id, start_time, end_time").eq("plan_id", plan_id).eq("work_type", "group").eq("course_number", course_number_for_move).eq("day_of_week", original_day).order("start_time").execute()
+                            
+                            # Find the starting block
+                            starting_block = None
+                            for block in (all_member_blocks.data or []):
+                                if block.get("start_time") == original_start:
+                                    starting_block = block
+                                    break
+                            
+                            if not starting_block:
+                                logging.warning(f"⚠️ Could not find starting block at {original_start} for member {mid}")
+                            else:
+                                # Find all consecutive blocks starting from the starting block
+                                blocks_to_delete = [starting_block["id"]]
+                                current_end_time = starting_block.get("end_time")
+                                blocks_deleted_count = 1
+                                
+                                # Continue finding consecutive blocks until we reach the requested duration
+                                for block in (all_member_blocks.data or []):
+                                    if block["id"] in blocks_to_delete:
+                                        continue  # Skip already added blocks
+                                    
+                                    block_start = block.get("start_time")
+                                    # Check if this block is consecutive (its start_time equals the current end_time)
+                                    if block_start == current_end_time and blocks_deleted_count < original_duration:
+                                        blocks_to_delete.append(block["id"])
+                                        current_end_time = block.get("end_time")
+                                        blocks_deleted_count += 1
+                                    # Stop if we've found enough blocks or if there's a gap
+                                    elif _time_to_minutes(block_start) > _time_to_minutes(current_end_time):
+                                        # There's a gap, stop looking
+                                        break
+                                
+                                # Delete all consecutive blocks
+                                for block_id in blocks_to_delete:
+                                    client.table("weekly_plan_blocks").delete().eq("id", block_id).execute()
+                                logging.info(f"✅ Deleted {len(blocks_to_delete)} consecutive weekly_plan_blocks for member {mid} starting at {original_start} (requested {original_duration}h)")
                         
                         # Create new blocks at new location
                         new_member_blocks = []

@@ -1438,7 +1438,7 @@
                     if (weeklyConstraint.is_permanent) {
                         cell.onclick = null; // Permanent constraints are read-only in weekly view
                     } else {
-                        cell.onclick = () => openWeeklyConstraintModal(null, null, weeklyConstraint.id);
+                    cell.onclick = () => openWeeklyConstraintModal(null, null, weeklyConstraint.id);
                     }
                 } else {
                     cell.classList.add('available');
@@ -2575,7 +2575,7 @@
                 } else {
                     let errorMessage = 'לא ניתן לאשר';
                     try {
-                        const error = await response.json();
+                    const error = await response.json();
                         errorMessage = error.detail || error.message || errorMessage;
                     } catch (e) {
                         const errorText = await response.text();
@@ -2756,7 +2756,16 @@
                     cell._blockClickHandler = clickHandler;
                     cell.addEventListener('click', clickHandler);
                     
-                    cell.addEventListener('dragstart', (e) => {
+                    // Remove old drag event listeners before adding new ones
+                    if (cell._dragstartHandler) {
+                        cell.removeEventListener('dragstart', cell._dragstartHandler);
+                    }
+                    if (cell._dragendHandler) {
+                        cell.removeEventListener('dragend', cell._dragendHandler);
+                    }
+                    
+                    // Create new drag handlers
+                    cell._dragstartHandler = (e) => {
                         draggedBlockData = {
                             ...planBlock,
                             originalDay: day,
@@ -2767,14 +2776,18 @@
                         cell.style.cursor = 'grabbing';
                         e.dataTransfer.effectAllowed = 'move';
                         e.dataTransfer.setData('text/plain', planBlock.id);
-                    });
+                    };
                     
-                    cell.addEventListener('dragend', (e) => {
+                    cell._dragendHandler = (e) => {
                         cell.style.opacity = '1';
                         cell.style.cursor = 'grab';
                         draggedBlockData = null;
                         draggedElement = null;
-                    });
+                    };
+                    
+                    // Add new listeners
+                    cell.addEventListener('dragstart', cell._dragstartHandler);
+                    cell.addEventListener('dragend', cell._dragendHandler);
                 }
             });
             
@@ -2912,19 +2925,9 @@
                     const result = await response.json();
                     
                     // Update the schedule display immediately without full reload
-                    // Update the block in weeklyPlanBlocks array
-                    const blockIndex = weeklyPlanBlocks.findIndex(b => b.id === blockData.id);
-                    if (blockIndex !== -1 && result.block) {
-                        weeklyPlanBlocks[blockIndex] = {
-                            ...weeklyPlanBlocks[blockIndex],
-                            day_of_week: newDay,
-                            start_time: newTime,
-                            end_time: result.block.end_time || newTime
-                        };
-                    }
-                    
-                    // Refresh the display
-                    updateWeeklyScheduleDisplay();
+                    // The backend moves all consecutive blocks, so we need to reload from server
+                    // to get all updated blocks
+                    await loadWeeklyPlan();
                     
                     // Re-enable drag and drop
                     setTimeout(() => {
@@ -2940,13 +2943,13 @@
                     // Try to parse error, but handle case where response might be empty
                     let errorMessage = 'שגיאה לא ידועה';
                     try {
-                        const error = await response.json();
+                    const error = await response.json();
                         errorMessage = error.detail || error.message || errorMessage;
-                        if (error.error === 'group_block') {
-                            // Should not happen (we check above), but handle it
-                            openGroupChangeRequestModal(error.block, newDay, newTime);
+                    if (error.error === 'group_block') {
+                        // Should not happen (we check above), but handle it
+                        openGroupChangeRequestModal(error.block, newDay, newTime);
                             return;
-                        }
+                    }
                     } catch (e) {
                         // If JSON parsing fails, use status text
                         errorMessage = response.statusText || errorMessage;
@@ -2972,9 +2975,19 @@
             const modal = document.getElementById('groupChangeRequestModal');
             const dayNames = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
             
+            // Get block duration (consecutive hours)
+            const duration = parseInt(blockData.duration) || getBlockDuration(
+                blockData.day_of_week || blockData.originalDay,
+                blockData.start_time || blockData.originalTime,
+                blockData.course_number,
+                blockData.work_type
+            );
+            
+            const blockStartTime = blockData.start_time || blockData.originalTime;
+            
             document.getElementById('groupChangeCourseName').textContent = blockData.course_name;
             document.getElementById('groupChangeOriginal').textContent = 
-                `${dayNames[blockData.day_of_week || blockData.originalDay]} ${blockData.start_time || blockData.originalTime}`;
+                `${dayNames[blockData.day_of_week || blockData.originalDay]} ${blockStartTime} (${duration} שעות)`;
             document.getElementById('groupChangeProposed').textContent = 
                 `${dayNames[newDay]} ${newTime}`;
             
@@ -2998,6 +3011,16 @@
             const reason = document.getElementById('groupChangeReason').value.trim();
             const blockData = currentGroupChangeRequest.block;
             const weekStart = getWeekStartDate();
+            
+            // Get block duration (consecutive hours) - when dragging, we move the entire block
+            const fullDuration = parseInt(blockData.duration) || getBlockDuration(
+                blockData.day_of_week || blockData.originalDay,
+                blockData.start_time || blockData.originalTime,
+                blockData.course_number,
+                blockData.work_type
+            );
+            
+            const originalStartTime = blockData.start_time || blockData.originalTime;
             
             // Get group_id from block data
             // We need to find the group_id - check if block has it or query it
@@ -3037,9 +3060,11 @@
                         group_id: groupId,
                         week_start: weekStart,
                         original_day_of_week: blockData.day_of_week || blockData.originalDay,
-                        original_start_time: blockData.start_time || blockData.originalTime,
+                        original_start_time: originalStartTime, // Use the block's start time (entire block)
+                        original_duration_hours: fullDuration, // Use the full duration (entire block)
                         proposed_day_of_week: currentGroupChangeRequest.newDay,
                         proposed_start_time: currentGroupChangeRequest.newTime,
+                        proposed_duration_hours: fullDuration, // Use the full duration (entire block)
                         reason: reason
                     })
                 });
@@ -3095,9 +3120,13 @@
             // Get course name - use what's in the block data
             const displayName = blockData.course_name || blockData.course_number;
             
+            // Determine work type - check both work_type and workType
+            const workType = blockData.work_type || blockData.workType || 'personal';
+            const isGroup = workType === 'group';
+            
             document.getElementById('editBlockCourseName').textContent = displayName;
             document.getElementById('editBlockWorkType').textContent = 
-                blockData.work_type === 'group' ? '👥 עבודה קבוצתית' : '📚 עבודה עצמית';
+                isGroup ? '👥 עבודה קבוצתית' : '📚 עבודה עצמית';
             document.getElementById('editBlockCurrentTime').textContent = 
                 `${dayNames[blockData.day]} ${blockData.startTime}`;
             document.getElementById('editBlockCurrentDuration').textContent = 
@@ -3109,11 +3138,219 @@
             
             // Show/hide group warning
             const groupWarning = document.getElementById('editBlockGroupWarning');
-            groupWarning.style.display = blockData.work_type === 'group' ? 'block' : 'none';
+            groupWarning.style.display = isGroup ? 'block' : 'none';
+            
+            // Show/hide action tabs for all blocks (both group and personal)
+            const actionTabs = document.getElementById('editBlockActionTabs');
+            const resizeSection = document.getElementById('editBlockResizeSection');
+            const moveSection = document.getElementById('editBlockMoveSection');
+            
+            // Show tabs for both group and personal blocks
+            actionTabs.style.display = 'block';
+            
+            // Add event listeners to tabs (for both group and personal blocks)
+            const resizeTab = document.getElementById('editBlockTabResize');
+            const moveTab = document.getElementById('editBlockTabMove');
+            
+            if (!resizeTab || !moveTab) {
+                console.error('Tabs not found!', { resizeTab, moveTab });
+            } else {
+                // Remove existing listeners by cloning
+                const newResizeTab = resizeTab.cloneNode(true);
+                resizeTab.parentNode.replaceChild(newResizeTab, resizeTab);
+                const resizeTabRef = document.getElementById('editBlockTabResize');
+                
+                const newMoveTab = moveTab.cloneNode(true);
+                moveTab.parentNode.replaceChild(newMoveTab, moveTab);
+                const moveTabRef = document.getElementById('editBlockTabMove');
+                
+                resizeTabRef.addEventListener('click', () => switchEditBlockTab('resize'));
+                moveTabRef.addEventListener('click', () => switchEditBlockTab('move'));
+                
+                // Default to resize tab
+                switchEditBlockTab('resize');
+            }
+            
+            if (isGroup) {
+                
+                // Populate move section dropdowns
+                const timeSlots = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00'];
+                const blockStartTime = blockData.startTime || blockData.start_time;
+                
+                if (!blockStartTime) {
+                    console.error('No startTime in blockData:', blockData);
+                    return;
+                }
+                
+                const normalizedBlockStartTime = blockStartTime.length > 5 ? blockStartTime.substring(0, 5) : blockStartTime;
+                let startIndex = timeSlots.indexOf(normalizedBlockStartTime);
+                
+                // If start time not found, try to find it in the weekly plan blocks
+                if (startIndex === -1) {
+                    const matchingBlock = weeklyPlanBlocks.find(b => 
+                        b.day_of_week === blockData.day && 
+                        (b.start_time === blockStartTime || b.start_time === normalizedBlockStartTime ||
+                         (b.start_time.length > 5 && b.start_time.substring(0, 5) === normalizedBlockStartTime))
+                    );
+                    if (matchingBlock) {
+                        const matchTime = matchingBlock.start_time.length > 5 ? matchingBlock.start_time.substring(0, 5) : matchingBlock.start_time;
+                        startIndex = timeSlots.indexOf(matchTime);
+                    }
+                }
+                
+                if (startIndex !== -1 && blockData.duration && blockData.duration > 0) {
+                    const blockTimeSlots = timeSlots.slice(startIndex, startIndex + blockData.duration);
+                    
+                    // Populate start time dropdown
+                    const moveStartTimeSelect = document.getElementById('editBlockMoveStartTime');
+                    
+                    // Remove existing event listeners by cloning
+                    const newMoveStartTimeSelect = moveStartTimeSelect.cloneNode(true);
+                    moveStartTimeSelect.parentNode.replaceChild(newMoveStartTimeSelect, moveStartTimeSelect);
+                    const moveStartTimeSelectRef = document.getElementById('editBlockMoveStartTime');
+                    
+                    moveStartTimeSelectRef.innerHTML = '';
+                    blockTimeSlots.forEach((time, index) => {
+                        const option = document.createElement('option');
+                        option.value = time;
+                        option.textContent = index === 0 ? `${time} (התחלה)` : time;
+                        if (index === 0) {
+                            option.selected = true;
+                        }
+                        moveStartTimeSelectRef.appendChild(option);
+                    });
+                    
+                    // Function to update duration dropdown
+                    function updateMoveDurationDropdown() {
+                        const selectedStartTime = moveStartTimeSelectRef.value;
+                        if (!selectedStartTime) {
+                            const moveDurationSelect = document.getElementById('editBlockMoveDuration');
+                            moveDurationSelect.innerHTML = '<option value="">בחר משעה תחילה</option>';
+                            return;
+                        }
+                        
+                        const selectedStartIndex = blockTimeSlots.indexOf(selectedStartTime);
+                        if (selectedStartIndex === -1) return;
+                        
+                        const maxDuration = blockTimeSlots.length - selectedStartIndex;
+                        const moveDurationSelect = document.getElementById('editBlockMoveDuration');
+                        moveDurationSelect.innerHTML = '';
+                        for (let i = 1; i <= maxDuration; i++) {
+                            const option = document.createElement('option');
+                            option.value = i;
+                            option.textContent = i === maxDuration ? `${i} שעות (עד סוף הבלוק)` : `${i} שעות`;
+                            if (i === maxDuration) {
+                                option.selected = true;
+                            }
+                            moveDurationSelect.appendChild(option);
+                        }
+                    }
+                    
+                    // Update duration dropdown when start time changes
+                    moveStartTimeSelectRef.addEventListener('change', updateMoveDurationDropdown);
+                    updateMoveDurationDropdown();
+                }
+                
+                // Set default new day and time
+                document.getElementById('editBlockMoveNewDay').value = blockData.day;
+                document.getElementById('editBlockMoveNewTime').value = blockData.startTime;
+                
+                // Show sub-range selection for group blocks
+                const subRangeContainer = moveSection.querySelector('div:first-child');
+                if (subRangeContainer) {
+                    subRangeContainer.style.display = 'block';
+                }
+            } else {
+                // For personal blocks, also show sub-range selection
+                // Set default new day and time
+                document.getElementById('editBlockMoveNewDay').value = blockData.day;
+                document.getElementById('editBlockMoveNewTime').value = blockData.startTime;
+                
+                // Show sub-range selection for personal blocks too
+                const subRangeContainer = moveSection.querySelector('div:first-child');
+                if (subRangeContainer) {
+                    subRangeContainer.style.display = 'block';
+                }
+                
+                // Populate move section dropdowns for personal blocks
+                const timeSlots = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00'];
+                const blockStartTime = blockData.startTime || blockData.start_time;
+                
+                if (blockStartTime && blockData.duration && blockData.duration > 0) {
+                    const normalizedBlockStartTime = blockStartTime.length > 5 ? blockStartTime.substring(0, 5) : blockStartTime;
+                    let startIndex = timeSlots.indexOf(normalizedBlockStartTime);
+                    
+                    // If start time not found, try to find it in the weekly plan blocks
+                    if (startIndex === -1) {
+                        const matchingBlock = weeklyPlanBlocks.find(b => 
+                            b.day_of_week === blockData.day && 
+                            (b.start_time === blockStartTime || b.start_time === normalizedBlockStartTime ||
+                             (b.start_time.length > 5 && b.start_time.substring(0, 5) === normalizedBlockStartTime))
+                        );
+                        if (matchingBlock) {
+                            const matchTime = matchingBlock.start_time.length > 5 ? matchingBlock.start_time.substring(0, 5) : matchingBlock.start_time;
+                            startIndex = timeSlots.indexOf(matchTime);
+                        }
+                    }
+                    
+                    if (startIndex !== -1 && blockData.duration > 0) {
+                        const blockTimeSlots = timeSlots.slice(startIndex, startIndex + blockData.duration);
+                        
+                        // Populate start time dropdown
+                        const moveStartTimeSelect = document.getElementById('editBlockMoveStartTime');
+                        
+                        // Remove existing event listeners by cloning
+                        const newMoveStartTimeSelect = moveStartTimeSelect.cloneNode(true);
+                        moveStartTimeSelect.parentNode.replaceChild(newMoveStartTimeSelect, moveStartTimeSelect);
+                        const moveStartTimeSelectRef = document.getElementById('editBlockMoveStartTime');
+                        
+                        moveStartTimeSelectRef.innerHTML = '';
+                        blockTimeSlots.forEach((time, index) => {
+                            const option = document.createElement('option');
+                            option.value = time;
+                            option.textContent = index === 0 ? `${time} (התחלה)` : time;
+                            if (index === 0) {
+                                option.selected = true;
+                            }
+                            moveStartTimeSelectRef.appendChild(option);
+                        });
+                        
+                        // Function to update duration dropdown
+                        function updateMoveDurationDropdown() {
+                            const selectedStartTime = moveStartTimeSelectRef.value;
+                            if (!selectedStartTime) {
+                                const moveDurationSelect = document.getElementById('editBlockMoveDuration');
+                                moveDurationSelect.innerHTML = '<option value="">בחר משעה תחילה</option>';
+                                return;
+                            }
+                            
+                            const selectedStartIndex = blockTimeSlots.indexOf(selectedStartTime);
+                            if (selectedStartIndex === -1) return;
+                            
+                            const maxDuration = blockTimeSlots.length - selectedStartIndex;
+                            const moveDurationSelect = document.getElementById('editBlockMoveDuration');
+                            moveDurationSelect.innerHTML = '';
+                            for (let i = 1; i <= maxDuration; i++) {
+                                const option = document.createElement('option');
+                                option.value = i;
+                                option.textContent = i === maxDuration ? `${i} שעות (עד סוף הבלוק)` : `${i} שעות`;
+                                if (i === maxDuration) {
+                                    option.selected = true;
+                                }
+                                moveDurationSelect.appendChild(option);
+                            }
+                        }
+                        
+                        // Update duration dropdown when start time changes
+                        moveStartTimeSelectRef.addEventListener('change', updateMoveDurationDropdown);
+                        updateMoveDurationDropdown();
+                    }
+                }
+            }
             
             // Load and display pending change requests for group blocks
             const pendingRequestsContainer = document.getElementById('editBlockPendingRequests');
-            if (blockData.work_type === 'group' && blockData.group_id && pendingRequestsContainer) {
+            if (isGroup && blockData.group_id && pendingRequestsContainer) {
                 await loadPendingRequestsForBlock(blockData.group_id, pendingRequestsContainer);
             } else if (pendingRequestsContainer) {
                 pendingRequestsContainer.innerHTML = '';
@@ -3206,15 +3443,179 @@
             selectedBlockData = null;
         }
         
+        function switchEditBlockTab(tab) {
+            const resizeTab = document.getElementById('editBlockTabResize');
+            const moveTab = document.getElementById('editBlockTabMove');
+            const resizeSection = document.getElementById('editBlockResizeSection');
+            const moveSection = document.getElementById('editBlockMoveSection');
+            
+            if (tab === 'resize') {
+                resizeTab.style.borderBottomColor = '#667eea';
+                resizeTab.style.fontWeight = 'bold';
+                moveTab.style.borderBottomColor = 'transparent';
+                moveTab.style.fontWeight = 'normal';
+                resizeSection.style.display = 'block';
+                moveSection.style.display = 'none';
+            } else if (tab === 'move') {
+                moveTab.style.borderBottomColor = '#667eea';
+                moveTab.style.fontWeight = 'bold';
+                resizeTab.style.borderBottomColor = 'transparent';
+                resizeTab.style.fontWeight = 'normal';
+                resizeSection.style.display = 'none';
+                moveSection.style.display = 'block';
+                
+                // Show sub-range selection for all blocks (both group and personal)
+                const subRangeContainer = moveSection.querySelector('div:first-child');
+                if (subRangeContainer) {
+                    subRangeContainer.style.display = 'block';
+                }
+            }
+        }
+        
         async function submitBlockDurationChange() {
             if (!selectedBlockData || !token) {
                 alert('אנא התחבר');
                 return;
             }
             
-            const newDuration = parseInt(document.getElementById('editBlockNewDuration').value);
-            const explanation = document.getElementById('editBlockExplanation').value.trim();
             const weekStart = getWeekStartDate();
+            const explanation = document.getElementById('editBlockExplanation').value.trim();
+            
+            // Check which tab is active
+            const resizeSection = document.getElementById('editBlockResizeSection');
+            const moveSection = document.getElementById('editBlockMoveSection');
+            const isMoveTab = moveSection.style.display !== 'none';
+            
+            // Determine work type
+            const workType = selectedBlockData.work_type || selectedBlockData.workType || 'personal';
+            const isGroupBlock = workType === 'group';
+            
+            if (isMoveTab) {
+                const newDay = parseInt(document.getElementById('editBlockMoveNewDay').value);
+                const newTime = document.getElementById('editBlockMoveNewTime').value;
+                
+                if (!newTime) {
+                    alert('❌ אנא בחר שעה חדשה');
+                    return;
+                }
+                
+                // Check if it's the same location
+                if (newDay === selectedBlockData.day && newTime === selectedBlockData.startTime) {
+                    alert('❌ הבלוק כבר נמצא במיקום הזה');
+                    return;
+                }
+                
+                if (isGroupBlock) {
+                    // Handle move request for group block
+                    const moveStartTime = document.getElementById('editBlockMoveStartTime').value;
+                    const moveDuration = parseInt(document.getElementById('editBlockMoveDuration').value);
+                    
+                    if (!moveStartTime || !moveDuration || moveDuration < 1) {
+                        alert('❌ אנא בחר תת טווח תקין להזיז');
+                        return;
+                    }
+                    
+                    // Find group_id
+                    let groupId = selectedBlockData.group_id;
+                    if (!groupId) {
+                        try {
+                            const groupsResponse = await fetch('/api/groups/my-groups', {
+                                headers: { 'Authorization': `Bearer ${token}` }
+                            });
+                            if (groupsResponse.ok) {
+                                const groupsData = await groupsResponse.json();
+                                const courseGroups = groupsData.groups.filter(g => g.course_id === selectedBlockData.course_number);
+                                if (courseGroups.length > 0) {
+                                    groupId = courseGroups[0].id;
+                                }
+                            }
+                        } catch (e) {
+                            console.error('Error finding group:', e);
+                        }
+                    }
+                    
+                    if (!groupId) {
+                        alert('❌ לא ניתן למצוא את הקבוצה');
+                        return;
+                    }
+                    
+                    try {
+                        const response = await fetch('/api/schedule/group-change-request/create', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${token}`
+                            },
+                            body: JSON.stringify({
+                                group_id: groupId,
+                                week_start: weekStart,
+                                original_day_of_week: selectedBlockData.day,
+                                original_start_time: moveStartTime,
+                                original_duration_hours: moveDuration,
+                                proposed_day_of_week: newDay,
+                                proposed_start_time: newTime,
+                                proposed_duration_hours: moveDuration,
+                                reason: explanation
+                            })
+                        });
+                        
+                        if (response.ok) {
+                            const result = await response.json();
+                            closeBlockEditModal();
+                            alert(`✅ בקשת השינוי נשלחה! ממתינים לאישור מ-${result.members_to_approve} חברי קבוצה.`);
+                            updateWeeklyScheduleDisplay();
+                        } else {
+                            const error = await response.json();
+                            alert('❌ שגיאה ביצירת בקשת שינוי: ' + (error.detail || 'שגיאה לא ידועה'));
+                        }
+                    } catch (error) {
+                        console.error('Error creating move request:', error);
+                        alert('❌ שגיאה ביצירת בקשת שינוי');
+                    }
+                } else {
+                    // Handle move for personal block (same as group - require sub-range selection)
+                    const moveStartTime = document.getElementById('editBlockMoveStartTime').value;
+                    const moveDuration = parseInt(document.getElementById('editBlockMoveDuration').value);
+                    
+                    if (!moveStartTime || !moveDuration || moveDuration < 1) {
+                        alert('❌ אנא בחר תת טווח תקין להזיז');
+                        return;
+                    }
+                    
+                    try {
+                        const response = await fetch('/api/schedule/block/move', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${token}`
+                            },
+                            body: JSON.stringify({
+                                block_id: selectedBlockData.id,
+                                new_day_of_week: newDay,
+                                new_start_time: newTime,
+                                explanation: explanation || '',
+                                original_start_time: moveStartTime,
+                                duration_hours: moveDuration
+                            })
+                        });
+                        
+                        if (response.ok) {
+                            const result = await response.json();
+                            closeBlockEditModal();
+                            await loadWeeklyPlan();
+                            alert('✅ הבלוק הועבר בהצלחה!');
+                        } else {
+                            const error = await response.json();
+                            alert('❌ שגיאה בהעברת הבלוק: ' + (error.detail || 'שגיאה לא ידועה'));
+                        }
+                    } catch (error) {
+                        console.error('Error moving block:', error);
+                        alert('❌ שגיאה בהעברת הבלוק');
+                    }
+                }
+            } else {
+                // Handle resize (duration change)
+                const newDuration = parseInt(document.getElementById('editBlockNewDuration').value);
             
             // If duration didn't change
             if (newDuration === selectedBlockData.duration) {
@@ -3223,12 +3624,13 @@
             }
             
             // Check if it's a group block
-            if (selectedBlockData.work_type === 'group') {
+                if (isGroupBlock) {
                 // Need to send change request
                 await submitGroupResizeRequest(selectedBlockData, newDuration, explanation, weekStart);
             } else {
                 // Personal block - update directly
                 await updatePersonalBlockDuration(selectedBlockData, newDuration, explanation, weekStart);
+                }
             }
         }
         
@@ -3254,7 +3656,7 @@
                 if (response.ok) {
                     const result = await response.json();
                     closeBlockEditModal();
-                    await loadWeeklyPlan();
+                    updateWeeklyScheduleDisplay();
                     alert('✅ משך הבלוק עודכן בהצלחה!');
                     
                     // If user provided explanation, show that preferences were updated
@@ -3430,12 +3832,92 @@
                 
                 <div id="editBlockGroupWarning" style="background: #fff9e6; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-right: 4px solid #ffc107; display: none;">
                     <p style="margin: 0; color: #856404;">
-                        ⚠️ <strong>שים לב:</strong> שינוי משך מפגש קבוצתי דורש אישור מכל חברי הקבוצה.
+                        ⚠️ <strong>שים לב:</strong> שינוי מפגש קבוצתי דורש אישור מכל חברי הקבוצה.
                     </p>
                 </div>
                 
+                <!-- Action Tabs for Group Blocks -->
+                <div id="editBlockActionTabs" style="display: none; margin-bottom: 1.5rem;">
+                    <div style="display: flex; gap: 0.5rem; border-bottom: 2px solid #ddd;">
+                        <button id="editBlockTabResize" style="flex: 1; padding: 0.75rem; background: #f5f5f5; border: none; border-bottom: 3px solid #667eea; cursor: pointer; font-weight: bold;">
+                            שינוי משך
+                        </button>
+                        <button id="editBlockTabMove" style="flex: 1; padding: 0.75rem; background: #f5f5f5; border: none; border-bottom: 3px solid transparent; cursor: pointer;">
+                            הזז בלוק
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Move Block Section (for group blocks) -->
+                <div id="editBlockMoveSection" style="display: none; margin-bottom: 1.5rem;">
+                    <div style="margin-bottom: 1rem;">
+                        <label style="font-weight: bold; display: block; margin-bottom: 0.5rem;">
+                            בחר תת טווח להזיז:
+                        </label>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div>
+                                <label style="font-size: 0.9em; color: #666; display: block; margin-bottom: 0.25rem;">משעה:</label>
+                                <select 
+                                    id="editBlockMoveStartTime" 
+                                    style="width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 8px; font-size: 1em; font-family: inherit;"
+                                >
+                                    <option value="">טוען...</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size: 0.9em; color: #666; display: block; margin-bottom: 0.25rem;">מספר שעות:</label>
+                                <select 
+                                    id="editBlockMoveDuration" 
+                                    style="width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 8px; font-size: 1em; font-family: inherit;"
+                                >
+                                    <option value="">טוען...</option>
+                                </select>
+                            </div>
+                        </div>
+                        <small style="color: #666; display: block; margin-top: 0.5rem;">
+                            בחר את התת טווח שברצונך להזיז. רק בלוקים רצופים של אותו קורס יוזזו.
+                        </small>
+                    </div>
+                    
+                    <div style="margin-bottom: 1rem;">
+                        <label style="font-weight: bold; display: block; margin-bottom: 0.5rem;">
+                            יום חדש:
+                        </label>
+                        <select id="editBlockMoveNewDay" style="width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 8px; font-size: 1em;">
+                            <option value="0">ראשון</option>
+                            <option value="1">שני</option>
+                            <option value="2">שלישי</option>
+                            <option value="3">רביעי</option>
+                            <option value="4">חמישי</option>
+                            <option value="5">שישי</option>
+                            <option value="6">שבת</option>
+                        </select>
+                    </div>
+                    
+                    <div style="margin-bottom: 1rem;">
+                        <label style="font-weight: bold; display: block; margin-bottom: 0.5rem;">
+                            שעה חדשה:
+                        </label>
+                        <select id="editBlockMoveNewTime" style="width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 8px; font-size: 1em;">
+                            <option value="08:00">08:00</option>
+                            <option value="09:00">09:00</option>
+                            <option value="10:00">10:00</option>
+                            <option value="11:00">11:00</option>
+                            <option value="12:00">12:00</option>
+                            <option value="13:00">13:00</option>
+                            <option value="14:00">14:00</option>
+                            <option value="15:00">15:00</option>
+                            <option value="16:00">16:00</option>
+                            <option value="17:00">17:00</option>
+                            <option value="18:00">18:00</option>
+                            <option value="19:00">19:00</option>
+                            <option value="20:00">20:00</option>
+                        </select>
+                    </div>
+                </div>
+                
                 <!-- Duration Selector -->
-                <div style="margin-bottom: 1.5rem;">
+                <div id="editBlockResizeSection" style="margin-bottom: 1.5rem;">
                     <label style="font-weight: bold; display: block; margin-bottom: 0.5rem;">
                         משך חדש (שעות):
                     </label>
