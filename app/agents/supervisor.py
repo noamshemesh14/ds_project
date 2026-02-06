@@ -15,6 +15,7 @@ from app.agents.executors.request_handler import RequestHandler
 from app.agents.executors.preference_updater import PreferenceUpdater
 from app.agents.executors.block_mover import BlockMover
 from app.agents.executors.block_resizer import BlockResizer
+from app.agents.executors.block_creator import BlockCreator
 from app.agents.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ class Supervisor:
             "preference_updater": PreferenceUpdater(),
             "block_mover": BlockMover(),
             "block_resizer": BlockResizer(),
+            "block_creator": BlockCreator(),
         }
         self.module_name = "supervisor"
         self.llm_client = LLMClient()
@@ -137,8 +139,8 @@ class Supervisor:
                 }
 
             try:
-                # Pass user_prompt to executors that might need it for preference extraction
-                if executor_name in ["block_mover", "block_resizer"]:
+                # Pass user_prompt to executors that might need it for preference extraction or parameter extraction
+                if executor_name in ["block_mover", "block_resizer", "request_handler"]:
                     executor_params["user_prompt"] = user_prompt
                 
                 result = await executor.execute(user_id=user_id, **executor_params, **kwargs)
@@ -243,5 +245,9 @@ class Supervisor:
         # Block resizer patterns
         if any(word in prompt_lower for word in ["resize", "שינוי גודל", "change duration"]):
             return "block_resizer", {}
+        
+        # Block creator patterns
+        if any(word in prompt_lower for word in ["add block", "create block", "new block", "הוסף בלוק", "צור בלוק", "בלוק חדש", "add study", "הוסף למידה"]):
+            return "block_creator", {}
         
         return None, {}

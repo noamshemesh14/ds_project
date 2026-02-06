@@ -221,14 +221,15 @@ class LLMClient:
 Available executors:
 - course_manager: Add courses from catalog to user's course list. Requires: course_number (string, e.g., "10403"). Optional: course_name (string, e.g., "אלגוריתמים"). Note: Semester and year are handled by default in the backend and do not need to be extracted.
 - schedule_retriever: Get weekly schedule. Optional: date (YYYY-MM-DD or YYYY/MM/DD format). If no date is provided, default to the current week.
-- group_manager: Create study groups. Requires: course_number, group_name, invite_emails (list)
+- group_manager: Create study groups and invite members. Use this when the user wants to create a new study group or invite people to a group. Requires: course_number (string, e.g., "10403"), group_name (string), invite_emails (list of email addresses). Optional: course_name (string), description (string). Validations: Only registered users enrolled in the course can be invited. At least one other user (besides the creator) must be invited. Cannot invite yourself.
 - notification_retriever: Get new notifications. No parameters needed
 - notification_cleaner: Clean/delete notifications. Optional: notification_id
-- request_handler: Approve/reject requests. Requires: request_id, action ("accept" or "reject")
+- request_handler: Approve/reject requests (group invitations or change requests). Use this when the user wants to approve/accept or reject/decline an invitation or change request. Requires: action ("accept"/"approve" or "reject"/"decline"). Optional: request_id (if not provided, will search by group_name or course_number for invitations), group_name (string, e.g., "קבוצת לימוד - רשתות מחשבים"), course_number (string, e.g., "10403"). The handler will find the pending invitation or change request automatically.
 - preference_updater: Update course time preferences. Requires: course_number, personal_ratio, group_ratio
 - block_mover: Move study blocks. Requires: block_id, new_day, new_start_time, new_end_time. Optional: user_prompt (original user prompt for preference extraction)
-- block_resizer: Resize study blocks (change duration). Use this when the user wants to INCREASE or DECREASE the duration of a block (e.g., "change from 3 hours to 2 hours", "reduce to 2 hours", "increase to 4 hours", "2 hours is sufficient so change it to 13-15"). Requires: block_id (optional), course_name or course_number, day_of_week, start_time, new_duration, week_start (optional). If block_id not provided, use course_name/course_number + day_of_week + start_time + week_start to find the block. For group blocks, creates a change request. For personal blocks, updates directly and updates course_time_preferences.personal_hours_per_week.
+- block_resizer: Resize study blocks (change duration). Use this when the user wants to INCREASE or DECREASE the duration of an EXISTING block (e.g., "change from 3 hours to 2 hours", "reduce to 2 hours", "increase to 4 hours", "2 hours is sufficient so change it to 13-15"). Requires: block_id (optional), course_name or course_number, day_of_week, start_time, new_duration, week_start (optional). If block_id not provided, use course_name/course_number + day_of_week + start_time + week_start to find the block. For group blocks, creates a change request. For personal blocks, updates directly and updates course_time_preferences.personal_hours_per_week.
 - IMPORTANT: If user says "from X:00 to Y:00" and wants to change it to "from X:00 to Z:00" where Z < Y (or Z > Y), this is a RESIZE (changing duration), not a move. Choose block_resizer, not block_mover.
+- block_creator: Create a NEW study block and add it to the schedule. Use this when the user wants to ADD a new block that doesn't exist yet (e.g., "add a 2-hour block for אלגוריתמים on Monday at 10:00", "create a new study session for course 10403 on Wednesday 14:00", "add 3 hours for מבני נתונים on Thursday starting at 08:00"). Requires: course_name or course_number, day_of_week (0-6, where 0=Sunday), start_time (HH:MM format). Optional: duration (default 1 hour), work_type ("personal" or "group", default "personal"), week_start (YYYY-MM-DD format, defaults to current week). This creates a NEW block, not moving or resizing an existing one.
 
 IMPORTANT: When extracting parameters for block_mover, also analyze the user_prompt for any preferences or explanations:
 - If the user mentions preferences like "I prefer to study late", "I like morning study", "I don't like studying on day X", etc., include the full user_prompt in executor_params so the backend can extract and save these preferences.
@@ -293,6 +294,35 @@ For block_resizer:
   * "increase מעבדה on Friday 12:00 to 4 hours for week 2026-02-08" → course_name="מעבדה", day_of_week=5 (Friday), start_time="12:00", new_duration=4, week_start="2026-02-08"
   * "I have a personal work from 13:00 to 16:00. 2 hours is sufficient so change it to 13-15" → course_name from context, day_of_week from context, start_time="13:00", new_duration=2 (13:00-15:00 = 2 hours)
   * "reduce block duration from 3 to 2 hours" → new_duration=2 (block_id or course info needed)
+
+For block_creator:
+- Extract course_name or course_number (required) - the course name or number for which to create a new block. Look for course names in the prompt (e.g., "אלגוריתמים", "מבני נתונים", etc.) or course numbers (3-6 digits).
+- Extract day_of_week (required) - the day of week (0-6, where 0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday). Can be extracted from day names like "Monday", "Tuesday", etc. or Hebrew names like "ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת".
+- Extract start_time (required) - the start time in HH:MM format (e.g., "08:00", "12:00", "14:00"). Look for phrases like "at 10:00", "starting at 14:00", "from 08:00", "on Monday at 10:00". Normalize formats: "8:00" → "08:00", "012:00" → "12:00".
+- Extract duration (optional, default 1) - the duration in hours (e.g., 1, 2, 3). Look for phrases like "2-hour block", "3 hours", "for 2 hours", "duration of 3h". If user says "from 10:00 to 12:00", calculate duration: 2 hours.
+- Extract work_type (optional, default "personal") - "personal" or "group". Look for phrases like "personal study", "group work", "עבודה אישית", "עבודה קבוצתית". Default is "personal".
+- Extract week_start (optional) - the week start date in YYYY-MM-DD or YYYY/MM/DD format. If not provided, defaults to current week.
+- IMPORTANT: Use block_creator when the user wants to ADD a NEW block that doesn't exist yet. If the user wants to move or resize an existing block, use block_mover or block_resizer instead.
+- Examples:
+  * "add a 2-hour block for אלגוריתמים on Monday at 10:00" → course_name="אלגוריתמים", day_of_week=1 (Monday), start_time="10:00", duration=2
+  * "create a new study session for course 10403 on Wednesday 14:00" → course_number="10403", day_of_week=3 (Wednesday), start_time="14:00", duration=1 (default)
+  * "add 3 hours for מבני נתונים on Thursday starting at 08:00" → course_name="מבני נתונים", day_of_week=4 (Thursday), start_time="08:00", duration=3
+  * "הוסף בלוק של 2 שעות לקורס אלגוריתמים ביום שני ב-10:00" → course_name="אלגוריתמים", day_of_week=1 (Monday), start_time="10:00", duration=2
+
+For request_handler:
+- Extract action (required) - "accept"/"approve" or "reject"/"decline". Look for phrases like "approve", "accept", "reject", "decline", "אישור", "אשר", "דחייה", "דחה".
+- Extract request_id (optional) - if provided explicitly as a UUID, use it. Otherwise, will search by group_name or course_number.
+- Extract group_name (REQUIRED if request_id not provided) - the name of the group for which to approve/reject invitation. Look for phrases like "for group X", "קבוצת X", "group named X", "group X". Extract the FULL group name including any text after "group" or "קבוצת". Examples: 
+  * "approve invitation for group קבוצת לימוד - רשתות מחשבים" → group_name="קבוצת לימוד - רשתות מחשבים" (extract everything after "group" or "קבוצת")
+  * "accept invitation for קבוצת לימוד - רשתות מחשבים" → group_name="קבוצת לימוד - רשתות מחשבים"
+  * "approve invitation for group study group for algorithms" → group_name="study group for algorithms"
+- Extract course_number (optional) - the course number to find the group. Look for 3-6 digit numbers.
+- CRITICAL: If the user mentions a group name (e.g., "קבוצת לימוד - רשתות מחשבים"), you MUST extract it as group_name. Do NOT set it to null.
+- Examples:
+  * "approve invitation for group קבוצת לימוד - רשתות מחשבים" → action="accept", group_name="קבוצת לימוד - רשתות מחשבים"
+  * "reject invitation for course 10403" → action="reject", course_number="10403"
+  * "accept invitation for קבוצת לימוד - רשתות מחשבים" → action="accept", group_name="קבוצת לימוד - רשתות מחשבים"
+  * "accept invitation" (no group name) → action="accept", group_name=null (will search for any pending invitation)
 
 MOST IMPORTANT RULE: When you see a course number in the user's prompt, extract it EXACTLY as written.
 If the user writes "104043", you MUST extract "104043" with all 6 digits.

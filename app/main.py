@@ -4723,6 +4723,16 @@ async def approve_group_change_request(
                 "responded_at": datetime.now().isoformat()
             }).eq("request_id", request_id).eq("user_id", user_id).execute()
         
+        # Mark related notification as read
+        try:
+            request_link_pattern = f"/schedule?change_request={request_id}"
+            client.table("notifications").update({
+                "read": True
+            }).eq("user_id", user_id).eq("type", "group_change_request").like("link", f"%change_request={request_id}%").execute()
+            logging.info(f"✅ Marked notification as read for user {user_id}")
+        except Exception as notif_update_err:
+            logging.warning(f"⚠️ Could not update notification: {notif_update_err}")
+        
         # Check if all members have approved
         # IMPORTANT: The requester doesn't need to approve their own request
         requester_id = change_request.get("requested_by")
@@ -6537,9 +6547,14 @@ async def accept_invitation(
                     logging.error(f"   Error message: {insert_err.message}")
                 raise
         
-        # DON'T mark notification as read automatically - let user decide when to remove it
-        # Notifications will stay visible until user explicitly deletes them
-        logging.info(f"ℹ️ Invitation accepted - notification will remain visible until user deletes it")
+        # Mark notification as read and update it to show it was accepted
+        try:
+            client.table("notifications").update({
+                "read": True
+            }).eq("id", notification_id).eq("user_id", user_id).execute()
+            logging.info(f"✅ Marked notification as read")
+        except Exception as notif_update_err:
+            logging.warning(f"⚠️ Could not update notification: {notif_update_err}")
         
         return JSONResponse(content={"success": True, "message": "Invitation accepted"})
         
@@ -6571,6 +6586,18 @@ async def reject_invitation(
         if not result.data:
             raise HTTPException(status_code=404, detail="Invitation not found or already processed")
         
+        # Mark related notifications as read
+        try:
+            client = supabase_admin if supabase_admin else supabase
+            if client:
+                # Find and mark notifications related to this invitation
+                client.table("notifications").update({
+                    "read": True
+                }).eq("user_id", user_id).eq("type", "group_invitation").like("link", f"%invitation={invitation_id}%").execute()
+                logging.info(f"✅ Marked related notifications as read")
+        except Exception as notif_update_err:
+            logging.warning(f"⚠️ Could not update notifications: {notif_update_err}")
+        
         return JSONResponse(content={"success": True, "message": "Invitation rejected"})
         
     except HTTPException:
@@ -6578,6 +6605,146 @@ async def reject_invitation(
     except Exception as e:
         logging.error(f"Error rejecting invitation: {e}")
         raise HTTPException(status_code=500, detail=f"Error rejecting invitation: {str(e)}")
+
+
+@app.post("/api/notifications/{notification_id}/approve")
+async def approve_from_notification(
+    notification_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Approve a request directly from a notification.
+    Works for both group invitations and group change requests.
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        client = supabase_admin if supabase_admin else supabase
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+        
+        # Get notification
+        notif_result = client.table("notifications").select("*").eq("id", notification_id).eq("user_id", user_id).execute()
+        if not notif_result.data:
+            raise HTTPException(status_code=404, detail="Notification not found")
+        
+        notification = notif_result.data[0]
+        notif_type = notification.get("type")
+        link = notification.get("link", "")
+        
+        # Extract IDs from link
+        import re
+        
+        if notif_type == "group_invitation":
+            # Extract invitation_id or group_id from link
+            invitation_match = re.search(r'invitation=([^&]+)', link)
+            if invitation_match:
+                invitation_id = invitation_match.group(1)
+                # Use existing accept endpoint logic
+                return await accept_invitation(invitation_id, current_user)
+            else:
+                # Try to find by group_id
+                group_match = re.search(r'group=([^&]+)', link)
+                if group_match:
+                    group_id = group_match.group(1)
+                    # Find invitation by group
+                    inv_result = client.table("group_invitations").select("id").eq("group_id", group_id).eq("invitee_user_id", user_id).eq("status", "pending").order("created_at", desc=True).limit(1).execute()
+                    if inv_result.data:
+                        invitation_id = inv_result.data[0]["id"]
+                        return await accept_invitation(invitation_id, current_user)
+            
+            raise HTTPException(status_code=404, detail="Invitation not found")
+        
+        elif notif_type == "group_change_request":
+            # Extract request_id from link
+            request_match = re.search(r'change_request=([^&]+)', link)
+            if request_match:
+                request_id = request_match.group(1)
+                # Use existing approve endpoint logic
+                return await approve_group_change_request(request_id, current_user)
+            
+            raise HTTPException(status_code=404, detail="Change request not found")
+        
+        else:
+            raise HTTPException(status_code=400, detail=f"Notification type '{notif_type}' does not support approval")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error approving from notification: {e}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/api/notifications/{notification_id}/reject")
+async def reject_from_notification(
+    notification_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Reject a request directly from a notification.
+    Works for both group invitations and group change requests.
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        client = supabase_admin if supabase_admin else supabase
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+        
+        # Get notification
+        notif_result = client.table("notifications").select("*").eq("id", notification_id).eq("user_id", user_id).execute()
+        if not notif_result.data:
+            raise HTTPException(status_code=404, detail="Notification not found")
+        
+        notification = notif_result.data[0]
+        notif_type = notification.get("type")
+        link = notification.get("link", "")
+        
+        # Extract IDs from link
+        import re
+        
+        if notif_type == "group_invitation":
+            # Extract invitation_id or group_id from link
+            invitation_match = re.search(r'invitation=([^&]+)', link)
+            if invitation_match:
+                invitation_id = invitation_match.group(1)
+                # Use existing reject endpoint logic
+                return await reject_invitation(invitation_id, current_user)
+            else:
+                # Try to find by group_id
+                group_match = re.search(r'group=([^&]+)', link)
+                if group_match:
+                    group_id = group_match.group(1)
+                    # Find invitation by group
+                    inv_result = client.table("group_invitations").select("id").eq("group_id", group_id).eq("invitee_user_id", user_id).eq("status", "pending").order("created_at", desc=True).limit(1).execute()
+                    if inv_result.data:
+                        invitation_id = inv_result.data[0]["id"]
+                        return await reject_invitation(invitation_id, current_user)
+            
+            raise HTTPException(status_code=404, detail="Invitation not found")
+        
+        elif notif_type == "group_change_request":
+            # Extract request_id from link
+            request_match = re.search(r'change_request=([^&]+)', link)
+            if request_match:
+                request_id = request_match.group(1)
+                # Use existing reject endpoint logic
+                return await reject_group_change_request(request_id, current_user)
+            
+            raise HTTPException(status_code=404, detail="Change request not found")
+        
+        else:
+            raise HTTPException(status_code=400, detail=f"Notification type '{notif_type}' does not support rejection")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error rejecting from notification: {e}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
 @app.delete("/api/groups/{group_id}")

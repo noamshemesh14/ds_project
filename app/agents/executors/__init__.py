@@ -7,6 +7,7 @@ from .request_handler import RequestHandler
 from .preference_updater import PreferenceUpdater
 from .block_mover import BlockMover
 from .block_resizer import BlockResizer
+from .block_creator import BlockCreator
 
 __all__ = [
     "CourseManager",
@@ -18,4 +19,5 @@ __all__ = [
     "PreferenceUpdater",
     "BlockMover",
     "BlockResizer",
+    "BlockCreator",
 ]
