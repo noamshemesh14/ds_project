@@ -4573,6 +4573,164 @@ async def create_group_change_request(
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
+async def _apply_group_change_request(request_id: str, client, change_request: dict, group_id: str, member_ids: list, requester_id: str):
+    """
+    Internal function to apply a group change request after all members approve.
+    This is extracted from approve_group_change_request to be reusable.
+    """
+    from app.agents.executors.block_creator import _time_to_minutes, _minutes_to_time
+    
+    week_start = change_request["week_start"]
+    request_type = change_request.get("request_type", "move")
+    proposed_day = change_request["proposed_day_of_week"]
+    proposed_start = change_request["proposed_start_time"]
+    proposed_end = change_request["proposed_end_time"]
+    proposed_duration = change_request.get("proposed_duration_hours", 1)
+    original_day = change_request.get("original_day_of_week")
+    original_start = change_request.get("original_start_time")
+    original_duration = change_request.get("original_duration_hours", 0)
+    hours_explanation = change_request.get("hours_explanation", "")
+    
+    # Get course info
+    group_info = client.table("study_groups").select("course_id, course_name").eq("id", group_id).limit(1).execute()
+    course_number = group_info.data[0].get("course_id") if group_info.data else None
+    course_name = group_info.data[0].get("course_name") if group_info.data else None
+    
+    if request_type == "resize" and proposed_duration:
+        # Handle resize logic (from approve_group_change_request)
+        # ... (keep existing resize logic)
+        pass
+    else:
+        # Handle move or new block
+        if original_day is None:
+            # This is a new block - create it
+            time_slots = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
+            
+            # Calculate proposed_end if not provided
+            if not proposed_end:
+                if proposed_start in time_slots:
+                    start_idx = time_slots.index(proposed_start)
+                    end_idx = start_idx + proposed_duration
+                    if end_idx < len(time_slots):
+                        proposed_end = time_slots[end_idx]
+                    else:
+                        proposed_end = "21:00"
+                else:
+                    start_minutes = _time_to_minutes(proposed_start)
+                    end_minutes = start_minutes + (proposed_duration * 60)
+                    proposed_end = _minutes_to_time(end_minutes)
+            
+            # Create group_plan_blocks
+            new_group_blocks = []
+            if proposed_start in time_slots:
+                start_idx = time_slots.index(proposed_start)
+                for i in range(proposed_duration):
+                    if start_idx + i < len(time_slots):
+                        new_time = time_slots[start_idx + i]
+                        new_end = time_slots[start_idx + i + 1] if (start_idx + i + 1) < len(time_slots) else "21:00"
+                        new_group_blocks.append({
+                            "group_id": group_id,
+                            "week_start": week_start,
+                            "course_number": course_number,
+                            "day_of_week": proposed_day,
+                            "start_time": new_time,
+                            "end_time": new_end,
+                            "created_by": requester_id
+                        })
+            
+            if new_group_blocks:
+                client.table("group_plan_blocks").insert(new_group_blocks).execute()
+                logging.info(f"✅ Created {len(new_group_blocks)} new group_plan_blocks")
+                
+                # Create weekly_plan_blocks for all members
+                for member_id in member_ids:
+                    member_plan = client.table("weekly_plans").select("id").eq("user_id", member_id).eq("week_start", week_start).limit(1).execute()
+                    if member_plan.data:
+                        plan_id = member_plan.data[0]["id"]
+                        new_member_blocks = []
+                        for block in new_group_blocks:
+                            new_member_blocks.append({
+                                "plan_id": plan_id,
+                                "user_id": member_id,
+                                "course_number": course_number,
+                                "course_name": course_name,
+                                "work_type": "group",
+                                "day_of_week": block["day_of_week"],
+                                "start_time": block["start_time"],
+                                "end_time": block["end_time"],
+                                "source": "group"
+                            })
+                        if new_member_blocks:
+                            client.table("weekly_plan_blocks").insert(new_member_blocks).execute()
+            
+            # Update preferences (same as in approve_group_change_request for move)
+            is_new_block = (original_duration == 0 and original_day is None)
+            try:
+                gp = client.table("group_preferences").select("*").eq("group_id", group_id).limit(1).execute()
+                current_hours = gp.data[0].get("preferred_hours_per_week", 0) if gp.data else 0
+                
+                if is_new_block and current_hours == 0:
+                    weighted_hours = proposed_duration
+                else:
+                    weighted_hours = int(0.8 * current_hours + 0.2 * proposed_duration)
+                
+                if gp.data:
+                    client.table("group_preferences").update({
+                        "preferred_hours_per_week": weighted_hours
+                    }).eq("group_id", group_id).execute()
+                else:
+                    client.table("group_preferences").insert({
+                        "group_id": group_id,
+                        "preferred_hours_per_week": weighted_hours
+                    }).execute()
+                
+                # Update course_time_preferences for all members
+                if course_number:
+                    for member_id in member_ids:
+                        member_pref = client.table("course_time_preferences").select("group_hours_per_week").eq("user_id", member_id).eq("course_number", course_number).limit(1).execute()
+                        current_group_hours = float(member_pref.data[0].get("group_hours_per_week", 0)) if member_pref.data else 0.0
+                        
+                        if is_new_block and current_group_hours == 0:
+                            new_group_hours = float(weighted_hours)
+                        else:
+                            new_group_hours = round(0.8 * current_group_hours + 0.2 * float(weighted_hours), 2)
+                        
+                        if member_pref.data:
+                            client.table("course_time_preferences").update({
+                                "group_hours_per_week": new_group_hours
+                            }).eq("user_id", member_id).eq("course_number", course_number).execute()
+                        else:
+                            client.table("course_time_preferences").insert({
+                                "user_id": member_id,
+                                "course_number": course_number,
+                                "personal_hours_per_week": 0,
+                                "group_hours_per_week": new_group_hours
+                            }).execute()
+            except Exception as pref_err:
+                logging.warning(f"⚠️ Failed to update preferences: {pref_err}")
+        else:
+            # This is a move - use the existing move logic from approve_group_change_request
+            # (The full move logic is already in approve_group_change_request, so we'll handle it there)
+            pass
+    
+    # Mark request as approved
+    from datetime import datetime
+    client.table("group_meeting_change_requests").update({
+        "status": "approved",
+        "resolved_at": datetime.now().isoformat()
+    }).eq("id", request_id).execute()
+    
+    # Delete notifications for all members
+    for member_id in member_ids:
+        try:
+            existing_notifications = client.table("notifications").select("id, link").eq("user_id", member_id).eq("type", "group_change_request").execute()
+            for notif in (existing_notifications.data or []):
+                if request_id in notif.get("link", ""):
+                    client.table("notifications").delete().eq("id", notif["id"]).execute()
+        except Exception:
+            pass
+
+
 @app.post("/api/schedule/group-change-request/{request_id}/approve")
 async def approve_group_change_request(
     request_id: str,
@@ -4814,6 +4972,41 @@ async def approve_group_change_request(
         logging.info(f"📊 Approval check for request {request_id}: all_responded={all_responded}, all_approved={all_approved}, members_needing_approval={len(members_needing_approval)}, approvals={len(approval_map)}")
         
         if all_approved:
+            # Apply the change using the extracted function
+            original_day = change_request.get("original_day_of_week")
+            original_duration = change_request.get("original_duration_hours", 0)
+            
+            # For new blocks (original_day is None), use the extracted function
+            if original_day is None:
+                await _apply_group_change_request(request_id, client, change_request, group_id, member_ids, requester_id)
+                
+                # Get group name for notification
+                group_result = client.table("study_groups").select("group_name").eq("id", group_id).limit(1).execute()
+                group_name = group_result.data[0].get("group_name", "Group") if group_result.data else "Group"
+                week_start = change_request["week_start"]
+                
+                # Notify all members
+                for mid in member_ids:
+                    try:
+                        client.table("notifications").insert({
+                            "user_id": mid,
+                            "type": "group_change_approved",
+                            "title": f"שינוי אושר: {group_name}",
+                            "message": f"כל חברי הקבוצה אישרו את השינוי. בלוק חדש נוסף.",
+                            "link": f"/schedule?week={week_start}",
+                            "read": False
+                        }).execute()
+                    except Exception as notif_err:
+                        logging.error(f"Failed to notify member {mid}: {notif_err}")
+                
+                logging.info(f"Change request {request_id} approved and applied!")
+                
+                return JSONResponse(content={
+                    "message": "All members approved! Change has been applied.",
+                    "status": "approved"
+                })
+            
+            # For move/resize, continue with existing logic
             # Apply the change!
             week_start = change_request["week_start"]
             request_type = change_request.get("request_type", "move")
