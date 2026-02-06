@@ -3410,6 +3410,68 @@ async def chat(
 
 
 # Manual Schedule Editing & Group Change Request endpoints
+@app.post("/api/schedule/block/create")
+async def create_schedule_block(
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Create a new study block directly (without LLM).
+    For group blocks, requires exact group_name match.
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        data = await request.json()
+        course_name = data.get("course_name")
+        course_number = data.get("course_number")
+        day_of_week = data.get("day_of_week")
+        start_time = data.get("start_time")
+        duration = data.get("duration", 1)
+        work_type = data.get("work_type", "personal")
+        week_start = data.get("week_start")
+        group_name = data.get("group_name")
+        
+        if not course_name and not course_number:
+            raise HTTPException(status_code=400, detail="course_name or course_number is required")
+        if day_of_week is None:
+            raise HTTPException(status_code=400, detail="day_of_week is required")
+        if not start_time:
+            raise HTTPException(status_code=400, detail="start_time is required")
+        
+        # For group blocks, group_name is required
+        if work_type == "group" and not group_name:
+            raise HTTPException(status_code=400, detail="group_name is required for group blocks")
+        
+        # Import and use BlockCreator executor directly
+        from app.agents.executors.block_creator import BlockCreator
+        block_creator = BlockCreator()
+        
+        result = await block_creator.execute(
+            user_id=user_id,
+            course_number=course_number,
+            course_name=course_name,
+            day_of_week=day_of_week,
+            start_time=start_time,
+            duration=duration,
+            work_type=work_type,
+            week_start=week_start,
+            group_name=group_name
+        )
+        
+        return JSONResponse(content=result)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error creating block: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error creating block: {str(e)}")
+
+
 @app.post("/api/schedule/block/move")
 async def move_schedule_block(
     request: Request,
@@ -4986,6 +5048,9 @@ async def approve_group_change_request(
                     # Get or create group preferences
                     gp = client.table("group_preferences").select("*").eq("group_id", group_id).limit(1).execute()
                     
+                    # Check if this is a new block (original_duration = 0 and original_day is None)
+                    is_new_block = (original_duration == 0 and original_day is None)
+                    
                     if gp.data:
                         current_history = gp.data[0].get("hours_change_history", []) or []
                         if not isinstance(current_history, list):
@@ -5002,17 +5067,23 @@ async def approve_group_change_request(
                             history_entry["reason"] = hours_explanation
                         current_history.append(history_entry)
                         
-                        # Calculate weighted average: 80% existing, 20% new
                         current_hours = gp.data[0].get("preferred_hours_per_week", 4)
-                        weighted_hours = int(0.8 * current_hours + 0.2 * proposed_duration)
+                        
+                        # If this is a new block AND there are no existing group hours (current_hours = 0),
+                        # use 100% of the new hours instead of weighted average
+                        if is_new_block and current_hours == 0:
+                            weighted_hours = proposed_duration
+                            logging.info(f"✅ Updated group_preferences: {current_hours}h -> {weighted_hours}h (100% - first group block)")
+                        else:
+                            # Calculate weighted average: 80% existing, 20% new
+                            weighted_hours = int(0.8 * current_hours + 0.2 * proposed_duration)
+                            logging.info(f"✅ Updated group_preferences: {current_hours}h -> {weighted_hours}h (weighted average: 80% existing, 20% new)")
                         
                         client.table("group_preferences").update({
                             "preferred_hours_per_week": weighted_hours,
                             "hours_change_history": current_history,
                             "updated_at": datetime.now().isoformat()
                         }).eq("group_id", group_id).execute()
-                        
-                        logging.info(f"✅ Updated group_preferences: {current_hours}h -> {weighted_hours}h (weighted average: 80% existing, 20% new)")
                     else:
                         # Create new group preferences
                         history_entry = {
@@ -5025,13 +5096,14 @@ async def approve_group_change_request(
                             history_entry["reason"] = hours_explanation
                         
                         # For new group preferences, use proposed_duration directly (no existing value to average)
+                        # This is always 100% since there are no existing preferences
                         client.table("group_preferences").insert({
                             "group_id": group_id,
                             "preferred_hours_per_week": proposed_duration,
                             "hours_change_history": [history_entry]
                         }).execute()
                         
-                        logging.info(f"✅ Created group_preferences: {proposed_duration}h per week (new group)")
+                        logging.info(f"✅ Created group_preferences: {proposed_duration}h per week (new group - 100%)")
                         weighted_hours = proposed_duration
                     
                     # IMPORTANT: Also update course_time_preferences.group_hours_per_week for all members
@@ -5053,15 +5125,27 @@ async def approve_group_change_request(
                                         current_personal_hours = float(member_pref_result.data[0].get("personal_hours_per_week", 0))
                                         current_group_hours = float(member_pref_result.data[0].get("group_hours_per_week", 0))
                                         
-                                        # Apply weighted average: 80% existing, 20% new group hours (keep as decimal)
-                                        new_group_hours = round(0.8 * current_group_hours + 0.2 * float(weighted_hours), 2)
+                                        # Check if this is a new block (original_duration = 0 and original_day is None)
+                                        # Use the same is_new_block variable from above (it's in the resize section)
+                                        # For move section, we need to check again
+                                        original_day_for_check = change_request.get("original_day_of_week")
+                                        original_duration_for_check = change_request.get("original_duration_hours", 0)
+                                        is_new_block_for_member = (original_duration_for_check == 0 and original_day_for_check is None)
                                         
-                                        # Update with weighted average
+                                        # If this is a new block AND there are no existing group hours (current_group_hours = 0),
+                                        # use 100% of the new hours instead of weighted average
+                                        if is_new_block_for_member and current_group_hours == 0:
+                                            new_group_hours = float(weighted_hours)
+                                            logging.info(f"✅ Updated course_time_preferences for member {member_id}, course {course_number}: group_hours={new_group_hours}h (100% - first group block)")
+                                        else:
+                                            # Apply weighted average: 80% existing, 20% new group hours (keep as decimal)
+                                            new_group_hours = round(0.8 * current_group_hours + 0.2 * float(weighted_hours), 2)
+                                            logging.info(f"✅ Updated course_time_preferences for member {member_id}, course {course_number}: group_hours={new_group_hours}h (weighted average)")
+                                        
+                                        # Update with weighted average or 100%
                                         client.table("course_time_preferences").update({
                                             "group_hours_per_week": new_group_hours
                                         }).eq("user_id", member_id).eq("course_number", course_number).execute()
-                                        
-                                        logging.info(f"✅ Updated course_time_preferences for member {member_id}, course {course_number}: group_hours={new_group_hours}h (weighted average)")
                                     else:
                                         # Create new entry with default personal hours and new group hours
                                         # Get course credit_points to calculate default personal hours
@@ -5392,6 +5476,129 @@ async def approve_group_change_request(
                             logging.error(f"❌ Failed to create weekly_plan_blocks for member {mid}: proposed_start={proposed_start}, proposed_duration={proposed_duration}")
                     else:
                         logging.warning(f"⚠️ No plan found for member {mid} for week {week_start}")
+            
+            # Update group preferences and course_time_preferences for move/add new block
+            # Check if this is a new block (original_duration = 0 and original_day is None)
+            is_new_block_move = (original_duration == 0 and original_day is None)
+            
+            # ALWAYS update group preferences with new hours (even without explanation)
+            # This affects future schedule generation
+            try:
+                # Get or create group preferences
+                gp = client.table("group_preferences").select("*").eq("group_id", group_id).limit(1).execute()
+                
+                if gp.data:
+                    current_history = gp.data[0].get("hours_change_history", []) or []
+                    if not isinstance(current_history, list):
+                        current_history = []
+                    
+                    # Add to history
+                    history_entry = {
+                        "date": datetime.now().isoformat(),
+                        "old_hours": original_duration,
+                        "new_hours": proposed_duration,
+                        "approved_by": member_ids
+                    }
+                    if hours_explanation:
+                        history_entry["reason"] = hours_explanation
+                    current_history.append(history_entry)
+                    
+                    current_hours = gp.data[0].get("preferred_hours_per_week", 4)
+                    
+                    # If this is a new block AND there are no existing group hours (current_hours = 0),
+                    # use 100% of the new hours instead of weighted average
+                    if is_new_block_move and current_hours == 0:
+                        weighted_hours = proposed_duration
+                        logging.info(f"✅ Updated group_preferences: {current_hours}h -> {weighted_hours}h (100% - first group block)")
+                    else:
+                        # Calculate weighted average: 80% existing, 20% new
+                        weighted_hours = int(0.8 * current_hours + 0.2 * proposed_duration)
+                        logging.info(f"✅ Updated group_preferences: {current_hours}h -> {weighted_hours}h (weighted average: 80% existing, 20% new)")
+                    
+                    client.table("group_preferences").update({
+                        "preferred_hours_per_week": weighted_hours,
+                        "hours_change_history": current_history,
+                        "updated_at": datetime.now().isoformat()
+                    }).eq("group_id", group_id).execute()
+                else:
+                    # Create new group preferences
+                    history_entry = {
+                        "date": datetime.now().isoformat(),
+                        "old_hours": original_duration,
+                        "new_hours": proposed_duration,
+                        "approved_by": member_ids
+                    }
+                    if hours_explanation:
+                        history_entry["reason"] = hours_explanation
+                    
+                    # For new group preferences, use proposed_duration directly (no existing value to average)
+                    # This is always 100% since there are no existing preferences
+                    client.table("group_preferences").insert({
+                        "group_id": group_id,
+                        "preferred_hours_per_week": proposed_duration,
+                        "hours_change_history": [history_entry]
+                    }).execute()
+                    
+                    logging.info(f"✅ Created group_preferences: {proposed_duration}h per week (new group - 100%)")
+                    weighted_hours = proposed_duration
+                
+                # IMPORTANT: Also update course_time_preferences.group_hours_per_week for all members
+                # This ensures consistency between group_preferences and course_time_preferences
+                try:
+                    # Get course_number from group
+                    group_info = client.table("study_groups").select("course_id").eq("id", group_id).limit(1).execute()
+                    if group_info.data:
+                        course_number = group_info.data[0].get("course_id")
+                        
+                        # Update course_time_preferences for all members
+                        for member_id in member_ids:
+                            try:
+                                # Get current course_time_preferences for this member
+                                member_pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", member_id).eq("course_number", course_number).limit(1).execute()
+                                
+                                if member_pref_result.data:
+                                    # Convert to float to handle decimal values
+                                    current_personal_hours = float(member_pref_result.data[0].get("personal_hours_per_week", 0))
+                                    current_group_hours = float(member_pref_result.data[0].get("group_hours_per_week", 0))
+                                    
+                                    # If this is a new block AND there are no existing group hours (current_group_hours = 0),
+                                    # use 100% of the new hours instead of weighted average
+                                    if is_new_block_move and current_group_hours == 0:
+                                        new_group_hours = float(weighted_hours)
+                                        logging.info(f"✅ Updated course_time_preferences for member {member_id}, course {course_number}: group_hours={new_group_hours}h (100% - first group block)")
+                                    else:
+                                        # Apply weighted average: 80% existing, 20% new group hours (keep as decimal)
+                                        new_group_hours = round(0.8 * current_group_hours + 0.2 * float(weighted_hours), 2)
+                                        logging.info(f"✅ Updated course_time_preferences for member {member_id}, course {course_number}: group_hours={new_group_hours}h (weighted average)")
+                                    
+                                    # Update with weighted average or 100%
+                                    client.table("course_time_preferences").update({
+                                        "group_hours_per_week": new_group_hours
+                                    }).eq("user_id", member_id).eq("course_number", course_number).execute()
+                                else:
+                                    # Create new entry with default personal hours and new group hours
+                                    # Get course credit_points to calculate default personal hours
+                                    course_result = client.table("courses").select("credit_points").eq("user_id", member_id).eq("course_number", course_number).limit(1).execute()
+                                    credit_points = course_result.data[0].get("credit_points") if course_result.data else 3
+                                    total_hours = credit_points * 3
+                                    default_personal_hours = max(1, int(total_hours * 0.5))
+                                    
+                                    client.table("course_time_preferences").insert({
+                                        "user_id": member_id,
+                                        "course_number": course_number,
+                                        "personal_hours_per_week": default_personal_hours,
+                                        "group_hours_per_week": weighted_hours
+                                    }).execute()
+                                    
+                                    logging.info(f"✅ Created course_time_preferences for member {member_id}, course {course_number}: personal={default_personal_hours}h, group={weighted_hours}h")
+                            except Exception as member_err:
+                                logging.warning(f"⚠️ Failed to update course_time_preferences for member {member_id}: {member_err}")
+                except Exception as course_pref_err:
+                    logging.warning(f"⚠️ Failed to update course_time_preferences for group members: {course_pref_err}")
+                
+                logging.info(f"✅ Updated group preferences for group {group_id}: {original_duration}h -> {proposed_duration}h per week")
+            except Exception as gp_err:
+                logging.error(f"Failed to update group preferences: {gp_err}")
             
             # Mark request as approved
             client.table("group_meeting_change_requests").update({

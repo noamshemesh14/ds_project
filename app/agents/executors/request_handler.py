@@ -90,9 +90,9 @@ class RequestHandler:
                     else:
                         raise HTTPException(status_code=404, detail="Request not found")
             else:
-                # Try to find invitation by group_name or course_number
+                # Try to find invitation or change request by group_name or course_number
                 if group_name or course_number:
-                    logger.info(f"🔍 Searching for invitation by group_name={group_name}, course_number={course_number}")
+                    logger.info(f"🔍 Searching for invitation or change request by group_name={group_name}, course_number={course_number}")
                     
                     # Find groups matching the criteria
                     group_query = client.table("study_groups").select("id, group_name, course_id")
@@ -106,12 +106,20 @@ class RequestHandler:
                     if not groups_result.data:
                         raise HTTPException(status_code=404, detail=f"No group found matching: group_name={group_name}, course_number={course_number}")
                     
-                    # Try to find pending invitation for any of these groups
+                    # Try to find pending invitation or change request for any of these groups
                     for group in groups_result.data:
                         group_id = group["id"]
                         logger.info(f"🔍 Checking group {group_id} ({group.get('group_name')})")
                         
-                        # Try by user_id
+                        # First, try to find pending change request
+                        change_req_result = client.table("group_meeting_change_requests").select("id").eq("group_id", group_id).eq("status", "pending").order("created_at", desc=True).limit(1).execute()
+                        
+                        if change_req_result.data:
+                            change_request_id = change_req_result.data[0]["id"]
+                            logger.info(f"✅ Found pending change request: {change_request_id} for group {group_id}")
+                            break
+                        
+                        # If no change request, try to find pending invitation
                         inv_result = client.table("group_invitations").select("id").eq("group_id", group_id).eq("invitee_user_id", user_id).eq("status", "pending").order("created_at", desc=True).limit(1).execute()
                         
                         if inv_result.data:
@@ -119,8 +127,8 @@ class RequestHandler:
                             logger.info(f"✅ Found pending invitation: {invitation_id} for group {group_id}")
                             break
                     
-                    if not invitation_id:
-                        raise HTTPException(status_code=404, detail=f"No pending invitation found for group matching: group_name={group_name}, course_number={course_number}")
+                    if not invitation_id and not change_request_id:
+                        raise HTTPException(status_code=404, detail=f"No pending invitation or change request found for group matching: group_name={group_name}, course_number={course_number}")
             
             # Handle invitation
             if invitation_id:

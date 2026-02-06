@@ -47,6 +47,7 @@ class BlockCreator:
         duration: Optional[int] = 1,
         work_type: Optional[str] = "personal",
         week_start: Optional[str] = None,
+        group_name: Optional[str] = None,
         user_prompt: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
@@ -117,18 +118,21 @@ class BlockCreator:
                     course_name = "Study Block"
             
             # Get course_number if not provided (try to find by course_name)
-            if not course_number:
-                catalog_result = client.table("course_catalog").select("course_number").ilike("course_name", f"%{course_name}%").limit(1).execute()
-                if catalog_result.data:
-                    course_number = catalog_result.data[0].get("course_number")
-                else:
-                    # Check user's courses
-                    user_courses = client.table("courses").select("course_number").eq("user_id", user_id).ilike("course_name", f"%{course_name}%").limit(1).execute()
-                    if user_courses.data:
-                        course_number = user_courses.data[0].get("course_number")
+            # If group_name is provided, we'll get course_number from the group later
+            if not course_number and not group_name:
+                if course_name:
+                    catalog_result = client.table("course_catalog").select("course_number").ilike("course_name", f"%{course_name}%").limit(1).execute()
+                    if catalog_result.data:
+                        course_number = catalog_result.data[0].get("course_number")
+                    else:
+                        # Check user's courses
+                        user_courses = client.table("courses").select("course_number").eq("user_id", user_id).ilike("course_name", f"%{course_name}%").limit(1).execute()
+                        if user_courses.data:
+                            course_number = user_courses.data[0].get("course_number")
             
-            if not course_number:
-                raise HTTPException(status_code=400, detail=f"Could not find course number for '{course_name}'. Please provide course_number.")
+            # Only require course_number if we don't have group_name (we'll get it from group)
+            if not course_number and not group_name:
+                raise HTTPException(status_code=400, detail=f"Could not find course number for '{course_name}'. Please provide course_number or group_name.")
             
             # Normalize start_time format
             time_slots = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
@@ -227,21 +231,66 @@ class BlockCreator:
                 logger.info(f"📋 Creating group block - will create change request")
                 
                 # Find the group_id for this course
-                group_members_result = client.table("group_members").select("group_id").eq("user_id", user_id).eq("status", "approved").execute()
-                user_group_ids = [gm["group_id"] for gm in (group_members_result.data or [])]
-                
-                # Find group that matches this course
+                # First, try to find by group_name if provided (EXACT MATCH for UI)
                 group_id = None
-                for gid in user_group_ids:
-                    group_result = client.table("study_groups").select("course_id, course_number").eq("id", gid).limit(1).execute()
+                if group_name:
+                    # For UI, use exact match (not ilike) - trim whitespace for comparison
+                    group_name_trimmed = group_name.strip()
+                    group_result = client.table("study_groups").select("id, course_id, course_name, group_name").eq("group_name", group_name_trimmed).limit(1).execute()
+                    
+                    # If exact match not found, try case-insensitive search
+                    if not group_result.data:
+                        all_groups = client.table("study_groups").select("id, course_id, course_name, group_name").execute()
+                        for group in (all_groups.data or []):
+                            if group.get("group_name", "").strip() == group_name_trimmed:
+                                group_result.data = [group]
+                                break
+                    
                     if group_result.data:
-                        group_course = group_result.data[0].get("course_number") or group_result.data[0].get("course_id")
-                        if str(group_course) == str(course_number):
-                            group_id = gid
-                            break
+                        # Verify user is a member of this group
+                        member_check = client.table("group_members").select("id").eq("group_id", group_result.data[0]["id"]).eq("user_id", user_id).eq("status", "approved").execute()
+                        if member_check.data:
+                            group_id = group_result.data[0]["id"]
+                            # Update course_number from group if not provided
+                            if not course_number:
+                                course_number = group_result.data[0].get("course_id")
+                            logger.info(f"✅ Found group by exact name match: {group_id}")
+                        else:
+                            raise HTTPException(status_code=403, detail=f"You are not a member of group '{group_name_trimmed}'")
+                    else:
+                        raise HTTPException(status_code=404, detail=f"Group '{group_name_trimmed}' not found. Please check the group name spelling.")
+                
+                # If not found by name, try to find by course_name or course_number
+                if not group_id:
+                    group_members_result = client.table("group_members").select("group_id").eq("user_id", user_id).eq("status", "approved").execute()
+                    user_group_ids = [gm["group_id"] for gm in (group_members_result.data or [])]
+                    
+                    # Find group that matches this course
+                    for gid in user_group_ids:
+                        group_result = client.table("study_groups").select("id, course_id, course_name").eq("id", gid).limit(1).execute()
+                        if group_result.data:
+                            group_course_id = group_result.data[0].get("course_id")
+                            group_course_name = group_result.data[0].get("course_name", "")
+                            
+                            # Match by course_number (if provided) or course_name
+                            if course_number and str(group_course_id) == str(course_number):
+                                group_id = gid
+                                break
+                            elif course_name and group_course_name and course_name.lower() in group_course_name.lower():
+                                group_id = gid
+                                # Update course_number from group
+                                if not course_number:
+                                    course_number = group_course_id
+                                break
                 
                 if not group_id:
-                    raise HTTPException(status_code=404, detail=f"Group not found for course {course_number}. You must be a member of a group for this course.")
+                    error_msg = f"Group not found"
+                    if group_name:
+                        error_msg += f" for group '{group_name}'"
+                    if course_name:
+                        error_msg += f" for course '{course_name}'"
+                    error_msg += ". You must be a member of a group for this course."
+                    raise HTTPException(status_code=404, detail=error_msg)
                 
                 # Extract reason from user_prompt if available
                 reason = ""
