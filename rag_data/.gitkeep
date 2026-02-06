@@ -1,0 +1,7 @@
+# Place your RAG data files here:
+# - unified_catalogs_over_years.txt
+# - unified_attachments.txt
+# - unified_course_description.txt
+# - dds_courses_details.csv
+# - all_faculties_courses_details.csv
+# (students_grade_sheet.csv is skipped by default - PII)

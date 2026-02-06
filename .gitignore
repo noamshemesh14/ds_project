@@ -36,6 +36,10 @@ Thumbs.db
 .env
 .env.local
 
+# RAG data (keep rag_data/.gitkeep; do not commit large data files)
+rag_data/*.txt
+rag_data/*.csv
+
 # Logs
 *.log
 
