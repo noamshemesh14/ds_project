@@ -1,5 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.requests import Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -25,6 +25,7 @@ from app.models import (
 from app.parser import TranscriptParser
 from app.supabase_client import supabase, supabase_admin
 from app.auth import get_current_user, get_optional_user
+from app.agents.supervisor import Supervisor
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -932,6 +933,36 @@ async def signup(request: SignUpRequest):
                 raise HTTPException(status_code=400, detail="Email already registered. Please sign in instead.")
         
         raise HTTPException(status_code=400, detail=f"Error signing up: {error_msg}")
+
+
+@app.post("/api/auth/login")
+async def login(request: SignInRequest):
+    """
+    Login endpoint for terminal/CLI usage
+    Returns access_token for API authentication
+    """
+    try:
+        response = supabase.auth.sign_in_with_password({
+            "email": request.email,
+            "password": request.password,
+        })
+        
+        if response.user and response.session:
+            return JSONResponse(content={
+                "message": "Login successful",
+                "access_token": response.session.access_token,
+                "user_id": response.user.id
+            })
+        else:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+    except Exception as e:
+        error_str = str(e)
+        logging.error(f"Login error: {error_str}")
+        
+        if "invalid" in error_str or "credentials" in error_str or "password" in error_str:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        
+        raise HTTPException(status_code=401, detail=f"Error logging in: {str(e)}")
 
 
 @app.post("/api/auth/signin")
@@ -2489,6 +2520,93 @@ async def get_weekly_plan_llm_status(
     except Exception as e:
         logging.error(f"Error fetching LLM status: {e}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/api/weekly-schedule")
+async def get_weekly_schedule(
+    date: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get weekly schedule for terminal/CLI usage
+    Uses schedule_retriever executor
+    Returns schedule data for a specific week (defaults to current week)
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        # Use schedule_retriever executor
+        from app.agents.executors.schedule_retriever import ScheduleRetriever
+        retriever = ScheduleRetriever()
+        result = await retriever.execute(user_id=user_id, date=date)
+        
+        return JSONResponse(content=result)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error retrieving weekly schedule: {e}")
+        import traceback
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "error": str(e),
+                "week_start": None,
+                "blocks": []
+            }
+        )
+
+
+@app.post("/api/execute")
+async def execute_agent(
+    request_data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Main agent execution endpoint for terminal/CLI usage
+    Routes user prompt to appropriate executor via supervisor
+    """
+    try:
+        user_prompt = request_data.get("prompt", "")
+        if not user_prompt:
+            raise HTTPException(status_code=400, detail="Prompt is required")
+        
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        # Initialize supervisor and route task
+        supervisor = Supervisor()
+        result = await supervisor.route_task(
+            user_prompt=user_prompt,
+            user_id=user_id
+        )
+        
+        # Return pretty-printed JSON
+        return Response(
+            content=json.dumps(result, indent=2, ensure_ascii=False),
+            media_type="application/json"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error executing agent: {e}")
+        import traceback
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "error": str(e),
+                "response": None,
+                "steps": []
+            }
+        )
 
 
 @app.get("/api/weekly-plan/llm-debug")
