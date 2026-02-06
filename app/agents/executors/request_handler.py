@@ -241,7 +241,7 @@ class RequestHandler:
                 if is_approve:
                     logger.info(f"✅ Approving change request {change_request_id}")
                     
-                    # Record the approval
+                    # Record the approval first
                     try:
                         client.table("group_change_approvals").insert({
                             "request_id": change_request_id,
@@ -255,22 +255,58 @@ class RequestHandler:
                             "responded_at": "NOW()"
                         }).eq("request_id", change_request_id).eq("user_id", user_id).execute()
                     
-                    # Mark notification as read
-                    try:
-                        client.table("notifications").update({
-                            "read": True
-                        }).eq("user_id", user_id).eq("type", "group_change_request").like("link", f"%change_request={change_request_id}%").execute()
-                    except Exception as notif_err:
-                        logger.warning(f"Could not update notification: {notif_err}")
+                    # Now check if all members have approved
+                    # Get all group members (except requester)
+                    requester_id = change_request.get("requested_by")
+                    all_members_result = client.table("group_members").select("user_id").eq("group_id", group_id).eq("status", "approved").execute()
+                    member_ids = [m["user_id"] for m in (all_members_result.data or [])]
+                    members_needing_approval = [mid for mid in member_ids if mid != requester_id]
                     
-                    # Note: The actual change application happens when all members approve
-                    # This is handled by the approve_group_change_request endpoint
-                    # For now, we just record the approval
+                    # Get all approvals
+                    approvals = client.table("group_change_approvals").select("user_id, approved").eq("request_id", change_request_id).execute()
+                    approval_map = {a["user_id"]: a["approved"] for a in (approvals.data or [])}
                     
-                    return {
-                        "status": "success",
-                        "message": "Change request approved. Waiting for all members to approve."
-                    }
+                    # Check if all members (except requester) have approved
+                    all_responded = all(mid in approval_map for mid in members_needing_approval)
+                    all_approved = all_responded and all(approval_map.get(mid, False) for mid in members_needing_approval)
+                    
+                    logger.info(f"📊 Approval check: all_responded={all_responded}, all_approved={all_approved}, members_needing_approval={len(members_needing_approval)}, approvals={len(approval_map)}")
+                    
+                    if all_approved:
+                        # All members approved! Apply the change by calling the internal function from main.py
+                        logger.info(f"✅ All members approved! Applying change for request {change_request_id}")
+                        
+                        # Import the internal function from main.py
+                        from app.main import _apply_group_change_request
+                        
+                        # Call the function to apply the change
+                        await _apply_group_change_request(change_request_id, client, change_request, group_id, member_ids, requester_id)
+                        
+                        return {
+                            "status": "success",
+                            "message": "All members approved! Change has been applied.",
+                            "applied": True
+                        }
+                    else:
+                        # Not all members approved yet
+                        approved_count = len([a for a in approval_map.values() if a])
+                        total_needed = len(members_needing_approval)
+                        
+                        # Mark notification as read
+                        try:
+                            client.table("notifications").update({
+                                "read": True
+                            }).eq("user_id", user_id).eq("type", "group_change_request").like("link", f"%change_request={change_request_id}%").execute()
+                        except Exception as notif_err:
+                            logger.warning(f"Could not update notification: {notif_err}")
+                        
+                        return {
+                            "status": "success",
+                            "message": f"Your approval recorded. Waiting for other members ({approved_count}/{total_needed} approved).",
+                            "applied": False,
+                            "approved_count": approved_count,
+                            "total_needed": total_needed
+                        }
                 else:
                     logger.info(f"❌ Rejecting change request {change_request_id}")
                     
