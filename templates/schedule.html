@@ -872,6 +872,7 @@
                     <label for="weekStartDate">שבוע:</label>
                     <input type="date" id="weekStartDate">
                     <button class="btn btn-primary" onclick="generateWeeklyPlan()">⚙️ צור מערכת שבועית</button>
+                    <button class="btn btn-secondary" onclick="openAddBlockModal()">➕ הוסף בלוק חדש</button>
                     <button class="btn btn-secondary" onclick="openWeeklyConstraintModal()">➕ אילוץ שבועי</button>
                 </div>
 
@@ -3443,6 +3444,125 @@
             selectedBlockData = null;
         }
         
+        // Add Block Modal Functions
+        function openAddBlockModal() {
+            if (!token) {
+                alert('אנא התחבר כדי להוסיף בלוק חדש');
+                return;
+            }
+            const modal = document.getElementById('addBlockModal');
+            modal.classList.add('active');
+            document.getElementById('addBlockForm').reset();
+            document.getElementById('addBlockGroupNameGroup').style.display = 'none';
+            
+            // Set default week start to current week
+            const weekStartInput = document.getElementById('weekStartDate');
+            if (weekStartInput && weekStartInput.value) {
+                // Week is already set
+            }
+        }
+        
+        function closeAddBlockModal() {
+            const modal = document.getElementById('addBlockModal');
+            modal.classList.remove('active');
+            document.getElementById('addBlockForm').reset();
+        }
+        
+        // Show/hide group name field based on work type
+        document.addEventListener('DOMContentLoaded', function() {
+            const workTypeSelect = document.getElementById('addBlockWorkType');
+            const groupNameGroup = document.getElementById('addBlockGroupNameGroup');
+            const groupNameInput = document.getElementById('addBlockGroupName');
+            if (workTypeSelect && groupNameGroup && groupNameInput) {
+                workTypeSelect.addEventListener('change', function() {
+                    if (this.value === 'group') {
+                        groupNameGroup.style.display = 'block';
+                        groupNameInput.setAttribute('required', 'required');
+                    } else {
+                        groupNameGroup.style.display = 'none';
+                        groupNameInput.removeAttribute('required');
+                    }
+                });
+            }
+        });
+        
+        async function submitAddBlock() {
+            if (!token) {
+                alert('אנא התחבר כדי להוסיף בלוק חדש');
+                return;
+            }
+            
+            const courseName = document.getElementById('addBlockCourseName').value.trim();
+            const workType = document.getElementById('addBlockWorkType').value;
+            const groupName = document.getElementById('addBlockGroupName').value.trim();
+            const dayOfWeek = parseInt(document.getElementById('addBlockDay').value);
+            const startTime = document.getElementById('addBlockStartTime').value;
+            const duration = parseInt(document.getElementById('addBlockDuration').value);
+            const weekStartInput = document.getElementById('weekStartDate');
+            const weekStart = weekStartInput ? weekStartInput.value : null;
+            
+            if (!courseName) {
+                alert('אנא הזן שם קורס');
+                return;
+            }
+            
+            // For group blocks, group_name is required
+            if (workType === 'group' && !groupName) {
+                alert('אנא הזן שם קבוצה (חובה עבור עבודה קבוצתית)');
+                return;
+            }
+            
+            try {
+                // Call the direct API endpoint (no LLM, exact match)
+                const requestBody = {
+                    course_name: courseName,
+                    day_of_week: dayOfWeek,
+                    start_time: startTime,
+                    duration: duration,
+                    work_type: workType
+                };
+                
+                if (groupName) {
+                    requestBody.group_name = groupName;
+                }
+                
+                if (weekStart) {
+                    requestBody.week_start = weekStart;
+                }
+                
+                const response = await fetch('/api/schedule/block/create', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    if (result.status === 'success') {
+                        let message = '✅ הבלוק נוסף בהצלחה!';
+                        if (workType === 'group' && result.request_id) {
+                            message += '\n\nבקשה לשינוי נשלחה לחברי הקבוצה. נדרש אישור מכל החברים.';
+                        }
+                        alert(message);
+                        closeAddBlockModal();
+                        // Reload the schedule
+                        await loadWeeklyPlan();
+                    } else {
+                        alert(`❌ שגיאה: ${result.error || result.message || 'שגיאה לא ידועה'}`);
+                    }
+                } else {
+                    const error = await response.json();
+                    alert(`❌ שגיאה: ${error.detail || error.error || error.message || 'שגיאה לא ידועה'}`);
+                }
+            } catch (error) {
+                console.error('Error adding block:', error);
+                alert('❌ שגיאה בהוספת הבלוק. אנא נסה שוב.');
+            }
+        }
+        
         function switchEditBlockTab(tab) {
             const resizeTab = document.getElementById('editBlockTabResize');
             const moveTab = document.getElementById('editBlockTabMove');
@@ -3950,6 +4070,82 @@
                 <button class="btn-primary" onclick="submitBlockDurationChange()">💾 שמור שינויים</button>
                 <button class="btn-secondary" onclick="closeBlockEditModal()">ביטול</button>
             </div>
+        </div>
+    </div>
+    
+    <!-- Add Block Modal -->
+    <div id="addBlockModal" class="modal">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3>➕ הוסף בלוק לימוד חדש</h3>
+                <button class="close-btn" onclick="closeAddBlockModal()">×</button>
+            </div>
+            <form id="addBlockForm" onsubmit="event.preventDefault(); submitAddBlock();">
+                <div class="form-group">
+                    <label for="addBlockCourseName">שם הקורס *</label>
+                    <input type="text" id="addBlockCourseName" required placeholder="למשל: אלגוריתמים" />
+                </div>
+                
+                <div class="form-group">
+                    <label for="addBlockWorkType">סוג עבודה *</label>
+                    <select id="addBlockWorkType" required>
+                        <option value="personal">עבודה אישית</option>
+                        <option value="group">עבודה קבוצתית</option>
+                    </select>
+                </div>
+                
+                <div class="form-group" id="addBlockGroupNameGroup" style="display: none;">
+                    <label for="addBlockGroupName">שם הקבוצה *</label>
+                    <input type="text" id="addBlockGroupName" placeholder="למשל: קבוצת לימוד - אלגוריתמים" />
+                </div>
+                
+                <div class="form-group">
+                    <label for="addBlockDay">יום *</label>
+                    <select id="addBlockDay" required>
+                        <option value="0">ראשון</option>
+                        <option value="1">שני</option>
+                        <option value="2">שלישי</option>
+                        <option value="3">רביעי</option>
+                        <option value="4">חמישי</option>
+                        <option value="5">שישי</option>
+                        <option value="6">שבת</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="addBlockStartTime">שעת התחלה *</label>
+                    <select id="addBlockStartTime" required>
+                        <option value="08:00">08:00</option>
+                        <option value="09:00">09:00</option>
+                        <option value="10:00">10:00</option>
+                        <option value="11:00">11:00</option>
+                        <option value="12:00">12:00</option>
+                        <option value="13:00">13:00</option>
+                        <option value="14:00">14:00</option>
+                        <option value="15:00">15:00</option>
+                        <option value="16:00">16:00</option>
+                        <option value="17:00">17:00</option>
+                        <option value="18:00">18:00</option>
+                        <option value="19:00">19:00</option>
+                        <option value="20:00">20:00</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="addBlockDuration">משך (שעות) *</label>
+                    <select id="addBlockDuration" required>
+                        <option value="1">1 שעה</option>
+                        <option value="2" selected>2 שעות</option>
+                        <option value="3">3 שעות</option>
+                        <option value="4">4 שעות</option>
+                    </select>
+                </div>
+                
+                <div class="form-actions">
+                    <button type="submit" class="btn-primary">💾 הוסף בלוק</button>
+                    <button type="button" class="btn-secondary" onclick="closeAddBlockModal()">ביטול</button>
+                </div>
+            </form>
         </div>
     </div>
 </body>

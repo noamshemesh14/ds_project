@@ -1,5 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.requests import Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -25,6 +25,7 @@ from app.models import (
 from app.parser import TranscriptParser
 from app.supabase_client import supabase, supabase_admin
 from app.auth import get_current_user, get_optional_user
+from app.agents.supervisor import Supervisor
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -934,6 +935,36 @@ async def signup(request: SignUpRequest):
         raise HTTPException(status_code=400, detail=f"Error signing up: {error_msg}")
 
 
+@app.post("/api/auth/login")
+async def login(request: SignInRequest):
+    """
+    Login endpoint for terminal/CLI usage
+    Returns access_token for API authentication
+    """
+    try:
+        response = supabase.auth.sign_in_with_password({
+            "email": request.email,
+            "password": request.password,
+        })
+        
+        if response.user and response.session:
+            return JSONResponse(content={
+                "message": "Login successful",
+                "access_token": response.session.access_token,
+                "user_id": response.user.id
+            })
+        else:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+    except Exception as e:
+        error_str = str(e)
+        logging.error(f"Login error: {error_str}")
+        
+        if "invalid" in error_str or "credentials" in error_str or "password" in error_str:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        
+        raise HTTPException(status_code=401, detail=f"Error logging in: {str(e)}")
+
+
 @app.post("/api/auth/signin")
 async def signin(request: SignInRequest):
     """
@@ -1422,8 +1453,9 @@ async def _refine_schedule_with_llm(
                 try:
                     pref_result = client.table("course_time_preferences").select("personal_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
                     if pref_result.data and pref_result.data[0].get("personal_hours_per_week") is not None:
-                        personal_hours_preferred = pref_result.data[0]["personal_hours_per_week"]
-                        logging.info(f"Using course_time_preferences for {course_number}: personal_hours_per_week={personal_hours_preferred}")
+                        # Round to nearest integer when planning
+                        personal_hours_preferred = round(float(pref_result.data[0]["personal_hours_per_week"]))
+                        logging.info(f"Using course_time_preferences for {course_number}: personal_hours_per_week={personal_hours_preferred} (rounded from {pref_result.data[0]['personal_hours_per_week']})")
                 except Exception as pref_err:
                     logging.warning(f"Could not load course_time_preferences: {pref_err}")
             
@@ -2491,6 +2523,93 @@ async def get_weekly_plan_llm_status(
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
+@app.get("/api/weekly-schedule")
+async def get_weekly_schedule(
+    date: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get weekly schedule for terminal/CLI usage
+    Uses schedule_retriever executor
+    Returns schedule data for a specific week (defaults to current week)
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        # Use schedule_retriever executor
+        from app.agents.executors.schedule_retriever import ScheduleRetriever
+        retriever = ScheduleRetriever()
+        result = await retriever.execute(user_id=user_id, date=date)
+        
+        return JSONResponse(content=result)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error retrieving weekly schedule: {e}")
+        import traceback
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "error": str(e),
+                "week_start": None,
+                "blocks": []
+            }
+        )
+
+
+@app.post("/api/execute")
+async def execute_agent(
+    request_data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Main agent execution endpoint for terminal/CLI usage
+    Routes user prompt to appropriate executor via supervisor
+    """
+    try:
+        user_prompt = request_data.get("prompt", "")
+        if not user_prompt:
+            raise HTTPException(status_code=400, detail="Prompt is required")
+        
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        # Initialize supervisor and route task
+        supervisor = Supervisor()
+        result = await supervisor.route_task(
+            user_prompt=user_prompt,
+            user_id=user_id
+        )
+        
+        # Return pretty-printed JSON
+        return Response(
+            content=json.dumps(result, indent=2, ensure_ascii=False),
+            media_type="application/json"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error executing agent: {e}")
+        import traceback
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "error": str(e),
+                "response": None,
+                "steps": []
+            }
+        )
+
+
 @app.get("/api/weekly-plan/llm-debug")
 async def get_llm_debug_info(
     current_user: dict = Depends(get_current_user)
@@ -3211,16 +3330,17 @@ async def update_weekly_plan_block(
                 # Get current preferences for weighted average (80% existing, 20% new)
                 current_pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
                 if current_pref_result.data and current_pref_result.data[0].get("personal_hours_per_week") is not None:
-                    current_personal_hours = current_pref_result.data[0]["personal_hours_per_week"]
-                    current_group_hours = current_pref_result.data[0].get("group_hours_per_week", 0)
+                    # Convert to float to handle decimal values
+                    current_personal_hours = float(current_pref_result.data[0]["personal_hours_per_week"])
+                    current_group_hours = float(current_pref_result.data[0].get("group_hours_per_week", 0))
                     
-                    # Weighted average: 80% existing, 20% new
-                    personal_hours = int(0.8 * current_personal_hours + 0.2 * new_personal_hours)
-                    group_hours = int(0.8 * current_group_hours + 0.2 * new_group_hours)
+                    # Weighted average: 80% existing, 20% new (keep as decimal)
+                    personal_hours = round(0.8 * current_personal_hours + 0.2 * float(new_personal_hours), 2)
+                    group_hours = round(0.8 * current_group_hours + 0.2 * float(new_group_hours), 2)
                 else:
-                    # No existing preferences, use new values
-                    personal_hours = new_personal_hours
-                    group_hours = new_group_hours
+                    # No existing preferences, use new values (as decimal)
+                    personal_hours = float(new_personal_hours)
+                    group_hours = float(new_group_hours)
 
                 client.table("course_time_preferences").upsert({
                     "user_id": user_id,
@@ -3290,6 +3410,68 @@ async def chat(
 
 
 # Manual Schedule Editing & Group Change Request endpoints
+@app.post("/api/schedule/block/create")
+async def create_schedule_block(
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Create a new study block directly (without LLM).
+    For group blocks, requires exact group_name match.
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        data = await request.json()
+        course_name = data.get("course_name")
+        course_number = data.get("course_number")
+        day_of_week = data.get("day_of_week")
+        start_time = data.get("start_time")
+        duration = data.get("duration", 1)
+        work_type = data.get("work_type", "personal")
+        week_start = data.get("week_start")
+        group_name = data.get("group_name")
+        
+        if not course_name and not course_number:
+            raise HTTPException(status_code=400, detail="course_name or course_number is required")
+        if day_of_week is None:
+            raise HTTPException(status_code=400, detail="day_of_week is required")
+        if not start_time:
+            raise HTTPException(status_code=400, detail="start_time is required")
+        
+        # For group blocks, group_name is required
+        if work_type == "group" and not group_name:
+            raise HTTPException(status_code=400, detail="group_name is required for group blocks")
+        
+        # Import and use BlockCreator executor directly
+        from app.agents.executors.block_creator import BlockCreator
+        block_creator = BlockCreator()
+        
+        result = await block_creator.execute(
+            user_id=user_id,
+            course_number=course_number,
+            course_name=course_name,
+            day_of_week=day_of_week,
+            start_time=start_time,
+            duration=duration,
+            work_type=work_type,
+            week_start=week_start,
+            group_name=group_name
+        )
+        
+        return JSONResponse(content=result)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error creating block: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error creating block: {str(e)}")
+
+
 @app.post("/api/schedule/block/move")
 async def move_schedule_block(
     request: Request,
@@ -3614,23 +3796,24 @@ async def move_schedule_block(
                                 current_pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
                                 
                                 if current_pref_result.data and current_pref_result.data[0].get("personal_hours_per_week") is not None:
-                                    current_personal_hours = current_pref_result.data[0]["personal_hours_per_week"]
-                                    current_group_hours = current_pref_result.data[0].get("group_hours_per_week", 0)
+                                    # Convert to float to handle decimal values
+                                    current_personal_hours = float(current_pref_result.data[0]["personal_hours_per_week"])
+                                    current_group_hours = float(current_pref_result.data[0].get("group_hours_per_week", 0))
                                     logging.info(f"📊 [MOVE BLOCK] Current preferences: personal={current_personal_hours}h, group={current_group_hours}h")
                                     
                                     # Calculate adjustment based on LLM classification
                                     # If LLM classified as "less", reduce by ~20% (or 1-2 hours minimum)
                                     # If LLM classified as "more", increase by ~20% (or 1-2 hours minimum)
                                     if hours_change == "less":
-                                        # Reduce personal hours
-                                        adjustment = max(1, int(current_personal_hours * 0.2))  # Reduce by 20% or at least 1 hour
-                                        new_personal_hours = max(1, current_personal_hours - adjustment)
+                                        # Reduce personal hours (keep as decimal)
+                                        adjustment = max(1.0, current_personal_hours * 0.2)  # Reduce by 20% or at least 1 hour
+                                        new_personal_hours = max(1.0, current_personal_hours - adjustment)
                                         # Keep group hours the same (or adjust proportionally if needed)
                                         new_group_hours = current_group_hours
                                         logging.info(f"➖ [MOVE BLOCK] Reducing hours: adjustment={adjustment}, new_personal_hours={new_personal_hours}")
                                     elif hours_change == "more":
-                                        # Increase personal hours
-                                        adjustment = max(1, int(current_personal_hours * 0.2))  # Increase by 20% or at least 1 hour
+                                        # Increase personal hours (keep as decimal)
+                                        adjustment = max(1.0, current_personal_hours * 0.2)  # Increase by 20% or at least 1 hour
                                         new_personal_hours = current_personal_hours + adjustment
                                         # Keep group hours the same (or adjust proportionally if needed)
                                         new_group_hours = current_group_hours
@@ -3642,16 +3825,16 @@ async def move_schedule_block(
                                         if plan_result.data:
                                             plan_id = plan_result.data[0]["id"]
                                             all_course_blocks = client.table("weekly_plan_blocks").select("work_type").eq("plan_id", plan_id).eq("course_number", course_number).execute()
-                                            new_personal_hours = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "personal")
-                                            new_group_hours = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "group")
+                                            new_personal_hours = float(sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "personal"))
+                                            new_group_hours = float(sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "group"))
                                             logging.info(f"📊 [MOVE BLOCK] From blocks: personal={new_personal_hours}h, group={new_group_hours}h")
                                         else:
                                             new_personal_hours = current_personal_hours
                                             new_group_hours = current_group_hours
                                     
-                                    # Apply weighted average: 80% existing, 20% new
-                                    personal_hours = int(0.8 * current_personal_hours + 0.2 * new_personal_hours)
-                                    group_hours = int(0.8 * current_group_hours + 0.2 * new_group_hours)
+                                    # Apply weighted average: 80% existing, 20% new (keep as decimal)
+                                    personal_hours = round(0.8 * current_personal_hours + 0.2 * new_personal_hours, 2)
+                                    group_hours = round(0.8 * current_group_hours + 0.2 * new_group_hours, 2)
                                     logging.info(f"⚖️ [MOVE BLOCK] Weighted average: personal={personal_hours}h (80% of {current_personal_hours} + 20% of {new_personal_hours}), group={group_hours}h")
                                     
                                     # Update course_time_preferences
@@ -3923,6 +4106,55 @@ async def resize_schedule_block(
         
         preferences_updated = False
         
+        # ALWAYS update course_time_preferences based on ALL blocks in the plan
+        # This ensures the system learns from user behavior even without explanation
+        try:
+            # Get all blocks for this course in the plan to calculate actual distribution
+            all_course_blocks = client.table("weekly_plan_blocks").select("work_type").eq("plan_id", plan_id).eq("course_number", course_number).execute()
+            
+            new_personal_hours = float(sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "personal"))
+            new_group_hours = float(sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "group"))
+            
+            # Get current preferences for weighted average (80% existing, 20% new)
+            pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
+            
+            if pref_result.data and pref_result.data[0].get("personal_hours_per_week") is not None:
+                # Convert to float to handle decimal values
+                current_personal_hours = float(pref_result.data[0]["personal_hours_per_week"])
+                current_group_hours = float(pref_result.data[0].get("group_hours_per_week", 0))
+                
+                # Apply weighted average: 80% existing, 20% new (keep as decimal)
+                personal_hours = round(0.8 * current_personal_hours + 0.2 * new_personal_hours, 2)
+                group_hours = round(0.8 * current_group_hours + 0.2 * new_group_hours, 2)
+                
+                client.table("course_time_preferences").upsert({
+                    "user_id": user_id,
+                    "course_number": course_number,
+                    "personal_hours_per_week": personal_hours,
+                    "group_hours_per_week": group_hours
+                }, on_conflict="user_id,course_number").execute()
+                
+                logging.info(f"✅ Updated course_time_preferences: personal={personal_hours}h (from {new_personal_hours}h in blocks), group={group_hours}h (from {new_group_hours}h in blocks)")
+                preferences_updated = True
+            else:
+                # Create new entry
+                course_result = client.table("courses").select("credit_points").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
+                credit_points = course_result.data[0].get("credit_points") if course_result.data else 3
+                total_hours = credit_points * 3
+                default_group_hours = max(1.0, float(total_hours * 0.5))
+                
+                client.table("course_time_preferences").insert({
+                    "user_id": user_id,
+                    "course_number": course_number,
+                    "personal_hours_per_week": float(new_personal_hours) if new_personal_hours > 0 else float(new_duration),
+                    "group_hours_per_week": default_group_hours
+                }).execute()
+                
+                logging.info(f"✅ Created course_time_preferences: personal={new_personal_hours}h, group={default_group_hours}h")
+                preferences_updated = True
+        except Exception as pref_err:
+            logging.warning(f"⚠️ Failed to update course_time_preferences: {pref_err}")
+        
         # If explanation provided, update user preferences summary (not raw notes)
         if explanation.strip():
             try:
@@ -3977,18 +4209,19 @@ async def resize_schedule_block(
                                 current_pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
                                 
                                 if current_pref_result.data and current_pref_result.data[0].get("personal_hours_per_week") is not None:
-                                    current_personal_hours = current_pref_result.data[0]["personal_hours_per_week"]
-                                    current_group_hours = current_pref_result.data[0].get("group_hours_per_week", 0)
+                                    # Convert to float to handle decimal values
+                                    current_personal_hours = float(current_pref_result.data[0]["personal_hours_per_week"])
+                                    current_group_hours = float(current_pref_result.data[0].get("group_hours_per_week", 0))
                                     logging.info(f"📊 [RESIZE BLOCK] Current preferences: personal={current_personal_hours}h, group={current_group_hours}h")
                                     
                                     # Calculate adjustment based on LLM classification
                                     if hours_change == "less":
-                                        adjustment = max(1, int(current_personal_hours * 0.2))
-                                        new_personal_hours = max(1, current_personal_hours - adjustment)
+                                        adjustment = max(1.0, current_personal_hours * 0.2)  # Keep as decimal
+                                        new_personal_hours = max(1.0, current_personal_hours - adjustment)
                                         new_group_hours = current_group_hours
                                         logging.info(f"➖ [RESIZE BLOCK] Reducing hours: adjustment={adjustment}, new_personal_hours={new_personal_hours}")
                                     elif hours_change == "more":
-                                        adjustment = max(1, int(current_personal_hours * 0.2))
+                                        adjustment = max(1.0, current_personal_hours * 0.2)  # Keep as decimal
                                         new_personal_hours = current_personal_hours + adjustment
                                         new_group_hours = current_group_hours
                                         logging.info(f"➕ [RESIZE BLOCK] Increasing hours: adjustment={adjustment}, new_personal_hours={new_personal_hours}")
@@ -3996,13 +4229,13 @@ async def resize_schedule_block(
                                         # Use current distribution from blocks
                                         logging.info(f"🔄 [RESIZE BLOCK] No specific hours_change direction, using current blocks distribution")
                                         all_course_blocks = client.table("weekly_plan_blocks").select("work_type").eq("plan_id", plan_id).eq("course_number", course_number).execute()
-                                        new_personal_hours = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "personal")
-                                        new_group_hours = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "group")
+                                        new_personal_hours = float(sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "personal"))
+                                        new_group_hours = float(sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "group"))
                                         logging.info(f"📊 [RESIZE BLOCK] From blocks: personal={new_personal_hours}h, group={new_group_hours}h")
                                     
-                                    # Apply weighted average: 80% existing, 20% new
-                                    personal_hours = int(0.8 * current_personal_hours + 0.2 * new_personal_hours)
-                                    group_hours = int(0.8 * current_group_hours + 0.2 * new_group_hours)
+                                    # Apply weighted average: 80% existing, 20% new (keep as decimal)
+                                    personal_hours = round(0.8 * current_personal_hours + 0.2 * new_personal_hours, 2)
+                                    group_hours = round(0.8 * current_group_hours + 0.2 * new_group_hours, 2)
                                     logging.info(f"⚖️ [RESIZE BLOCK] Weighted average: personal={personal_hours}h (80% of {current_personal_hours} + 20% of {new_personal_hours}), group={group_hours}h")
                                     
                                     # Update course_time_preferences
@@ -4552,6 +4785,16 @@ async def approve_group_change_request(
                 "responded_at": datetime.now().isoformat()
             }).eq("request_id", request_id).eq("user_id", user_id).execute()
         
+        # Mark related notification as read
+        try:
+            request_link_pattern = f"/schedule?change_request={request_id}"
+            client.table("notifications").update({
+                "read": True
+            }).eq("user_id", user_id).eq("type", "group_change_request").like("link", f"%change_request={request_id}%").execute()
+            logging.info(f"✅ Marked notification as read for user {user_id}")
+        except Exception as notif_update_err:
+            logging.warning(f"⚠️ Could not update notification: {notif_update_err}")
+        
         # Check if all members have approved
         # IMPORTANT: The requester doesn't need to approve their own request
         requester_id = change_request.get("requested_by")
@@ -4578,6 +4821,15 @@ async def approve_group_change_request(
             proposed_start = change_request["proposed_start_time"]
             proposed_end = change_request["proposed_end_time"]
             proposed_duration = change_request.get("proposed_duration_hours")
+            
+            # Calculate proposed_duration from proposed_start and proposed_end if not provided
+            if not proposed_duration and proposed_start and proposed_end:
+                # Calculate duration from the time range
+                proposed_start_minutes = _time_to_minutes(proposed_start)
+                proposed_end_minutes = _time_to_minutes(proposed_end)
+                proposed_duration = (proposed_end_minutes - proposed_start_minutes) // 60
+                logging.info(f"📊 Calculated proposed_duration from time range: {proposed_start}-{proposed_end} = {proposed_duration} hours")
+            
             hours_explanation = change_request.get("hours_explanation", "")
             
             if request_type == "resize" and proposed_duration:
@@ -4796,6 +5048,9 @@ async def approve_group_change_request(
                     # Get or create group preferences
                     gp = client.table("group_preferences").select("*").eq("group_id", group_id).limit(1).execute()
                     
+                    # Check if this is a new block (original_duration = 0 and original_day is None)
+                    is_new_block = (original_duration == 0 and original_day is None)
+                    
                     if gp.data:
                         current_history = gp.data[0].get("hours_change_history", []) or []
                         if not isinstance(current_history, list):
@@ -4812,17 +5067,23 @@ async def approve_group_change_request(
                             history_entry["reason"] = hours_explanation
                         current_history.append(history_entry)
                         
-                        # Calculate weighted average: 80% existing, 20% new
                         current_hours = gp.data[0].get("preferred_hours_per_week", 4)
-                        weighted_hours = int(0.8 * current_hours + 0.2 * proposed_duration)
+                        
+                        # If this is a new block AND there are no existing group hours (current_hours = 0),
+                        # use 100% of the new hours instead of weighted average
+                        if is_new_block and current_hours == 0:
+                            weighted_hours = proposed_duration
+                            logging.info(f"✅ Updated group_preferences: {current_hours}h -> {weighted_hours}h (100% - first group block)")
+                        else:
+                            # Calculate weighted average: 80% existing, 20% new
+                            weighted_hours = int(0.8 * current_hours + 0.2 * proposed_duration)
+                            logging.info(f"✅ Updated group_preferences: {current_hours}h -> {weighted_hours}h (weighted average: 80% existing, 20% new)")
                         
                         client.table("group_preferences").update({
                             "preferred_hours_per_week": weighted_hours,
                             "hours_change_history": current_history,
                             "updated_at": datetime.now().isoformat()
                         }).eq("group_id", group_id).execute()
-                        
-                        logging.info(f"✅ Updated group_preferences: {current_hours}h -> {weighted_hours}h (weighted average: 80% existing, 20% new)")
                     else:
                         # Create new group preferences
                         history_entry = {
@@ -4835,13 +5096,14 @@ async def approve_group_change_request(
                             history_entry["reason"] = hours_explanation
                         
                         # For new group preferences, use proposed_duration directly (no existing value to average)
+                        # This is always 100% since there are no existing preferences
                         client.table("group_preferences").insert({
                             "group_id": group_id,
                             "preferred_hours_per_week": proposed_duration,
                             "hours_change_history": [history_entry]
                         }).execute()
                         
-                        logging.info(f"✅ Created group_preferences: {proposed_duration}h per week (new group)")
+                        logging.info(f"✅ Created group_preferences: {proposed_duration}h per week (new group - 100%)")
                         weighted_hours = proposed_duration
                     
                     # IMPORTANT: Also update course_time_preferences.group_hours_per_week for all members
@@ -4859,18 +5121,31 @@ async def approve_group_change_request(
                                     member_pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", member_id).eq("course_number", course_number).limit(1).execute()
                                     
                                     if member_pref_result.data:
-                                        current_personal_hours = member_pref_result.data[0].get("personal_hours_per_week", 0)
-                                        current_group_hours = member_pref_result.data[0].get("group_hours_per_week", 0)
+                                        # Convert to float to handle decimal values
+                                        current_personal_hours = float(member_pref_result.data[0].get("personal_hours_per_week", 0))
+                                        current_group_hours = float(member_pref_result.data[0].get("group_hours_per_week", 0))
                                         
-                                        # Apply weighted average: 80% existing, 20% new group hours
-                                        new_group_hours = int(0.8 * current_group_hours + 0.2 * weighted_hours)
+                                        # Check if this is a new block (original_duration = 0 and original_day is None)
+                                        # Use the same is_new_block variable from above (it's in the resize section)
+                                        # For move section, we need to check again
+                                        original_day_for_check = change_request.get("original_day_of_week")
+                                        original_duration_for_check = change_request.get("original_duration_hours", 0)
+                                        is_new_block_for_member = (original_duration_for_check == 0 and original_day_for_check is None)
                                         
-                                        # Update with weighted average
+                                        # If this is a new block AND there are no existing group hours (current_group_hours = 0),
+                                        # use 100% of the new hours instead of weighted average
+                                        if is_new_block_for_member and current_group_hours == 0:
+                                            new_group_hours = float(weighted_hours)
+                                            logging.info(f"✅ Updated course_time_preferences for member {member_id}, course {course_number}: group_hours={new_group_hours}h (100% - first group block)")
+                                        else:
+                                            # Apply weighted average: 80% existing, 20% new group hours (keep as decimal)
+                                            new_group_hours = round(0.8 * current_group_hours + 0.2 * float(weighted_hours), 2)
+                                            logging.info(f"✅ Updated course_time_preferences for member {member_id}, course {course_number}: group_hours={new_group_hours}h (weighted average)")
+                                        
+                                        # Update with weighted average or 100%
                                         client.table("course_time_preferences").update({
                                             "group_hours_per_week": new_group_hours
                                         }).eq("user_id", member_id).eq("course_number", course_number).execute()
-                                        
-                                        logging.info(f"✅ Updated course_time_preferences for member {member_id}, course {course_number}: group_hours={new_group_hours}h (weighted average)")
                                     else:
                                         # Create new entry with default personal hours and new group hours
                                         # Get course credit_points to calculate default personal hours
@@ -4905,54 +5180,93 @@ async def approve_group_change_request(
                 # Calculate original end time
                 original_end = _minutes_to_time(_time_to_minutes(original_start) + (original_duration * 60)) if original_start else None
                 
+                # Calculate proposed_duration from proposed_start and proposed_end
+                # Always recalculate from time range if both start and end are provided (more accurate)
+                if proposed_start and proposed_end:
+                    # Calculate duration from the time range (always use this if both times are provided)
+                    proposed_start_minutes = _time_to_minutes(proposed_start)
+                    proposed_end_minutes = _time_to_minutes(proposed_end)
+                    proposed_duration = (proposed_end_minutes - proposed_start_minutes) // 60
+                    logging.info(f"📊 Calculated proposed_duration from time range: {proposed_start}-{proposed_end} = {proposed_duration} hours")
+                else:
+                    # Fallback to proposed_duration from request or original_duration
+                    proposed_duration = change_request.get("proposed_duration_hours") or original_duration
+                    logging.info(f"⚠️ No proposed_end provided, using proposed_duration from request or original: {proposed_duration} hours")
+                
                 # Get course_number from group
                 group_info_for_move = client.table("study_groups").select("course_id, course_name").eq("id", group_id).limit(1).execute()
                 course_number_for_move = group_info_for_move.data[0].get("course_id") if group_info_for_move.data else ""
                 course_name_for_move = group_info_for_move.data[0].get("course_name") if group_info_for_move.data else ""
                 
                 # Step 1: Delete old group_plan_blocks at original location
-                # IMPORTANT: Delete ONLY consecutive blocks starting from original_start
+                # IMPORTANT: Delete ONLY blocks at the original location (original_day)
+                # Do NOT delete blocks at the new location (proposed_day) even if they overlap
                 if original_day is not None and original_start:
-                    # Get all blocks for this group/day/week and sort by start_time
-                    all_blocks = client.table("group_plan_blocks").select("id, start_time, end_time").eq("group_id", group_id).eq("week_start", week_start).eq("day_of_week", original_day).order("start_time").execute()
+                    original_start_minutes = _time_to_minutes(original_start)
+                    original_end_minutes = _time_to_minutes(original_end) if original_end else original_start_minutes + (original_duration * 60)
                     
-                    # Find the starting block
-                    starting_block = None
+                    # Get all blocks for this group/day/week at ORIGINAL location only
+                    all_blocks = client.table("group_plan_blocks").select("id, start_time, end_time, day_of_week").eq("group_id", group_id).eq("week_start", week_start).eq("day_of_week", original_day).execute()
+                    
+                    # Calculate proposed time range for comparison
+                    proposed_start_minutes = _time_to_minutes(proposed_start) if proposed_start else None
+                    proposed_end_minutes = _time_to_minutes(proposed_end) if proposed_end else (proposed_start_minutes + ((proposed_duration if proposed_duration else 1) * 60) if proposed_start_minutes else None)
+                    
+                    blocks_to_delete = []
                     for block in (all_blocks.data or []):
-                        if block.get("start_time") == original_start:
-                            starting_block = block
-                            break
+                        # Only delete blocks at the original day
+                        if block.get("day_of_week") != original_day:
+                            continue
+                        
+                        block_start_minutes = _time_to_minutes(block.get("start_time", "00:00"))
+                        block_end_minutes = _time_to_minutes(block.get("end_time", "00:00"))
+                        
+                        # Check if this block overlaps with the original time range
+                        overlaps_original = block_start_minutes < original_end_minutes and block_end_minutes > original_start_minutes
+                        
+                        # If same day and new location overlaps, don't delete (it's the new block location)
+                        if original_day == proposed_day and proposed_start_minutes is not None and proposed_end_minutes is not None:
+                            overlaps_new = block_start_minutes < proposed_end_minutes and block_end_minutes > proposed_start_minutes
+                            # If block overlaps with new location, it's part of the new blocks, don't delete
+                            if overlaps_new:
+                                continue
+                        
+                        if overlaps_original:
+                            blocks_to_delete.append(block["id"])
                     
-                    if not starting_block:
-                        logging.warning(f"⚠️ Could not find starting block at {original_start} for group {group_id}")
-                    else:
-                        # Find all consecutive blocks starting from the starting block
-                        blocks_to_delete = [starting_block["id"]]
-                        current_end_time = starting_block.get("end_time")
-                        blocks_deleted_count = 1
-                        
-                        # Continue finding consecutive blocks until we reach the requested duration
-                        for block in (all_blocks.data or []):
-                            if block["id"] in blocks_to_delete:
-                                continue  # Skip already added blocks
-                            
-                            block_start = block.get("start_time")
-                            # Check if this block is consecutive (its start_time equals the current end_time)
-                            if block_start == current_end_time and blocks_deleted_count < original_duration:
-                                blocks_to_delete.append(block["id"])
-                                current_end_time = block.get("end_time")
-                                blocks_deleted_count += 1
-                            # Stop if we've found enough blocks or if there's a gap
-                            elif _time_to_minutes(block_start) > _time_to_minutes(current_end_time):
-                                # There's a gap, stop looking
-                                break
-                        
-                        # Delete all consecutive blocks
+                    # Delete all overlapping blocks at original location
+                    if blocks_to_delete:
                         for block_id in blocks_to_delete:
                             client.table("group_plan_blocks").delete().eq("id", block_id).execute()
-                        logging.info(f"✅ Deleted {len(blocks_to_delete)} consecutive group_plan_blocks starting at {original_start} (requested {original_duration}h)")
+                        logging.info(f"✅ Deleted {len(blocks_to_delete)} group_plan_blocks at original location (day={original_day}, time={original_start}-{original_end})")
+                    else:
+                        logging.warning(f"⚠️ No blocks found to delete at original location {original_start} for group {group_id}")
                 
                 # Step 2: Create new group_plan_blocks at new location
+                # IMPORTANT: First check if there are existing blocks at the new location and delete them
+                # This prevents duplicates if the request is processed multiple times
+                if proposed_day is not None and proposed_start:
+                    proposed_start_minutes = _time_to_minutes(proposed_start)
+                    proposed_end_minutes = _time_to_minutes(proposed_end) if proposed_end else proposed_start_minutes + ((proposed_duration if proposed_duration else 1) * 60)
+                    
+                    # Check for existing blocks at new location (same group, same day, overlapping time)
+                    existing_at_new_location = client.table("group_plan_blocks").select("id, start_time, end_time").eq("group_id", group_id).eq("week_start", week_start).eq("day_of_week", proposed_day).execute()
+                    
+                    blocks_to_delete_at_new = []
+                    for block in (existing_at_new_location.data or []):
+                        block_start_minutes = _time_to_minutes(block.get("start_time", "00:00"))
+                        block_end_minutes = _time_to_minutes(block.get("end_time", "00:00"))
+                        
+                        # Check if this block overlaps with the proposed time range
+                        if block_start_minutes < proposed_end_minutes and block_end_minutes > proposed_start_minutes:
+                            blocks_to_delete_at_new.append(block["id"])
+                    
+                    # Delete any existing blocks at new location (prevents duplicates)
+                    if blocks_to_delete_at_new:
+                        for block_id in blocks_to_delete_at_new:
+                            client.table("group_plan_blocks").delete().eq("id", block_id).execute()
+                        logging.info(f"✅ Deleted {len(blocks_to_delete_at_new)} existing group_plan_blocks at new location (preventing duplicates)")
+                
                 time_slots = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
                 new_group_blocks = []
                 
@@ -4973,11 +5287,37 @@ async def approve_group_change_request(
                         start_idx = closest_idx
                         logging.info(f"⚠️ proposed_start {proposed_start} not in time_slots, using closest: {time_slots[start_idx]}")
                     
-                    duration = proposed_duration if proposed_duration else 1
+                    # Use calculated proposed_duration (should be set above)
+                    duration = proposed_duration if proposed_duration else original_duration
+                    logging.info(f"📊 Creating {duration} blocks at new location (proposed_duration={proposed_duration}, original_duration={original_duration}, proposed_end={proposed_end})")
+                    
+                    # Calculate the end time slot index to ensure we don't exceed proposed_end
+                    proposed_end_idx = None
+                    if proposed_end:
+                        if proposed_end in time_slots:
+                            proposed_end_idx = time_slots.index(proposed_end)
+                        else:
+                            # Find closest time slot
+                            proposed_end_minutes = _time_to_minutes(proposed_end)
+                            closest_idx = 0
+                            min_diff = abs(_time_to_minutes(time_slots[0]) - proposed_end_minutes)
+                            for i, slot in enumerate(time_slots):
+                                diff = abs(_time_to_minutes(slot) - proposed_end_minutes)
+                                if diff < min_diff:
+                                    min_diff = diff
+                                    closest_idx = i
+                            proposed_end_idx = closest_idx
+                    
                     for i in range(duration):
                         if start_idx + i < len(time_slots):
                             new_time = time_slots[start_idx + i]
+                            # Stop if we've reached or exceeded proposed_end
+                            if proposed_end_idx is not None and (start_idx + i) >= proposed_end_idx:
+                                break
                             new_end = time_slots[start_idx + i + 1] if (start_idx + i + 1) < len(time_slots) else "21:00"
+                            # Ensure end_time doesn't exceed proposed_end
+                            if proposed_end and _time_to_minutes(new_end) > _time_to_minutes(proposed_end):
+                                new_end = proposed_end
                             new_group_blocks.append({
                                 "group_id": group_id,
                                 "week_start": week_start,
@@ -5002,48 +5342,74 @@ async def approve_group_change_request(
                         plan_id = member_plan.data[0]["id"]
                         
                         # Delete old blocks at original location
-                        # IMPORTANT: Delete ONLY consecutive blocks starting from original_start
+                        # IMPORTANT: Delete ONLY blocks at the original location (original_day)
+                        # Do NOT delete blocks at the new location (proposed_day) even if they overlap
                         if original_day is not None and original_start:
-                            # Get all blocks for this member/day/course and sort by start_time
-                            all_member_blocks = client.table("weekly_plan_blocks").select("id, start_time, end_time").eq("plan_id", plan_id).eq("work_type", "group").eq("course_number", course_number_for_move).eq("day_of_week", original_day).order("start_time").execute()
+                            original_start_minutes = _time_to_minutes(original_start)
+                            original_end_minutes = _time_to_minutes(original_end) if original_end else original_start_minutes + (original_duration * 60)
                             
-                            # Find the starting block
-                            starting_block = None
+                            # Get all blocks for this member/day/course at ORIGINAL location only
+                            all_member_blocks = client.table("weekly_plan_blocks").select("id, start_time, end_time, day_of_week").eq("plan_id", plan_id).eq("work_type", "group").eq("course_number", course_number_for_move).eq("day_of_week", original_day).execute()
+                            
+                            # Calculate proposed time range for comparison
+                            proposed_start_minutes = _time_to_minutes(proposed_start) if proposed_start else None
+                            proposed_end_minutes = _time_to_minutes(proposed_end) if proposed_end else (proposed_start_minutes + ((proposed_duration if proposed_duration else 1) * 60) if proposed_start_minutes else None)
+                            
+                            blocks_to_delete = []
                             for block in (all_member_blocks.data or []):
-                                if block.get("start_time") == original_start:
-                                    starting_block = block
-                                    break
+                                # Only delete blocks at the original day
+                                if block.get("day_of_week") != original_day:
+                                    continue
+                                
+                                block_start_minutes = _time_to_minutes(block.get("start_time", "00:00"))
+                                block_end_minutes = _time_to_minutes(block.get("end_time", "00:00"))
+                                
+                                # Check if this block overlaps with the original time range
+                                overlaps_original = block_start_minutes < original_end_minutes and block_end_minutes > original_start_minutes
+                                
+                                # If same day and new location overlaps, don't delete (it's the new block location)
+                                if original_day == proposed_day and proposed_start_minutes is not None and proposed_end_minutes is not None:
+                                    overlaps_new = block_start_minutes < proposed_end_minutes and block_end_minutes > proposed_start_minutes
+                                    # If block overlaps with new location, it's part of the new blocks, don't delete
+                                    if overlaps_new:
+                                        continue
+                                
+                                if overlaps_original:
+                                    blocks_to_delete.append(block["id"])
                             
-                            if not starting_block:
-                                logging.warning(f"⚠️ Could not find starting block at {original_start} for member {mid}")
-                            else:
-                                # Find all consecutive blocks starting from the starting block
-                                blocks_to_delete = [starting_block["id"]]
-                                current_end_time = starting_block.get("end_time")
-                                blocks_deleted_count = 1
-                                
-                                # Continue finding consecutive blocks until we reach the requested duration
-                                for block in (all_member_blocks.data or []):
-                                    if block["id"] in blocks_to_delete:
-                                        continue  # Skip already added blocks
-                                    
-                                    block_start = block.get("start_time")
-                                    # Check if this block is consecutive (its start_time equals the current end_time)
-                                    if block_start == current_end_time and blocks_deleted_count < original_duration:
-                                        blocks_to_delete.append(block["id"])
-                                        current_end_time = block.get("end_time")
-                                        blocks_deleted_count += 1
-                                    # Stop if we've found enough blocks or if there's a gap
-                                    elif _time_to_minutes(block_start) > _time_to_minutes(current_end_time):
-                                        # There's a gap, stop looking
-                                        break
-                                
-                                # Delete all consecutive blocks
+                            # Delete all overlapping blocks at original location
+                            if blocks_to_delete:
                                 for block_id in blocks_to_delete:
                                     client.table("weekly_plan_blocks").delete().eq("id", block_id).execute()
-                                logging.info(f"✅ Deleted {len(blocks_to_delete)} consecutive weekly_plan_blocks for member {mid} starting at {original_start} (requested {original_duration}h)")
+                                logging.info(f"✅ Deleted {len(blocks_to_delete)} weekly_plan_blocks for member {mid} at original location (day={original_day}, time={original_start}-{original_end})")
+                            else:
+                                logging.warning(f"⚠️ No blocks found to delete at original location {original_start} for member {mid}")
                         
                         # Create new blocks at new location
+                        # IMPORTANT: First check if there are existing blocks at the new location and delete them
+                        # This prevents duplicates if the request is processed multiple times
+                        if proposed_day is not None and proposed_start:
+                            proposed_start_minutes = _time_to_minutes(proposed_start)
+                            proposed_end_minutes = _time_to_minutes(proposed_end) if proposed_end else proposed_start_minutes + ((proposed_duration if proposed_duration else 1) * 60)
+                            
+                            # Check for existing blocks at new location (same course, same day, overlapping time)
+                            existing_at_new_location = client.table("weekly_plan_blocks").select("id, start_time, end_time").eq("plan_id", plan_id).eq("work_type", "group").eq("course_number", course_number_for_move).eq("day_of_week", proposed_day).execute()
+                            
+                            blocks_to_delete_at_new = []
+                            for block in (existing_at_new_location.data or []):
+                                block_start_minutes = _time_to_minutes(block.get("start_time", "00:00"))
+                                block_end_minutes = _time_to_minutes(block.get("end_time", "00:00"))
+                                
+                                # Check if this block overlaps with the proposed time range
+                                if block_start_minutes < proposed_end_minutes and block_end_minutes > proposed_start_minutes:
+                                    blocks_to_delete_at_new.append(block["id"])
+                            
+                            # Delete any existing blocks at new location (prevents duplicates)
+                            if blocks_to_delete_at_new:
+                                for block_id in blocks_to_delete_at_new:
+                                    client.table("weekly_plan_blocks").delete().eq("id", block_id).execute()
+                                logging.info(f"✅ Deleted {len(blocks_to_delete_at_new)} existing blocks at new location for member {mid} (preventing duplicates)")
+                        
                         new_member_blocks = []
                         if proposed_start:
                             if proposed_start in time_slots:
@@ -5060,11 +5426,37 @@ async def approve_group_change_request(
                                         closest_idx = i
                                 start_idx = closest_idx
                             
-                            duration = proposed_duration if proposed_duration else 1
+                            # Use calculated proposed_duration (should be set above)
+                            duration = proposed_duration if proposed_duration else original_duration
+                            logging.info(f"📊 Creating {duration} blocks for member {mid} at new location (proposed_duration={proposed_duration}, original_duration={original_duration}, proposed_end={proposed_end})")
+                            
+                            # Calculate the end time slot index to ensure we don't exceed proposed_end
+                            proposed_end_idx = None
+                            if proposed_end:
+                                if proposed_end in time_slots:
+                                    proposed_end_idx = time_slots.index(proposed_end)
+                                else:
+                                    # Find closest time slot
+                                    proposed_end_minutes = _time_to_minutes(proposed_end)
+                                    closest_idx = 0
+                                    min_diff = abs(_time_to_minutes(time_slots[0]) - proposed_end_minutes)
+                                    for j, slot in enumerate(time_slots):
+                                        diff = abs(_time_to_minutes(slot) - proposed_end_minutes)
+                                        if diff < min_diff:
+                                            min_diff = diff
+                                            closest_idx = j
+                                    proposed_end_idx = closest_idx
+                            
                             for i in range(duration):
                                 if start_idx + i < len(time_slots):
                                     new_time = time_slots[start_idx + i]
+                                    # Stop if we've reached or exceeded proposed_end
+                                    if proposed_end_idx is not None and (start_idx + i) >= proposed_end_idx:
+                                        break
                                     new_end = time_slots[start_idx + i + 1] if (start_idx + i + 1) < len(time_slots) else "21:00"
+                                    # Ensure end_time doesn't exceed proposed_end
+                                    if proposed_end and _time_to_minutes(new_end) > _time_to_minutes(proposed_end):
+                                        new_end = proposed_end
                                     new_member_blocks.append({
                                         "plan_id": plan_id,
                                         "user_id": mid,
@@ -5084,6 +5476,129 @@ async def approve_group_change_request(
                             logging.error(f"❌ Failed to create weekly_plan_blocks for member {mid}: proposed_start={proposed_start}, proposed_duration={proposed_duration}")
                     else:
                         logging.warning(f"⚠️ No plan found for member {mid} for week {week_start}")
+            
+            # Update group preferences and course_time_preferences for move/add new block
+            # Check if this is a new block (original_duration = 0 and original_day is None)
+            is_new_block_move = (original_duration == 0 and original_day is None)
+            
+            # ALWAYS update group preferences with new hours (even without explanation)
+            # This affects future schedule generation
+            try:
+                # Get or create group preferences
+                gp = client.table("group_preferences").select("*").eq("group_id", group_id).limit(1).execute()
+                
+                if gp.data:
+                    current_history = gp.data[0].get("hours_change_history", []) or []
+                    if not isinstance(current_history, list):
+                        current_history = []
+                    
+                    # Add to history
+                    history_entry = {
+                        "date": datetime.now().isoformat(),
+                        "old_hours": original_duration,
+                        "new_hours": proposed_duration,
+                        "approved_by": member_ids
+                    }
+                    if hours_explanation:
+                        history_entry["reason"] = hours_explanation
+                    current_history.append(history_entry)
+                    
+                    current_hours = gp.data[0].get("preferred_hours_per_week", 4)
+                    
+                    # If this is a new block AND there are no existing group hours (current_hours = 0),
+                    # use 100% of the new hours instead of weighted average
+                    if is_new_block_move and current_hours == 0:
+                        weighted_hours = proposed_duration
+                        logging.info(f"✅ Updated group_preferences: {current_hours}h -> {weighted_hours}h (100% - first group block)")
+                    else:
+                        # Calculate weighted average: 80% existing, 20% new
+                        weighted_hours = int(0.8 * current_hours + 0.2 * proposed_duration)
+                        logging.info(f"✅ Updated group_preferences: {current_hours}h -> {weighted_hours}h (weighted average: 80% existing, 20% new)")
+                    
+                    client.table("group_preferences").update({
+                        "preferred_hours_per_week": weighted_hours,
+                        "hours_change_history": current_history,
+                        "updated_at": datetime.now().isoformat()
+                    }).eq("group_id", group_id).execute()
+                else:
+                    # Create new group preferences
+                    history_entry = {
+                        "date": datetime.now().isoformat(),
+                        "old_hours": original_duration,
+                        "new_hours": proposed_duration,
+                        "approved_by": member_ids
+                    }
+                    if hours_explanation:
+                        history_entry["reason"] = hours_explanation
+                    
+                    # For new group preferences, use proposed_duration directly (no existing value to average)
+                    # This is always 100% since there are no existing preferences
+                    client.table("group_preferences").insert({
+                        "group_id": group_id,
+                        "preferred_hours_per_week": proposed_duration,
+                        "hours_change_history": [history_entry]
+                    }).execute()
+                    
+                    logging.info(f"✅ Created group_preferences: {proposed_duration}h per week (new group - 100%)")
+                    weighted_hours = proposed_duration
+                
+                # IMPORTANT: Also update course_time_preferences.group_hours_per_week for all members
+                # This ensures consistency between group_preferences and course_time_preferences
+                try:
+                    # Get course_number from group
+                    group_info = client.table("study_groups").select("course_id").eq("id", group_id).limit(1).execute()
+                    if group_info.data:
+                        course_number = group_info.data[0].get("course_id")
+                        
+                        # Update course_time_preferences for all members
+                        for member_id in member_ids:
+                            try:
+                                # Get current course_time_preferences for this member
+                                member_pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", member_id).eq("course_number", course_number).limit(1).execute()
+                                
+                                if member_pref_result.data:
+                                    # Convert to float to handle decimal values
+                                    current_personal_hours = float(member_pref_result.data[0].get("personal_hours_per_week", 0))
+                                    current_group_hours = float(member_pref_result.data[0].get("group_hours_per_week", 0))
+                                    
+                                    # If this is a new block AND there are no existing group hours (current_group_hours = 0),
+                                    # use 100% of the new hours instead of weighted average
+                                    if is_new_block_move and current_group_hours == 0:
+                                        new_group_hours = float(weighted_hours)
+                                        logging.info(f"✅ Updated course_time_preferences for member {member_id}, course {course_number}: group_hours={new_group_hours}h (100% - first group block)")
+                                    else:
+                                        # Apply weighted average: 80% existing, 20% new group hours (keep as decimal)
+                                        new_group_hours = round(0.8 * current_group_hours + 0.2 * float(weighted_hours), 2)
+                                        logging.info(f"✅ Updated course_time_preferences for member {member_id}, course {course_number}: group_hours={new_group_hours}h (weighted average)")
+                                    
+                                    # Update with weighted average or 100%
+                                    client.table("course_time_preferences").update({
+                                        "group_hours_per_week": new_group_hours
+                                    }).eq("user_id", member_id).eq("course_number", course_number).execute()
+                                else:
+                                    # Create new entry with default personal hours and new group hours
+                                    # Get course credit_points to calculate default personal hours
+                                    course_result = client.table("courses").select("credit_points").eq("user_id", member_id).eq("course_number", course_number).limit(1).execute()
+                                    credit_points = course_result.data[0].get("credit_points") if course_result.data else 3
+                                    total_hours = credit_points * 3
+                                    default_personal_hours = max(1, int(total_hours * 0.5))
+                                    
+                                    client.table("course_time_preferences").insert({
+                                        "user_id": member_id,
+                                        "course_number": course_number,
+                                        "personal_hours_per_week": default_personal_hours,
+                                        "group_hours_per_week": weighted_hours
+                                    }).execute()
+                                    
+                                    logging.info(f"✅ Created course_time_preferences for member {member_id}, course {course_number}: personal={default_personal_hours}h, group={weighted_hours}h")
+                            except Exception as member_err:
+                                logging.warning(f"⚠️ Failed to update course_time_preferences for member {member_id}: {member_err}")
+                except Exception as course_pref_err:
+                    logging.warning(f"⚠️ Failed to update course_time_preferences for group members: {course_pref_err}")
+                
+                logging.info(f"✅ Updated group preferences for group {group_id}: {original_duration}h -> {proposed_duration}h per week")
+            except Exception as gp_err:
+                logging.error(f"Failed to update group preferences: {gp_err}")
             
             # Mark request as approved
             client.table("group_meeting_change_requests").update({
@@ -6239,9 +6754,14 @@ async def accept_invitation(
                     logging.error(f"   Error message: {insert_err.message}")
                 raise
         
-        # DON'T mark notification as read automatically - let user decide when to remove it
-        # Notifications will stay visible until user explicitly deletes them
-        logging.info(f"ℹ️ Invitation accepted - notification will remain visible until user deletes it")
+        # Mark notification as read and update it to show it was accepted
+        try:
+            client.table("notifications").update({
+                "read": True
+            }).eq("id", notification_id).eq("user_id", user_id).execute()
+            logging.info(f"✅ Marked notification as read")
+        except Exception as notif_update_err:
+            logging.warning(f"⚠️ Could not update notification: {notif_update_err}")
         
         return JSONResponse(content={"success": True, "message": "Invitation accepted"})
         
@@ -6273,6 +6793,18 @@ async def reject_invitation(
         if not result.data:
             raise HTTPException(status_code=404, detail="Invitation not found or already processed")
         
+        # Mark related notifications as read
+        try:
+            client = supabase_admin if supabase_admin else supabase
+            if client:
+                # Find and mark notifications related to this invitation
+                client.table("notifications").update({
+                    "read": True
+                }).eq("user_id", user_id).eq("type", "group_invitation").like("link", f"%invitation={invitation_id}%").execute()
+                logging.info(f"✅ Marked related notifications as read")
+        except Exception as notif_update_err:
+            logging.warning(f"⚠️ Could not update notifications: {notif_update_err}")
+        
         return JSONResponse(content={"success": True, "message": "Invitation rejected"})
         
     except HTTPException:
@@ -6280,6 +6812,146 @@ async def reject_invitation(
     except Exception as e:
         logging.error(f"Error rejecting invitation: {e}")
         raise HTTPException(status_code=500, detail=f"Error rejecting invitation: {str(e)}")
+
+
+@app.post("/api/notifications/{notification_id}/approve")
+async def approve_from_notification(
+    notification_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Approve a request directly from a notification.
+    Works for both group invitations and group change requests.
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        client = supabase_admin if supabase_admin else supabase
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+        
+        # Get notification
+        notif_result = client.table("notifications").select("*").eq("id", notification_id).eq("user_id", user_id).execute()
+        if not notif_result.data:
+            raise HTTPException(status_code=404, detail="Notification not found")
+        
+        notification = notif_result.data[0]
+        notif_type = notification.get("type")
+        link = notification.get("link", "")
+        
+        # Extract IDs from link
+        import re
+        
+        if notif_type == "group_invitation":
+            # Extract invitation_id or group_id from link
+            invitation_match = re.search(r'invitation=([^&]+)', link)
+            if invitation_match:
+                invitation_id = invitation_match.group(1)
+                # Use existing accept endpoint logic
+                return await accept_invitation(invitation_id, current_user)
+            else:
+                # Try to find by group_id
+                group_match = re.search(r'group=([^&]+)', link)
+                if group_match:
+                    group_id = group_match.group(1)
+                    # Find invitation by group
+                    inv_result = client.table("group_invitations").select("id").eq("group_id", group_id).eq("invitee_user_id", user_id).eq("status", "pending").order("created_at", desc=True).limit(1).execute()
+                    if inv_result.data:
+                        invitation_id = inv_result.data[0]["id"]
+                        return await accept_invitation(invitation_id, current_user)
+            
+            raise HTTPException(status_code=404, detail="Invitation not found")
+        
+        elif notif_type == "group_change_request":
+            # Extract request_id from link
+            request_match = re.search(r'change_request=([^&]+)', link)
+            if request_match:
+                request_id = request_match.group(1)
+                # Use existing approve endpoint logic
+                return await approve_group_change_request(request_id, current_user)
+            
+            raise HTTPException(status_code=404, detail="Change request not found")
+        
+        else:
+            raise HTTPException(status_code=400, detail=f"Notification type '{notif_type}' does not support approval")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error approving from notification: {e}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/api/notifications/{notification_id}/reject")
+async def reject_from_notification(
+    notification_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Reject a request directly from a notification.
+    Works for both group invitations and group change requests.
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        client = supabase_admin if supabase_admin else supabase
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+        
+        # Get notification
+        notif_result = client.table("notifications").select("*").eq("id", notification_id).eq("user_id", user_id).execute()
+        if not notif_result.data:
+            raise HTTPException(status_code=404, detail="Notification not found")
+        
+        notification = notif_result.data[0]
+        notif_type = notification.get("type")
+        link = notification.get("link", "")
+        
+        # Extract IDs from link
+        import re
+        
+        if notif_type == "group_invitation":
+            # Extract invitation_id or group_id from link
+            invitation_match = re.search(r'invitation=([^&]+)', link)
+            if invitation_match:
+                invitation_id = invitation_match.group(1)
+                # Use existing reject endpoint logic
+                return await reject_invitation(invitation_id, current_user)
+            else:
+                # Try to find by group_id
+                group_match = re.search(r'group=([^&]+)', link)
+                if group_match:
+                    group_id = group_match.group(1)
+                    # Find invitation by group
+                    inv_result = client.table("group_invitations").select("id").eq("group_id", group_id).eq("invitee_user_id", user_id).eq("status", "pending").order("created_at", desc=True).limit(1).execute()
+                    if inv_result.data:
+                        invitation_id = inv_result.data[0]["id"]
+                        return await reject_invitation(invitation_id, current_user)
+            
+            raise HTTPException(status_code=404, detail="Invitation not found")
+        
+        elif notif_type == "group_change_request":
+            # Extract request_id from link
+            request_match = re.search(r'change_request=([^&]+)', link)
+            if request_match:
+                request_id = request_match.group(1)
+                # Use existing reject endpoint logic
+                return await reject_group_change_request(request_id, current_user)
+            
+            raise HTTPException(status_code=404, detail="Change request not found")
+        
+        else:
+            raise HTTPException(status_code=400, detail=f"Notification type '{notif_type}' does not support rejection")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error rejecting from notification: {e}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
 @app.delete("/api/groups/{group_id}")
