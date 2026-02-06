@@ -5,6 +5,7 @@ Routes user prompts to appropriate executors using LLM or pattern matching
 import logging
 import re
 from typing import Dict, Any, List, Optional
+from fastapi import HTTPException
 from app.agents.executors.course_manager import CourseManager
 from app.agents.executors.schedule_retriever import ScheduleRetriever
 from app.agents.executors.group_manager import GroupManager
@@ -136,6 +137,10 @@ class Supervisor:
                 }
 
             try:
+                # Pass user_prompt to executors that might need it for preference extraction
+                if executor_name in ["block_mover", "block_resizer"]:
+                    executor_params["user_prompt"] = user_prompt
+                
                 result = await executor.execute(user_id=user_id, **executor_params, **kwargs)
 
                 steps.append(executor.get_step_log(
@@ -149,16 +154,34 @@ class Supervisor:
                     "response": result.get("message", "Task completed successfully"),
                     "steps": steps
                 }
-            except Exception as e:
-                logger.error(f"Error executing {executor_name}: {e}")
+            except HTTPException as http_exc:
+                # HTTPException has a detail attribute
+                error_msg = http_exc.detail if hasattr(http_exc, 'detail') else str(http_exc)
+                logger.error(f"HTTPException executing {executor_name}: {error_msg}")
                 steps.append({
                     "module": executor_name,
                     "prompt": {"user_prompt": user_prompt, **executor_params},
-                    "response": {"error": str(e)}
+                    "response": {"error": error_msg}
                 })
                 return {
                     "status": "error",
-                    "error": str(e),
+                    "error": error_msg,
+                    "response": None,
+                    "steps": steps
+                }
+            except Exception as e:
+                error_msg = str(e) if str(e) else "Unknown error occurred"
+                logger.error(f"Error executing {executor_name}: {error_msg}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                steps.append({
+                    "module": executor_name,
+                    "prompt": {"user_prompt": user_prompt, **executor_params},
+                    "response": {"error": error_msg}
+                })
+                return {
+                    "status": "error",
+                    "error": error_msg,
                     "response": None,
                     "steps": steps
                 }

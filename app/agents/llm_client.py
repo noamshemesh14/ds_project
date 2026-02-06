@@ -226,8 +226,13 @@ Available executors:
 - notification_cleaner: Clean/delete notifications. Optional: notification_id
 - request_handler: Approve/reject requests. Requires: request_id, action ("accept" or "reject")
 - preference_updater: Update course time preferences. Requires: course_number, personal_ratio, group_ratio
-- block_mover: Move study blocks. Requires: block_id, new_day, new_start_time, new_end_time
-- block_resizer: Resize study blocks. Requires: block_id, new_duration or new_start_time/new_end_time
+- block_mover: Move study blocks. Requires: block_id, new_day, new_start_time, new_end_time. Optional: user_prompt (original user prompt for preference extraction)
+- block_resizer: Resize study blocks (change duration). Use this when the user wants to INCREASE or DECREASE the duration of a block (e.g., "change from 3 hours to 2 hours", "reduce to 2 hours", "increase to 4 hours", "2 hours is sufficient so change it to 13-15"). Requires: block_id (optional), course_name or course_number, day_of_week, start_time, new_duration, week_start (optional). If block_id not provided, use course_name/course_number + day_of_week + start_time + week_start to find the block. For group blocks, creates a change request. For personal blocks, updates directly and updates course_time_preferences.personal_hours_per_week.
+- IMPORTANT: If user says "from X:00 to Y:00" and wants to change it to "from X:00 to Z:00" where Z < Y (or Z > Y), this is a RESIZE (changing duration), not a move. Choose block_resizer, not block_mover.
+
+IMPORTANT: When extracting parameters for block_mover, also analyze the user_prompt for any preferences or explanations:
+- If the user mentions preferences like "I prefer to study late", "I like morning study", "I don't like studying on day X", etc., include the full user_prompt in executor_params so the backend can extract and save these preferences.
+- Examples of preference indicators: "because", "prefer", "like", "don't like", "better", "instead", "I usually", "I find it easier", etc.
 
 Return your response as JSON with this exact structure:
 {
@@ -254,6 +259,40 @@ For course_manager:
 
 For schedule_retriever:
 - Extract date (optional) - look for YYYY-MM-DD or YYYY/MM/DD format. Examples: "2026-02-08", "2026/02/08". If not provided, assume current week.
+
+For block_mover:
+- Extract block_id (optional) - look for UUID or block identifier. If not provided, use course_name/course_number + original_day + original_start_time + week_start to find the block.
+- Extract course_name or course_number (required if block_id not provided) - the course name or number to identify which block to move. Look for course names in the prompt (e.g., "נושאים נבחרים בהנדסת נתונים", "אלגוריתמים", etc.)
+- Extract week_start (optional) - the week start date in YYYY-MM-DD or YYYY/MM/DD format. If not provided, the system will use the current week. Look for phrases like "for week 2026-02-08", "for the week starting 2026/02/08", or dates in the prompt.
+- Extract original_day (required if block_id not provided) - the current day of week (0-6, where 0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday). Can be extracted from day names like "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday" or Hebrew names like "ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת".
+- Extract original_start_time (required if block_id not provided) - the current start time in HH:MM format (e.g., "08:00", "12:00", "14:00"). Normalize formats like "012:00" to "12:00", "8:00" to "08:00". Look for phrases like "from Thursday 08:00" or "from day X at Y:00" or "from 12:00".
+- Extract original_day (optional if block_id not provided) - the current day of week (0-6). If not explicitly mentioned, set to null (will be found from the block). Can be extracted from day names like "Monday", "Tuesday", etc. or Hebrew names.
+- Extract new_day (optional) - target day of week (0-6). If not provided, assume same day as original_day (moving time only, not day). Look for phrases like "to Wednesday", "to day X", "on Wednesday", or "on the same day". If user says "from 12:00 to 13:00" without mentioning a day, new_day should be null (same day).
+- Extract new_start_time (required) - target start time in HH:MM format. Normalize formats: "012:00" -> "12:00", "13:00" is correct. Look for phrases like "to Wednesday 08:00", "to day X at Y:00", "to 13:00", or "at 13:00".
+- Extract new_end_time (optional) - target end time in HH:MM format, will be calculated if not provided
+- Extract specific_hours (optional) - if user explicitly specifies which hours to move (e.g., "only move 08:00-09:00", "move just the first hour"), set this to true. Otherwise, all consecutive blocks will be moved together.
+- IMPORTANT: If the user provides any explanation or reason for the move (e.g., "because I prefer to study late", "I don't like studying on Sunday", "I find it easier in the morning"), include the full user_prompt in executor_params as "user_prompt" so the backend can extract and save these preferences to learn from user behavior.
+- Day name mapping: Sunday=0, Monday=1, Tuesday=2, Wednesday=3, Thursday=4, Friday=5, Saturday=6
+- Examples:
+  * "reschedule נושאים נבחרים from Thursday 08:00 to Wednesday 08:00" → course_name="נושאים נבחרים", original_day=4 (Thursday), original_start_time="08:00", new_day=3 (Wednesday), new_start_time="08:00", week_start=null (will use current week)
+  * "move אלגוריתמים from Monday 14:00 to Tuesday 16:00 for week 2026-02-08" → course_name="אלגוריתמים", original_day=1 (Monday), original_start_time="14:00", new_day=2 (Tuesday), new_start_time="16:00", week_start="2026-02-08"
+  * "reschedule מעבדה from 12:00 to 13:00 on the week starts on 2026/02/08" → course_name="מעבדה", original_day=null (will be found from block), original_start_time="12:00", new_day=null (same day), new_start_time="13:00", week_start="2026-02-08"
+  * "move course from 08:00 to 14:00" → course_name="course", original_day=null, original_start_time="08:00", new_day=null (same day), new_start_time="14:00"
+
+For block_resizer:
+- Extract block_id (optional) - look for UUID or block identifier. If not provided, use course_name/course_number + day_of_week + start_time + week_start to find the block.
+- Extract course_name or course_number (required if block_id not provided) - the course name or number to identify which block to resize.
+- Extract day_of_week (required if block_id not provided) - the current day of week (0-6, where 0=Sunday, 1=Monday, etc.). Can be extracted from day names like "Monday", "Friday", etc. or Hebrew names like "ראשון", "שישי", etc.
+- Extract start_time (required if block_id not provided) - the current start time in HH:MM format (e.g., "08:00", "12:00", "13:00"). Look for phrases like "from 13:00", "at 13:00", "starting at 13:00". Normalize formats like "012:00" to "12:00".
+- Extract new_duration (required) - the new duration in hours (e.g., 2, 3, 4). Look for phrases like "increase to 3 hours", "reduce to 2 hours", "make it 4 hours", "change duration to 3h", "resize to 2 hours", "extend to 4 hours", "shorten to 1 hour", "2 hours is sufficient", "change it to 13-15" (means 2 hours: 13:00-15:00), "from 13:00 to 15:00" (means 2 hours).
+- IMPORTANT: If user says "from X:00 to Y:00" and wants to change it to "from X:00 to Z:00" where Z < Y, this is a RESIZE (reducing duration), not a move. Calculate duration: if "from 13:00 to 16:00" (3 hours) and user wants "13-15" (2 hours), then new_duration=2.
+- Extract week_start (optional) - the week start date in YYYY-MM-DD or YYYY/MM/DD format. If not provided, the system will use the current week.
+- Extract user_prompt (optional) - if the user provides an explanation for the resize (e.g., "I need more time", "I prefer shorter sessions", "2 hours is sufficient"), include the full user_prompt so the backend can extract and save these preferences.
+- Examples:
+  * "resize אלגוריתמים on Monday 08:00 to 3 hours" → course_name="אלגוריתמים", day_of_week=1 (Monday), start_time="08:00", new_duration=3
+  * "increase מעבדה on Friday 12:00 to 4 hours for week 2026-02-08" → course_name="מעבדה", day_of_week=5 (Friday), start_time="12:00", new_duration=4, week_start="2026-02-08"
+  * "I have a personal work from 13:00 to 16:00. 2 hours is sufficient so change it to 13-15" → course_name from context, day_of_week from context, start_time="13:00", new_duration=2 (13:00-15:00 = 2 hours)
+  * "reduce block duration from 3 to 2 hours" → new_duration=2 (block_id or course info needed)
 
 MOST IMPORTANT RULE: When you see a course number in the user's prompt, extract it EXACTLY as written.
 If the user writes "104043", you MUST extract "104043" with all 6 digits.
