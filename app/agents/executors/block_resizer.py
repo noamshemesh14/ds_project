@@ -312,9 +312,14 @@ class BlockResizer:
                             conflict_reasons.append(f"Permanent hard constraint: {constraint.get('title', 'Constraint')} ({constraint.get('start_time')}-{constraint.get('end_time')})")
                 
                 # Check conflicts with other blocks (different courses)
-                all_blocks = client.table("weekly_plan_blocks").select("id, course_name, start_time, end_time").eq("plan_id", plan_id).eq("day_of_week", original_day).execute()
+                # Get IDs of blocks we're about to delete (to skip them in conflict check)
+                blocks_to_delete_ids = [b["id"] for b in consecutive_blocks] if consecutive_blocks else []
+                
+                all_blocks = client.table("weekly_plan_blocks").select("id, course_name, course_number, work_type, start_time, end_time").eq("plan_id", plan_id).eq("day_of_week", original_day).execute()
                 for existing_block in (all_blocks.data or []):
-                    # Skip blocks we're resizing (same course)
+                    # Skip blocks we're resizing (same course and work_type, or blocks we're about to delete)
+                    if existing_block["id"] in blocks_to_delete_ids:
+                        continue
                     if existing_block.get("course_number") == course_number and existing_block.get("work_type") == work_type:
                         continue
                     block_start_minutes = _time_to_minutes(existing_block.get("start_time", "00:00"))
@@ -355,37 +360,38 @@ class BlockResizer:
                 insert_result = client.table("weekly_plan_blocks").insert(new_blocks).execute()
                 logger.info(f"✅ Created {len(new_blocks)} new blocks")
             
-            # Update course_time_preferences.personal_hours_per_week
+            # Update course_time_preferences based on ALL blocks in the plan
             try:
-                # Get current preferences
-                pref_result = client.table("course_time_preferences").select("personal_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
+                # Get all blocks for this course in the plan to calculate actual distribution
+                all_course_blocks = client.table("weekly_plan_blocks").select("work_type").eq("plan_id", plan_id).eq("course_number", course_number).execute()
                 
-                if pref_result.data:
-                    current_personal_hours = pref_result.data[0].get("personal_hours_per_week", 0)
-                    # Apply weighted average: 80% existing, 20% new
-                    new_personal_hours = int(0.8 * current_personal_hours + 0.2 * new_duration)
+                new_personal_hours = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "personal")
+                new_group_hours = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "group")
+                
+                # Get current preferences for weighted average (80% existing, 20% new)
+                current_pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
+                
+                if current_pref_result.data and current_pref_result.data[0].get("personal_hours_per_week") is not None:
+                    # Convert to float to handle decimal values
+                    current_personal_hours = float(current_pref_result.data[0]["personal_hours_per_week"])
+                    current_group_hours = float(current_pref_result.data[0].get("group_hours_per_week", 0))
                     
-                    client.table("course_time_preferences").update({
-                        "personal_hours_per_week": new_personal_hours
-                    }).eq("user_id", user_id).eq("course_number", course_number).execute()
-                    
-                    logger.info(f"✅ Updated course_time_preferences: personal_hours={current_personal_hours}h -> {new_personal_hours}h (weighted average)")
+                    # Weighted average: 80% existing, 20% new (keep as decimal)
+                    personal_hours = round(0.8 * current_personal_hours + 0.2 * float(new_personal_hours), 2)
+                    group_hours = round(0.8 * current_group_hours + 0.2 * float(new_group_hours), 2)
                 else:
-                    # Create new entry
-                    # Get course credit_points to calculate default
-                    course_result = client.table("courses").select("credit_points").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
-                    credit_points = course_result.data[0].get("credit_points") if course_result.data else 3
-                    total_hours = credit_points * 3
-                    default_group_hours = max(1, int(total_hours * 0.5))
-                    
-                    client.table("course_time_preferences").insert({
-                        "user_id": user_id,
-                        "course_number": course_number,
-                        "personal_hours_per_week": new_duration,
-                        "group_hours_per_week": default_group_hours
-                    }).execute()
-                    
-                    logger.info(f"✅ Created course_time_preferences: personal_hours={new_duration}h")
+                    # No existing preferences, use new values (as decimal)
+                    personal_hours = float(new_personal_hours)
+                    group_hours = float(new_group_hours)
+                
+                client.table("course_time_preferences").upsert({
+                    "user_id": user_id,
+                    "course_number": course_number,
+                    "personal_hours_per_week": personal_hours,
+                    "group_hours_per_week": group_hours
+                }, on_conflict="user_id,course_number").execute()
+                
+                logger.info(f"✅ Updated course_time_preferences: personal={personal_hours}h (from {new_personal_hours}h in blocks), group={group_hours}h (from {new_group_hours}h in blocks)")
             except Exception as pref_err:
                 logger.warning(f"⚠️ Failed to update course_time_preferences: {pref_err}")
             

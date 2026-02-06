@@ -1453,8 +1453,9 @@ async def _refine_schedule_with_llm(
                 try:
                     pref_result = client.table("course_time_preferences").select("personal_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
                     if pref_result.data and pref_result.data[0].get("personal_hours_per_week") is not None:
-                        personal_hours_preferred = pref_result.data[0]["personal_hours_per_week"]
-                        logging.info(f"Using course_time_preferences for {course_number}: personal_hours_per_week={personal_hours_preferred}")
+                        # Round to nearest integer when planning
+                        personal_hours_preferred = round(float(pref_result.data[0]["personal_hours_per_week"]))
+                        logging.info(f"Using course_time_preferences for {course_number}: personal_hours_per_week={personal_hours_preferred} (rounded from {pref_result.data[0]['personal_hours_per_week']})")
                 except Exception as pref_err:
                     logging.warning(f"Could not load course_time_preferences: {pref_err}")
             
@@ -3329,16 +3330,17 @@ async def update_weekly_plan_block(
                 # Get current preferences for weighted average (80% existing, 20% new)
                 current_pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
                 if current_pref_result.data and current_pref_result.data[0].get("personal_hours_per_week") is not None:
-                    current_personal_hours = current_pref_result.data[0]["personal_hours_per_week"]
-                    current_group_hours = current_pref_result.data[0].get("group_hours_per_week", 0)
+                    # Convert to float to handle decimal values
+                    current_personal_hours = float(current_pref_result.data[0]["personal_hours_per_week"])
+                    current_group_hours = float(current_pref_result.data[0].get("group_hours_per_week", 0))
                     
-                    # Weighted average: 80% existing, 20% new
-                    personal_hours = int(0.8 * current_personal_hours + 0.2 * new_personal_hours)
-                    group_hours = int(0.8 * current_group_hours + 0.2 * new_group_hours)
+                    # Weighted average: 80% existing, 20% new (keep as decimal)
+                    personal_hours = round(0.8 * current_personal_hours + 0.2 * float(new_personal_hours), 2)
+                    group_hours = round(0.8 * current_group_hours + 0.2 * float(new_group_hours), 2)
                 else:
-                    # No existing preferences, use new values
-                    personal_hours = new_personal_hours
-                    group_hours = new_group_hours
+                    # No existing preferences, use new values (as decimal)
+                    personal_hours = float(new_personal_hours)
+                    group_hours = float(new_group_hours)
 
                 client.table("course_time_preferences").upsert({
                     "user_id": user_id,
@@ -3732,23 +3734,24 @@ async def move_schedule_block(
                                 current_pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
                                 
                                 if current_pref_result.data and current_pref_result.data[0].get("personal_hours_per_week") is not None:
-                                    current_personal_hours = current_pref_result.data[0]["personal_hours_per_week"]
-                                    current_group_hours = current_pref_result.data[0].get("group_hours_per_week", 0)
+                                    # Convert to float to handle decimal values
+                                    current_personal_hours = float(current_pref_result.data[0]["personal_hours_per_week"])
+                                    current_group_hours = float(current_pref_result.data[0].get("group_hours_per_week", 0))
                                     logging.info(f"📊 [MOVE BLOCK] Current preferences: personal={current_personal_hours}h, group={current_group_hours}h")
                                     
                                     # Calculate adjustment based on LLM classification
                                     # If LLM classified as "less", reduce by ~20% (or 1-2 hours minimum)
                                     # If LLM classified as "more", increase by ~20% (or 1-2 hours minimum)
                                     if hours_change == "less":
-                                        # Reduce personal hours
-                                        adjustment = max(1, int(current_personal_hours * 0.2))  # Reduce by 20% or at least 1 hour
-                                        new_personal_hours = max(1, current_personal_hours - adjustment)
+                                        # Reduce personal hours (keep as decimal)
+                                        adjustment = max(1.0, current_personal_hours * 0.2)  # Reduce by 20% or at least 1 hour
+                                        new_personal_hours = max(1.0, current_personal_hours - adjustment)
                                         # Keep group hours the same (or adjust proportionally if needed)
                                         new_group_hours = current_group_hours
                                         logging.info(f"➖ [MOVE BLOCK] Reducing hours: adjustment={adjustment}, new_personal_hours={new_personal_hours}")
                                     elif hours_change == "more":
-                                        # Increase personal hours
-                                        adjustment = max(1, int(current_personal_hours * 0.2))  # Increase by 20% or at least 1 hour
+                                        # Increase personal hours (keep as decimal)
+                                        adjustment = max(1.0, current_personal_hours * 0.2)  # Increase by 20% or at least 1 hour
                                         new_personal_hours = current_personal_hours + adjustment
                                         # Keep group hours the same (or adjust proportionally if needed)
                                         new_group_hours = current_group_hours
@@ -3760,16 +3763,16 @@ async def move_schedule_block(
                                         if plan_result.data:
                                             plan_id = plan_result.data[0]["id"]
                                             all_course_blocks = client.table("weekly_plan_blocks").select("work_type").eq("plan_id", plan_id).eq("course_number", course_number).execute()
-                                            new_personal_hours = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "personal")
-                                            new_group_hours = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "group")
+                                            new_personal_hours = float(sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "personal"))
+                                            new_group_hours = float(sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "group"))
                                             logging.info(f"📊 [MOVE BLOCK] From blocks: personal={new_personal_hours}h, group={new_group_hours}h")
                                         else:
                                             new_personal_hours = current_personal_hours
                                             new_group_hours = current_group_hours
                                     
-                                    # Apply weighted average: 80% existing, 20% new
-                                    personal_hours = int(0.8 * current_personal_hours + 0.2 * new_personal_hours)
-                                    group_hours = int(0.8 * current_group_hours + 0.2 * new_group_hours)
+                                    # Apply weighted average: 80% existing, 20% new (keep as decimal)
+                                    personal_hours = round(0.8 * current_personal_hours + 0.2 * new_personal_hours, 2)
+                                    group_hours = round(0.8 * current_group_hours + 0.2 * new_group_hours, 2)
                                     logging.info(f"⚖️ [MOVE BLOCK] Weighted average: personal={personal_hours}h (80% of {current_personal_hours} + 20% of {new_personal_hours}), group={group_hours}h")
                                     
                                     # Update course_time_preferences
@@ -4041,37 +4044,51 @@ async def resize_schedule_block(
         
         preferences_updated = False
         
-        # ALWAYS update course_time_preferences.personal_hours_per_week based on new_duration
+        # ALWAYS update course_time_preferences based on ALL blocks in the plan
         # This ensures the system learns from user behavior even without explanation
         try:
-            pref_result = client.table("course_time_preferences").select("personal_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
+            # Get all blocks for this course in the plan to calculate actual distribution
+            all_course_blocks = client.table("weekly_plan_blocks").select("work_type").eq("plan_id", plan_id).eq("course_number", course_number).execute()
+            
+            new_personal_hours = float(sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "personal"))
+            new_group_hours = float(sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "group"))
+            
+            # Get current preferences for weighted average (80% existing, 20% new)
+            pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
             
             if pref_result.data and pref_result.data[0].get("personal_hours_per_week") is not None:
-                current_personal_hours = pref_result.data[0]["personal_hours_per_week"]
-                # Apply weighted average: 80% existing, 20% new
-                new_personal_hours = int(0.8 * current_personal_hours + 0.2 * new_duration)
+                # Convert to float to handle decimal values
+                current_personal_hours = float(pref_result.data[0]["personal_hours_per_week"])
+                current_group_hours = float(pref_result.data[0].get("group_hours_per_week", 0))
                 
-                client.table("course_time_preferences").update({
-                    "personal_hours_per_week": new_personal_hours
-                }).eq("user_id", user_id).eq("course_number", course_number).execute()
+                # Apply weighted average: 80% existing, 20% new (keep as decimal)
+                personal_hours = round(0.8 * current_personal_hours + 0.2 * new_personal_hours, 2)
+                group_hours = round(0.8 * current_group_hours + 0.2 * new_group_hours, 2)
                 
-                logging.info(f"✅ Updated course_time_preferences: personal_hours={current_personal_hours}h -> {new_personal_hours}h (weighted average: 80% existing, 20% new)")
+                client.table("course_time_preferences").upsert({
+                    "user_id": user_id,
+                    "course_number": course_number,
+                    "personal_hours_per_week": personal_hours,
+                    "group_hours_per_week": group_hours
+                }, on_conflict="user_id,course_number").execute()
+                
+                logging.info(f"✅ Updated course_time_preferences: personal={personal_hours}h (from {new_personal_hours}h in blocks), group={group_hours}h (from {new_group_hours}h in blocks)")
                 preferences_updated = True
             else:
                 # Create new entry
                 course_result = client.table("courses").select("credit_points").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
                 credit_points = course_result.data[0].get("credit_points") if course_result.data else 3
                 total_hours = credit_points * 3
-                default_group_hours = max(1, int(total_hours * 0.5))
+                default_group_hours = max(1.0, float(total_hours * 0.5))
                 
                 client.table("course_time_preferences").insert({
                     "user_id": user_id,
                     "course_number": course_number,
-                    "personal_hours_per_week": new_duration,
+                    "personal_hours_per_week": float(new_personal_hours) if new_personal_hours > 0 else float(new_duration),
                     "group_hours_per_week": default_group_hours
                 }).execute()
                 
-                logging.info(f"✅ Created course_time_preferences: personal_hours={new_duration}h")
+                logging.info(f"✅ Created course_time_preferences: personal={new_personal_hours}h, group={default_group_hours}h")
                 preferences_updated = True
         except Exception as pref_err:
             logging.warning(f"⚠️ Failed to update course_time_preferences: {pref_err}")
@@ -4130,18 +4147,19 @@ async def resize_schedule_block(
                                 current_pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
                                 
                                 if current_pref_result.data and current_pref_result.data[0].get("personal_hours_per_week") is not None:
-                                    current_personal_hours = current_pref_result.data[0]["personal_hours_per_week"]
-                                    current_group_hours = current_pref_result.data[0].get("group_hours_per_week", 0)
+                                    # Convert to float to handle decimal values
+                                    current_personal_hours = float(current_pref_result.data[0]["personal_hours_per_week"])
+                                    current_group_hours = float(current_pref_result.data[0].get("group_hours_per_week", 0))
                                     logging.info(f"📊 [RESIZE BLOCK] Current preferences: personal={current_personal_hours}h, group={current_group_hours}h")
                                     
                                     # Calculate adjustment based on LLM classification
                                     if hours_change == "less":
-                                        adjustment = max(1, int(current_personal_hours * 0.2))
-                                        new_personal_hours = max(1, current_personal_hours - adjustment)
+                                        adjustment = max(1.0, current_personal_hours * 0.2)  # Keep as decimal
+                                        new_personal_hours = max(1.0, current_personal_hours - adjustment)
                                         new_group_hours = current_group_hours
                                         logging.info(f"➖ [RESIZE BLOCK] Reducing hours: adjustment={adjustment}, new_personal_hours={new_personal_hours}")
                                     elif hours_change == "more":
-                                        adjustment = max(1, int(current_personal_hours * 0.2))
+                                        adjustment = max(1.0, current_personal_hours * 0.2)  # Keep as decimal
                                         new_personal_hours = current_personal_hours + adjustment
                                         new_group_hours = current_group_hours
                                         logging.info(f"➕ [RESIZE BLOCK] Increasing hours: adjustment={adjustment}, new_personal_hours={new_personal_hours}")
@@ -4149,13 +4167,13 @@ async def resize_schedule_block(
                                         # Use current distribution from blocks
                                         logging.info(f"🔄 [RESIZE BLOCK] No specific hours_change direction, using current blocks distribution")
                                         all_course_blocks = client.table("weekly_plan_blocks").select("work_type").eq("plan_id", plan_id).eq("course_number", course_number).execute()
-                                        new_personal_hours = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "personal")
-                                        new_group_hours = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "group")
+                                        new_personal_hours = float(sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "personal"))
+                                        new_group_hours = float(sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "group"))
                                         logging.info(f"📊 [RESIZE BLOCK] From blocks: personal={new_personal_hours}h, group={new_group_hours}h")
                                     
-                                    # Apply weighted average: 80% existing, 20% new
-                                    personal_hours = int(0.8 * current_personal_hours + 0.2 * new_personal_hours)
-                                    group_hours = int(0.8 * current_group_hours + 0.2 * new_group_hours)
+                                    # Apply weighted average: 80% existing, 20% new (keep as decimal)
+                                    personal_hours = round(0.8 * current_personal_hours + 0.2 * new_personal_hours, 2)
+                                    group_hours = round(0.8 * current_group_hours + 0.2 * new_group_hours, 2)
                                     logging.info(f"⚖️ [RESIZE BLOCK] Weighted average: personal={personal_hours}h (80% of {current_personal_hours} + 20% of {new_personal_hours}), group={group_hours}h")
                                     
                                     # Update course_time_preferences
@@ -5021,11 +5039,12 @@ async def approve_group_change_request(
                                     member_pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", member_id).eq("course_number", course_number).limit(1).execute()
                                     
                                     if member_pref_result.data:
-                                        current_personal_hours = member_pref_result.data[0].get("personal_hours_per_week", 0)
-                                        current_group_hours = member_pref_result.data[0].get("group_hours_per_week", 0)
+                                        # Convert to float to handle decimal values
+                                        current_personal_hours = float(member_pref_result.data[0].get("personal_hours_per_week", 0))
+                                        current_group_hours = float(member_pref_result.data[0].get("group_hours_per_week", 0))
                                         
-                                        # Apply weighted average: 80% existing, 20% new group hours
-                                        new_group_hours = int(0.8 * current_group_hours + 0.2 * weighted_hours)
+                                        # Apply weighted average: 80% existing, 20% new group hours (keep as decimal)
+                                        new_group_hours = round(0.8 * current_group_hours + 0.2 * float(weighted_hours), 2)
                                         
                                         # Update with weighted average
                                         client.table("course_time_preferences").update({
