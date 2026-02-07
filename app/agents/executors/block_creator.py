@@ -134,41 +134,30 @@ class BlockCreator:
             if not course_number and not group_name:
                 raise HTTPException(status_code=400, detail=f"Could not find course number for '{course_name}'. Please provide course_number or group_name.")
             
-            # Normalize start_time format
-            time_slots = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
+            # Normalize start_time format (ensure HH:MM format)
             start_time_normalized = start_time
-            if start_time not in time_slots:
-                # Try to normalize (e.g., "8:00" -> "08:00")
-                start_minutes = _time_to_minutes(start_time)
-                # Find closest time slot
-                closest_slot = None
-                min_diff = float('inf')
-                for slot in time_slots:
-                    slot_minutes = _time_to_minutes(slot)
-                    diff = abs(slot_minutes - start_minutes)
-                    if diff < min_diff:
-                        min_diff = diff
-                        closest_slot = slot
-                if closest_slot and min_diff <= 30:  # Within 30 minutes
-                    start_time_normalized = closest_slot
-                    logger.info(f"📝 Normalized start_time from {start_time} to {start_time_normalized}")
-                else:
-                    # Use the original time but validate it's in valid range
-                    if start_minutes < _time_to_minutes("08:00") or start_minutes > _time_to_minutes("20:00"):
-                        raise HTTPException(status_code=400, detail=f"Invalid start_time: {start_time}. Must be between 08:00 and 20:00")
+            if start_time:
+                # Normalize time format (e.g., "8:00" -> "08:00", "8:5" -> "08:05")
+                try:
+                    parts = start_time.split(":")
+                    if len(parts) == 2:
+                        hours = parts[0].zfill(2)
+                        minutes = parts[1].zfill(2)
+                        start_time_normalized = f"{hours}:{minutes}"
+                        # Validate time format (00:00 to 23:59)
+                        hours_int = int(hours)
+                        minutes_int = int(minutes)
+                        if hours_int < 0 or hours_int > 23 or minutes_int < 0 or minutes_int > 59:
+                            raise HTTPException(status_code=400, detail=f"Invalid start_time: {start_time}. Hours must be 0-23, minutes must be 0-59")
+                    else:
+                        raise HTTPException(status_code=400, detail=f"Invalid start_time format: {start_time}. Expected HH:MM format")
+                except ValueError:
+                    raise HTTPException(status_code=400, detail=f"Invalid start_time format: {start_time}. Expected HH:MM format")
             
             # Calculate end time
-            start_idx = time_slots.index(start_time_normalized) if start_time_normalized in time_slots else None
-            if start_idx is None:
-                start_minutes = _time_to_minutes(start_time_normalized)
-                end_minutes = start_minutes + (duration * 60)
-                end_time = _minutes_to_time(end_minutes)
-            else:
-                end_idx = start_idx + duration
-                if end_idx < len(time_slots):
-                    end_time = time_slots[end_idx]
-                else:
-                    end_time = "21:00"
+            start_minutes = _time_to_minutes(start_time_normalized)
+            end_minutes = start_minutes + (duration * 60)
+            end_time = _minutes_to_time(end_minutes)
             
             # Check for conflicts
             conflict_reasons = []
@@ -298,17 +287,9 @@ class BlockCreator:
                     reason = user_prompt
                 
                 # Calculate end_time for the proposed block
-                if start_time_normalized in time_slots:
-                    start_idx = time_slots.index(start_time_normalized)
-                    end_idx = start_idx + duration
-                    if end_idx < len(time_slots):
-                        proposed_end_time = time_slots[end_idx]
-                    else:
-                        proposed_end_time = "21:00"
-                else:
-                    start_minutes = _time_to_minutes(start_time_normalized)
-                    end_minutes = start_minutes + (duration * 60)
-                    proposed_end_time = _minutes_to_time(end_minutes)
+                start_minutes = _time_to_minutes(start_time_normalized)
+                end_minutes = start_minutes + (duration * 60)
+                proposed_end_time = _minutes_to_time(end_minutes)
                 
                 # Check for conflicts before creating request
                 if conflict_reasons:
@@ -392,28 +373,16 @@ class BlockCreator:
             
             # Create the blocks
             time_slots_for_block = []
-            if start_time_normalized in time_slots:
-                start_idx = time_slots.index(start_time_normalized)
-                for i in range(duration):
-                    if start_idx + i < len(time_slots):
-                        time_slots_for_block.append(time_slots[start_idx + i])
-            else:
-                # Use the original time and calculate consecutive hours
-                time_slots_for_block = [start_time_normalized]
-                for i in range(1, duration):
-                    next_minutes = _time_to_minutes(start_time_normalized) + (i * 60)
-                    time_slots_for_block.append(_minutes_to_time(next_minutes))
+            # Calculate consecutive hours starting from start_time_normalized
+            time_slots_for_block = [start_time_normalized]
+            for i in range(1, duration):
+                next_minutes = _time_to_minutes(start_time_normalized) + (i * 60)
+                time_slots_for_block.append(_minutes_to_time(next_minutes))
             
             new_blocks = []
             for i, slot_time in enumerate(time_slots_for_block):
                 if i + 1 < len(time_slots_for_block):
                     slot_end = time_slots_for_block[i + 1]
-                elif slot_time in time_slots:
-                    slot_idx = time_slots.index(slot_time)
-                    if slot_idx + 1 < len(time_slots):
-                        slot_end = time_slots[slot_idx + 1]
-                    else:
-                        slot_end = "21:00"
                 else:
                     slot_end = _minutes_to_time(_time_to_minutes(slot_time) + 60)
                 

@@ -69,6 +69,8 @@ class ConstraintManager:
     async def execute(
         self,
         user_id: str,
+        action: Optional[str] = "add",  # "add" or "delete"
+        constraint_id: Optional[str] = None,  # For deletion
         title: Optional[str] = None,
         description: Optional[str] = None,
         days: Optional[List[int]] = None,
@@ -83,11 +85,13 @@ class ConstraintManager:
         **kwargs
     ) -> Dict[str, Any]:
         """
-        Add a constraint (permanent or one-time) to user's schedule.
+        Add or delete a constraint (permanent or one-time) to/from user's schedule.
         
         Args:
             user_id: User ID
-            title: Constraint title (e.g., "אימון", "עבודה")
+            action: "add" (default) or "delete"
+            constraint_id: Constraint ID for deletion (required if action="delete")
+            title: Constraint title (e.g., "אימון", "עבודה") - used for finding constraint if constraint_id not provided
             description: Optional description
             days: List of days (0-6, where 0=Sunday) - for multiple days
             day_of_week: Single day (0-6) - if provided, will be converted to days list
@@ -104,7 +108,13 @@ class ConstraintManager:
             if not client:
                 raise HTTPException(status_code=500, detail="Supabase client not configured")
             
-            # Validate required fields
+            # Handle deletion
+            if action == "delete":
+                return await self._delete_constraint(
+                    client, user_id, constraint_id, title, is_permanent, week_start, date, user_prompt
+                )
+            
+            # Validate required fields for adding
             if not title:
                 raise HTTPException(status_code=400, detail="title is required")
             
@@ -343,6 +353,142 @@ class ConstraintManager:
             import traceback
             logger.error(traceback.format_exc())
             raise HTTPException(status_code=500, detail=f"Error creating constraint: {str(e)}")
+
+    async def _delete_constraint(
+        self,
+        client,
+        user_id: str,
+        constraint_id: Optional[str] = None,
+        title: Optional[str] = None,
+        is_permanent: Optional[bool] = None,
+        week_start: Optional[str] = None,
+        date: Optional[str] = None,
+        user_prompt: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Delete a constraint (permanent or one-time).
+        Can find constraint by ID, or by title + is_permanent + week_start/date.
+        """
+        try:
+            # If constraint_id is provided, use it directly
+            if constraint_id:
+                # Try permanent constraints first
+                existing = client.table("constraints").select("id").eq("id", constraint_id).eq("user_id", user_id).execute()
+                if existing.data:
+                    client.table("constraints").delete().eq("id", constraint_id).execute()
+                    logger.info(f"✅ Deleted permanent constraint {constraint_id}")
+                    return {
+                        "status": "success",
+                        "message": "Permanent constraint deleted successfully",
+                        "deleted_id": constraint_id
+                    }
+                
+                # Try weekly constraints
+                existing = client.table("weekly_constraints").select("id").eq("id", constraint_id).eq("user_id", user_id).execute()
+                if existing.data:
+                    client.table("weekly_constraints").delete().eq("id", constraint_id).execute()
+                    logger.info(f"✅ Deleted weekly constraint {constraint_id}")
+                    return {
+                        "status": "success",
+                        "message": "One-time constraint deleted successfully",
+                        "deleted_id": constraint_id
+                    }
+                
+                raise HTTPException(status_code=404, detail="Constraint not found")
+            
+            # If no constraint_id, try to find by title and other parameters
+            if not title:
+                raise HTTPException(status_code=400, detail="constraint_id or title is required for deletion")
+            
+            # If date is provided, convert to week_start
+            if date:
+                if "/" in date:
+                    date = date.replace("/", "-")
+                week_start = _get_week_start(date)
+                logger.info(f"📅 Converted date {date} to week_start: {week_start}")
+            
+            # Determine if permanent (default: try both if not specified)
+            if is_permanent is None:
+                # Try to find in both tables
+                # First try permanent
+                permanent_constraints = client.table("constraints").select("*").eq("user_id", user_id).ilike("title", f"%{title}%").execute()
+                if permanent_constraints.data:
+                    if len(permanent_constraints.data) == 1:
+                        constraint_id = permanent_constraints.data[0]["id"]
+                        client.table("constraints").delete().eq("id", constraint_id).execute()
+                        logger.info(f"✅ Deleted permanent constraint by title: {title}")
+                        return {
+                            "status": "success",
+                            "message": "Permanent constraint deleted successfully",
+                            "deleted_id": constraint_id
+                        }
+                    else:
+                        raise HTTPException(status_code=400, detail=f"Multiple permanent constraints found with title '{title}'. Please specify constraint_id.")
+                
+                # Try weekly constraints
+                weekly_query = client.table("weekly_constraints").select("*").eq("user_id", user_id).ilike("title", f"%{title}%")
+                if week_start:
+                    weekly_query = weekly_query.eq("week_start", week_start)
+                weekly_constraints = weekly_query.execute()
+                
+                if weekly_constraints.data:
+                    if len(weekly_constraints.data) == 1:
+                        constraint_id = weekly_constraints.data[0]["id"]
+                        client.table("weekly_constraints").delete().eq("id", constraint_id).execute()
+                        logger.info(f"✅ Deleted weekly constraint by title: {title}")
+                        return {
+                            "status": "success",
+                            "message": "One-time constraint deleted successfully",
+                            "deleted_id": constraint_id
+                        }
+                    else:
+                        raise HTTPException(status_code=400, detail=f"Multiple weekly constraints found with title '{title}'. Please specify constraint_id or week_start.")
+                
+                raise HTTPException(status_code=404, detail=f"Constraint with title '{title}' not found")
+            
+            # is_permanent is specified
+            if is_permanent:
+                # Permanent constraint
+                permanent_constraints = client.table("constraints").select("*").eq("user_id", user_id).ilike("title", f"%{title}%").execute()
+                if not permanent_constraints.data:
+                    raise HTTPException(status_code=404, detail=f"Permanent constraint with title '{title}' not found")
+                if len(permanent_constraints.data) > 1:
+                    raise HTTPException(status_code=400, detail=f"Multiple permanent constraints found with title '{title}'. Please specify constraint_id.")
+                constraint_id = permanent_constraints.data[0]["id"]
+                client.table("constraints").delete().eq("id", constraint_id).execute()
+                logger.info(f"✅ Deleted permanent constraint by title: {title}")
+                return {
+                    "status": "success",
+                    "message": "Permanent constraint deleted successfully",
+                    "deleted_id": constraint_id
+                }
+            else:
+                # One-time constraint
+                weekly_query = client.table("weekly_constraints").select("*").eq("user_id", user_id).ilike("title", f"%{title}%")
+                if week_start:
+                    weekly_query = weekly_query.eq("week_start", week_start)
+                weekly_constraints = weekly_query.execute()
+                
+                if not weekly_constraints.data:
+                    raise HTTPException(status_code=404, detail=f"One-time constraint with title '{title}' not found")
+                if len(weekly_constraints.data) > 1:
+                    raise HTTPException(status_code=400, detail=f"Multiple one-time constraints found with title '{title}'. Please specify constraint_id or week_start.")
+                constraint_id = weekly_constraints.data[0]["id"]
+                client.table("weekly_constraints").delete().eq("id", constraint_id).execute()
+                logger.info(f"✅ Deleted weekly constraint by title: {title}")
+                return {
+                    "status": "success",
+                    "message": "One-time constraint deleted successfully",
+                    "deleted_id": constraint_id
+                }
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error deleting constraint: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise HTTPException(status_code=500, detail=f"Error deleting constraint: {str(e)}")
 
     def get_step_log(
         self,
