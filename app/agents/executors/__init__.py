@@ -8,6 +8,7 @@ from .preference_updater import PreferenceUpdater
 from .block_mover import BlockMover
 from .block_resizer import BlockResizer
 from .block_creator import BlockCreator
+from .constraint_manager import ConstraintManager
 
 __all__ = [
     "CourseManager",
@@ -20,4 +21,5 @@ __all__ = [
     "BlockMover",
     "BlockResizer",
     "BlockCreator",
+    "ConstraintManager",
 ]

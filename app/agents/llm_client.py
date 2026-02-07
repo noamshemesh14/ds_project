@@ -225,11 +225,12 @@ Available executors:
 - notification_retriever: Get new notifications. No parameters needed
 - notification_cleaner: Clean/delete notifications. Optional: notification_id
 - request_handler: Approve/reject requests (group invitations or change requests). Use this when the user wants to approve/accept or reject/decline an invitation or change request. Requires: action ("accept"/"approve" or "reject"/"decline"). Optional: request_id (if not provided, will search by group_name or course_number for invitations), group_name (string, e.g., "קבוצת לימוד - רשתות מחשבים"), course_number (string, e.g., "10403"). The handler will find the pending invitation or change request automatically.
-- preference_updater: Update course time preferences. Requires: course_number, personal_ratio, group_ratio
+- preference_updater: Update user study preferences from natural language. Use this when the user wants to update their study preferences (e.g., "I prefer to study in the morning", "I like to study late at night", "I work better in short sessions"). Requires: preferences_text or user_prompt (the user's preference description). This updates the user's study_preferences_raw and generates a summary using LLM.
 - block_mover: Move study blocks. Requires: block_id, new_day, new_start_time, new_end_time. Optional: user_prompt (original user prompt for preference extraction)
 - block_resizer: Resize study blocks (change duration). Use this when the user wants to INCREASE or DECREASE the duration of an EXISTING block (e.g., "change from 3 hours to 2 hours", "reduce to 2 hours", "increase to 4 hours", "2 hours is sufficient so change it to 13-15"). Requires: block_id (optional), course_name or course_number, day_of_week, start_time, new_duration, week_start (optional). If block_id not provided, use course_name/course_number + day_of_week + start_time + week_start to find the block. For group blocks, creates a change request. For personal blocks, updates directly and updates course_time_preferences.personal_hours_per_week.
 - IMPORTANT: If user says "from X:00 to Y:00" and wants to change it to "from X:00 to Z:00" where Z < Y (or Z > Y), this is a RESIZE (changing duration), not a move. Choose block_resizer, not block_mover.
 - block_creator: Create a NEW study block and add it to the schedule. Use this when the user wants to ADD a new block that doesn't exist yet (e.g., "add a 2-hour block for אלגוריתמים on Monday at 10:00", "create a new study session for course 10403 on Wednesday 14:00", "add 3 hours for מבני נתונים on Thursday starting at 08:00"). Requires: course_name or course_number, day_of_week (0-6, where 0=Sunday), start_time (HH:MM format). Optional: duration (default 1 hour), work_type ("personal" or "group", default "personal"), week_start (YYYY-MM-DD format, defaults to current week). This creates a NEW block, not moving or resizing an existing one.
+- constraint_manager: Add or delete constraints to/from user's schedule (permanent or one-time). Use this when the user wants to add a constraint (e.g., "I have training on Monday 18:00-20:00", "I work every Tuesday 14:00-16:00", "I have a meeting on Wednesday 10:00-11:00 this week") or delete a constraint (e.g., "delete my training constraint", "remove the work constraint", "delete the supermarket constraint"). For adding: Requires: action="add" (default), title (constraint name, e.g., "אימון", "עבודה"), start_time (HH:MM format), end_time (HH:MM format), days (list of days 0-6) or day_of_week (single day 0-6). Optional: description, is_permanent (True for permanent/recurring constraint, False for one-time, default: False if not specified), week_start (YYYY-MM-DD format for one-time constraints, defaults to current week), date (specific date YYYY-MM-DD for one-time constraints, will be converted to week_start), is_hard (True for hard constraint, False for soft, default: True). If user doesn't specify "permanent" or "recurring", it's one-time. The system will check for conflicts with existing constraints (rejects) and existing schedule (warns but allows). For deleting: Requires: action="delete", constraint_id (optional, UUID) or title (constraint name to find and delete). Optional: is_permanent (True for permanent, False for one-time, if not specified will search both), week_start (for one-time constraints), date (specific date for one-time constraints, will be converted to week_start). If multiple constraints match the title, constraint_id must be provided.
 
 IMPORTANT: When extracting parameters for block_mover, also analyze the user_prompt for any preferences or explanations:
 - If the user mentions preferences like "I prefer to study late", "I like morning study", "I don't like studying on day X", etc., include the full user_prompt in executor_params so the backend can extract and save these preferences.
@@ -294,6 +295,40 @@ For block_resizer:
   * "increase מעבדה on Friday 12:00 to 4 hours for week 2026-02-08" → course_name="מעבדה", day_of_week=5 (Friday), start_time="12:00", new_duration=4, week_start="2026-02-08"
   * "I have a personal work from 13:00 to 16:00. 2 hours is sufficient so change it to 13-15" → course_name from context, day_of_week from context, start_time="13:00", new_duration=2 (13:00-15:00 = 2 hours)
   * "reduce block duration from 3 to 2 hours" → new_duration=2 (block_id or course info needed)
+
+For preference_updater:
+- Extract preferences_text or user_prompt (required) - the user's natural language description of their study preferences. This can be the full user prompt if it's about preferences, or a specific preferences text. Examples: "I prefer to study in the morning", "I like to study late at night", "I work better in short sessions", "I prefer studying on weekdays", etc.
+
+For constraint_manager:
+- Extract action (optional, default "add") - "add" for adding a constraint, "delete" for deleting a constraint. Look for keywords like "delete", "remove", "מחק", "הסר" for deletion, or "add", "create", "הוסף", "צור" for addition.
+- For ADDING constraints:
+  - Extract title (required) - the constraint name (e.g., "אימון", "עבודה", "מפגש", "meeting", "training", "work"). Look for activity names in the prompt.
+  - Extract start_time (required) - start time in HH:MM format (e.g., "18:00", "14:00"). Look for phrases like "from 18:00", "at 18:00", "starting at 18:00", "18:00-20:00" (extract 18:00).
+  - Extract end_time (required) - end time in HH:MM format (e.g., "20:00", "16:00"). Look for phrases like "until 20:00", "to 20:00", "18:00-20:00" (extract 20:00), "ends at 20:00".
+  - Extract days (optional) or day_of_week (optional) - days of week (0-6, where 0=Sunday). Can be extracted from day names like "Monday", "Tuesday", etc. or Hebrew names like "ראשון", "שני", etc. If multiple days mentioned (e.g., "every Monday and Wednesday"), extract as list. If single day, use day_of_week. IMPORTANT: If user provides a specific date (e.g., "14/2/26"), you should extract both the date AND calculate the day_of_week from that date. For example, if date is "2026-02-14" (which is a Saturday), extract day_of_week=6. If you can't determine the day from the date, set day_of_week to null and the system will calculate it automatically.
+  - Extract is_permanent (optional) - True if user says "permanent", "recurring", "every week", "always", "regularly". False if user says "this week", "one-time", "today", or doesn't specify (default: False).
+  - Extract date (optional) - specific date (YYYY-MM-DD or YYYY/MM/DD) when the constraint occurs. If provided, the system will convert it to week_start (Sunday of that week). Look for phrases like "on 2025-02-15", "on February 15", "on 15/02/2025", "on 15.02.2025", "יום רביעי 15/02", etc. IMPORTANT: If user provides a specific date, extract it as "date" parameter, NOT as week_start. The system will automatically convert it to the correct week_start.
+  - Extract week_start (optional) - week start date (YYYY-MM-DD, Sunday) for one-time constraints. Only use this if the user explicitly mentions "week starting" or "week of". If user provides a specific date, use "date" instead. If not provided, defaults to current week.
+  - Extract description (optional) - additional details about the constraint.
+  - Extract is_hard (optional) - True for hard constraint (default), False for soft constraint.
+- For DELETING constraints:
+  - Extract constraint_id (optional) - UUID of the constraint to delete. If not provided, will search by title.
+  - Extract title (required if constraint_id not provided) - the constraint name to find and delete (e.g., "אימון", "עבודה", "supermarket", "job interview"). Look for activity names in the prompt.
+  - Extract is_permanent (optional) - True for permanent constraint, False for one-time. If not specified, will search both types.
+  - Extract week_start (optional) - week start date (YYYY-MM-DD, Sunday) for one-time constraints. Helps narrow down the search.
+  - Extract date (optional) - specific date (YYYY-MM-DD or YYYY/MM/DD) for one-time constraints. Will be converted to week_start.
+- Examples for ADDING:
+  * "I have training on Monday 18:00-20:00" → action="add", title="training" or "אימון", day_of_week=1 (Monday), start_time="18:00", end_time="20:00", is_permanent=False (default)
+  * "I work every Tuesday 14:00-16:00" → action="add", title="work" or "עבודה", day_of_week=2 (Tuesday), start_time="14:00", end_time="16:00", is_permanent=True
+  * "I have a meeting on Wednesday 10:00-11:00 this week" → action="add", title="meeting" or "מפגש", day_of_week=3 (Wednesday), start_time="10:00", end_time="11:00", is_permanent=False, week_start=current week
+  * "I have training on Wednesday 15/02/2025 18:00-20:00" → action="add", title="training", day_of_week=3 (Wednesday), start_time="18:00", end_time="20:00", date="2025-02-15" (will be converted to week_start=Sunday of that week)
+  * "יש לי אימון ביום רביעי 15/02/2025 בשעה 18:00-20:00" → action="add", title="אימון", day_of_week=3 (Wednesday), start_time="18:00", end_time="20:00", date="2025-02-15"
+- Examples for DELETING:
+  * "delete my training constraint" → action="delete", title="training" or "אימון"
+  * "remove the work constraint" → action="delete", title="work" or "עבודה"
+  * "delete the supermarket constraint" → action="delete", title="supermarket"
+  * "מחק את האילוץ של האימון" → action="delete", title="אימון"
+  * "remove the job interview constraint from 14/2/26" → action="delete", title="job interview", date="2026-02-14"
 
 For block_creator:
 - Extract course_name or course_number (required) - the course name or number for which to create a new block. Look for course names in the prompt (e.g., "אלגוריתמים", "מבני נתונים", etc.) or course numbers (3-6 digits).

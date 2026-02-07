@@ -366,7 +366,7 @@ class BlockMover:
                 
                 # Day names for display
                 day_names = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
-                original_time_str = f"{day_names[original_day]} {original_start}" if original_day is not None else "קיים"
+                original_time_str = f"{day_names[original_day]} {original_start}" if original_day is not None else "new block"
                 proposed_time_str = f"{day_names[new_day]} {new_start_time}"
                 
                 title = f"בקשת שינוי מפגש: {group_name}"

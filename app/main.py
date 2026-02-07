@@ -4623,6 +4623,7 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
             # Create group_plan_blocks
             new_group_blocks = []
             if proposed_start in time_slots:
+                # Use time_slots approach
                 start_idx = time_slots.index(proposed_start)
                 for i in range(proposed_duration):
                     if start_idx + i < len(time_slots):
@@ -4637,6 +4638,23 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
                             "end_time": new_end,
                             "created_by": requester_id
                         })
+            else:
+                # Handle times not in time_slots (e.g., "19:00", "20:00", etc.)
+                start_minutes = _time_to_minutes(proposed_start)
+                for i in range(proposed_duration):
+                    block_start_minutes = start_minutes + (i * 60)
+                    block_end_minutes = block_start_minutes + 60
+                    new_time = _minutes_to_time(block_start_minutes)
+                    new_end = _minutes_to_time(block_end_minutes)
+                    new_group_blocks.append({
+                        "group_id": group_id,
+                        "week_start": week_start,
+                        "course_number": course_number,
+                        "day_of_week": proposed_day,
+                        "start_time": new_time,
+                        "end_time": new_end,
+                        "created_by": requester_id
+                    })
             
             if new_group_blocks:
                 client.table("group_plan_blocks").insert(new_group_blocks).execute()
@@ -4644,24 +4662,40 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
                 
                 # Create weekly_plan_blocks for all members
                 for member_id in member_ids:
+                    # Get or create plan for this member
                     member_plan = client.table("weekly_plans").select("id").eq("user_id", member_id).eq("week_start", week_start).limit(1).execute()
-                    if member_plan.data:
+                    if not member_plan.data:
+                        # Create new plan if it doesn't exist
+                        plan_result = client.table("weekly_plans").insert({
+                            "user_id": member_id,
+                            "week_start": week_start,
+                            "source": "group_update"
+                        }).execute()
+                        if plan_result.data:
+                            plan_id = plan_result.data[0]["id"]
+                        else:
+                            logging.warning(f"⚠️ Failed to create weekly_plan for member {member_id}, skipping blocks")
+                            continue
+                    else:
                         plan_id = member_plan.data[0]["id"]
-                        new_member_blocks = []
-                        for block in new_group_blocks:
-                            new_member_blocks.append({
-                                "plan_id": plan_id,
-                                "user_id": member_id,
-                                "course_number": course_number,
-                                "course_name": course_name,
-                                "work_type": "group",
-                                "day_of_week": block["day_of_week"],
-                                "start_time": block["start_time"],
-                                "end_time": block["end_time"],
-                                "source": "group"
-                            })
-                        if new_member_blocks:
-                            client.table("weekly_plan_blocks").insert(new_member_blocks).execute()
+                    
+                    # Create weekly_plan_blocks for this member
+                    new_member_blocks = []
+                    for block in new_group_blocks:
+                        new_member_blocks.append({
+                            "plan_id": plan_id,
+                            "user_id": member_id,
+                            "course_number": course_number,
+                            "course_name": course_name,
+                            "work_type": "group",
+                            "day_of_week": block["day_of_week"],
+                            "start_time": block["start_time"],
+                            "end_time": block["end_time"],
+                            "source": "group"
+                        })
+                    if new_member_blocks:
+                        client.table("weekly_plan_blocks").insert(new_member_blocks).execute()
+                        logging.info(f"✅ Created {len(new_member_blocks)} weekly_plan_blocks for member {member_id}")
             
             # Update preferences (same as in approve_group_change_request for move)
             is_new_block = (original_duration == 0 and original_day is None)
