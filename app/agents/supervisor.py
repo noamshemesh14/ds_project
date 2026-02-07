@@ -16,6 +16,7 @@ from app.agents.executors.preference_updater import PreferenceUpdater
 from app.agents.executors.block_mover import BlockMover
 from app.agents.executors.block_resizer import BlockResizer
 from app.agents.executors.block_creator import BlockCreator
+from app.agents.executors.constraint_manager import ConstraintManager
 from app.agents.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ class Supervisor:
             "block_mover": BlockMover(),
             "block_resizer": BlockResizer(),
             "block_creator": BlockCreator(),
+            "constraint_manager": ConstraintManager(),
         }
         self.module_name = "supervisor"
         self.llm_client = LLMClient()
@@ -249,5 +251,13 @@ class Supervisor:
         # Block creator patterns
         if any(word in prompt_lower for word in ["add block", "create block", "new block", "הוסף בלוק", "צור בלוק", "בלוק חדש", "add study", "הוסף למידה"]):
             return "block_creator", {}
+        
+        # Preference updater patterns
+        if any(word in prompt_lower for word in ["update preferences", "עדכן העדפות", "study preferences", "העדפות לימוד", "I prefer", "אני מעדיף", "I like", "אני אוהב"]):
+            return "preference_updater", {}
+        
+        # Constraint manager patterns
+        if any(word in prompt_lower for word in ["add constraint", "הוסף אילוץ", "I have", "יש לי", "training", "אימון", "work", "עבודה", "meeting", "מפגש", "constraint", "אילוץ"]):
+            return "constraint_manager", {}
         
         return None, {}
