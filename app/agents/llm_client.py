@@ -219,6 +219,7 @@ class LLMClient:
 2. What parameters to extract from the user's request
 
 Available executors:
+- rag_chat: Answer questions about Technion academic information, procedures, regulations, courses, and general academic advice. Use this for ANY informational question, procedural question, or general inquiry that doesn't require a specific action (like adding courses, moving blocks, etc.). This is the default executor for chat/informational queries. No parameters needed - just pass the user's question as-is.
 - course_manager: Add courses from catalog to user's course list. Requires: course_number (string, e.g., "10403"). Optional: course_name (string, e.g., "אלגוריתמים"). Note: Semester and year are handled by default in the backend and do not need to be extracted.
 - schedule_retriever: Get weekly schedule. Optional: date (YYYY-MM-DD or YYYY/MM/DD format). If no date is provided, default to the current week.
 - group_manager: Create study groups and invite members. Use this when the user wants to create a new study group or invite people to a group. Requires: course_number (string, e.g., "10403"), group_name (string), invite_emails (list of email addresses). Optional: course_name (string), description (string). Validations: Only registered users enrolled in the course can be invited. At least one other user (besides the creator) must be invited. Cannot invite yourself.
