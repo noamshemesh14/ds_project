@@ -20,11 +20,12 @@ from app.models import (
     UserCreate, User, Course, TranscriptData, SignUpRequest, SignInRequest,
     ConstraintCreate, Constraint, WeeklyConstraintCreate, WeeklyConstraint,
     ChatMessage, ChatResponse, StudyGroupCreate, StudyGroup,
-    GroupInvitationResponse, Notification, Assignment, AssignmentCreate
+    GroupInvitationResponse, Notification, Assignment, AssignmentCreate,
+    SemesterScheduleItem, SemesterScheduleItemCreate, SemesterScheduleItemUpdate
 )
 from app.parser import TranscriptParser
 from app.supabase_client import supabase, supabase_admin
-from app.auth import get_current_user, get_optional_user
+from app.auth import get_current_user, get_optional_user, get_cli_user
 from app.agents.supervisor import Supervisor
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -1912,6 +1913,25 @@ async def _run_weekly_auto_for_all_users(week_start_override: Optional[str] = No
                         for t in time_slots:
                             if _time_to_minutes(t) >= _time_to_minutes(c["start_time"]) and _time_to_minutes(t) < _time_to_minutes(c["end_time"]):
                                 user_blocked_slots[uid].add((day, t))
+            
+            # Semester schedule items (fixed lectures/tutorials - always hard constraints)
+            try:
+                semester_res = client.table("semester_schedule_items").select("*").eq("user_id", uid).execute()
+                for item in (semester_res.data or []):
+                    days_array = item.get("days", [])
+                    if isinstance(days_array, str):
+                        try:
+                            import json
+                            days_array = json.loads(days_array)
+                        except:
+                            days_array = []
+                    for day in _parse_days(days_array):
+                        for t in time_slots:
+                            if _time_to_minutes(t) >= _time_to_minutes(item["start_time"]) and _time_to_minutes(t) < _time_to_minutes(item["end_time"]):
+                                user_blocked_slots[uid].add((day, t))
+            except Exception as e:
+                # If table doesn't exist yet, just log and continue
+                logging.warning(f"Could not load semester schedule items for user {uid}: {e}")
 
         # 4. Phase 2: Global Group Synchronization
         groups_res = client.table("study_groups").select("*").execute()
@@ -2235,6 +2255,202 @@ async def update_weekly_constraint(
     except Exception as e:
         logging.error(f"Error updating weekly constraint: {e}")
         raise HTTPException(status_code=500, detail=f"Error updating weekly constraint: {str(e)}")
+
+
+# =====================================================
+# SEMESTER SCHEDULE ITEMS API ENDPOINTS
+# =====================================================
+
+@app.get("/api/semester-schedule")
+async def get_semester_schedule_items(
+    current_user: dict = Depends(get_current_user)
+):
+    """Get all semester schedule items for the current user"""
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        client = supabase_admin if supabase_admin else supabase
+        
+        response = client.table("semester_schedule_items").select("*").eq("user_id", user_id).execute()
+        
+        items = []
+        for item in response.data:
+            # Parse days from JSON string if needed
+            days = item.get("days")
+            if isinstance(days, str):
+                try:
+                    import json
+                    days = json.loads(days)
+                except:
+                    days = []
+            
+            items.append({
+                "id": item.get("id"),
+                "course_name": item.get("course_name"),
+                "type": item.get("type"),
+                "days": days,
+                "start_time": item.get("start_time"),
+                "end_time": item.get("end_time"),
+                "location": item.get("location"),
+                "created_at": item.get("created_at"),
+                "updated_at": item.get("updated_at")
+            })
+        
+        return {"items": items}
+    except Exception as e:
+        logging.error(f"Error fetching semester schedule items: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching semester schedule items: {str(e)}")
+
+
+@app.post("/api/semester-schedule")
+async def create_semester_schedule_item(
+    item_data: SemesterScheduleItemCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Create a new semester schedule item"""
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        client = supabase_admin if supabase_admin else supabase
+        
+        import json
+        days_str = json.dumps(item_data.days) if isinstance(item_data.days, list) else str(item_data.days)
+        
+        new_item = {
+            "user_id": user_id,
+            "course_name": item_data.course_name,
+            "type": item_data.type,
+            "days": days_str,
+            "start_time": item_data.start_time,
+            "end_time": item_data.end_time,
+            "location": item_data.location
+        }
+        
+        response = client.table("semester_schedule_items").insert(new_item).execute()
+        
+        if response.data:
+            created_item = response.data[0]
+            # Parse days back
+            days = created_item.get("days")
+            if isinstance(days, str):
+                try:
+                    days = json.loads(days)
+                except:
+                    days = []
+            
+            return {
+                "message": "פריט מערכת סמסטרית נוצר בהצלחה",
+                "item": {
+                    "id": created_item.get("id"),
+                    "course_name": created_item.get("course_name"),
+                    "type": created_item.get("type"),
+                    "days": days,
+                    "start_time": created_item.get("start_time"),
+                    "end_time": created_item.get("end_time"),
+                    "location": created_item.get("location"),
+                    "created_at": created_item.get("created_at"),
+                    "updated_at": created_item.get("updated_at")
+                }
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to create semester schedule item")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error creating semester schedule item: {e}")
+        raise HTTPException(status_code=500, detail=f"Error creating semester schedule item: {str(e)}")
+
+
+@app.put("/api/semester-schedule/{item_id}")
+async def update_semester_schedule_item(
+    item_id: str,
+    item_data: SemesterScheduleItemUpdate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Update an existing semester schedule item"""
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        client = supabase_admin if supabase_admin else supabase
+        
+        # Check if item exists and belongs to user
+        existing = client.table("semester_schedule_items").select("id").eq("id", item_id).eq("user_id", user_id).execute()
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="Semester schedule item not found")
+        
+        # Build update data (only include fields that are provided)
+        update_data = {}
+        if item_data.course_name is not None:
+            update_data["course_name"] = item_data.course_name
+        if item_data.type is not None:
+            update_data["type"] = item_data.type
+        if item_data.days is not None:
+            import json
+            update_data["days"] = json.dumps(item_data.days) if isinstance(item_data.days, list) else str(item_data.days)
+        if item_data.start_time is not None:
+            update_data["start_time"] = item_data.start_time
+        if item_data.end_time is not None:
+            update_data["end_time"] = item_data.end_time
+        if item_data.location is not None:
+            update_data["location"] = item_data.location
+        
+        update_data["updated_at"] = "now()"
+        
+        response = client.table("semester_schedule_items").update(update_data).eq("id", item_id).execute()
+        
+        if response.data:
+            updated_item = response.data[0]
+            # Parse days back
+            days = updated_item.get("days")
+            if isinstance(days, str):
+                try:
+                    import json
+                    days = json.loads(days)
+                except:
+                    days = []
+            
+            return {
+                "message": "פריט מערכת סמסטרית עודכן בהצלחה",
+                "item": {
+                    "id": updated_item.get("id"),
+                    "course_name": updated_item.get("course_name"),
+                    "type": updated_item.get("type"),
+                    "days": days,
+                    "start_time": updated_item.get("start_time"),
+                    "end_time": updated_item.get("end_time"),
+                    "location": updated_item.get("location"),
+                    "created_at": updated_item.get("created_at"),
+                    "updated_at": updated_item.get("updated_at")
+                }
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to update semester schedule item")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error updating semester schedule item: {e}")
+        raise HTTPException(status_code=500, detail=f"Error updating semester schedule item: {str(e)}")
+
+
+@app.delete("/api/semester-schedule/{item_id}")
+async def delete_semester_schedule_item(
+    item_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Delete a semester schedule item"""
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        client = supabase_admin if supabase_admin else supabase
+        
+        # Check if item exists and belongs to user
+        existing = client.table("semester_schedule_items").select("id").eq("id", item_id).eq("user_id", user_id).execute()
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="Semester schedule item not found")
+        
+        client.table("semester_schedule_items").delete().eq("id", item_id).execute()
+        return {"message": "פריט מערכת סמסטרית נמחק בהצלחה", "deleted": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error deleting semester schedule item: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting semester schedule item: {str(e)}")
 
 
 @app.get("/api/weekly-plan")
@@ -2565,11 +2781,12 @@ async def get_weekly_schedule(
 @app.post("/api/execute")
 async def execute_agent(
     request_data: dict,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_cli_user)
 ):
     """
     Main agent execution endpoint for terminal/CLI usage
     Routes user prompt to appropriate executor via supervisor
+    תמיד עובד עם משתמש העל (super user) - UUID: 56a2597d-62fc-49b3-9f98-1b852941b5ef
     """
     try:
         user_prompt = request_data.get("prompt", "")
@@ -2706,6 +2923,25 @@ async def generate_weekly_plan(
                             blocked.add((day, time))
                         else:
                             soft_blocked.add((day, time))
+
+        # Semester schedule items (fixed lectures/tutorials - always hard constraints)
+        try:
+            semester_result = client.table("semester_schedule_items").select("*").eq("user_id", user_id).execute()
+            for item in (semester_result.data or []):
+                days_array = item.get("days", [])
+                if isinstance(days_array, str):
+                    try:
+                        import json
+                        days_array = json.loads(days_array)
+                    except:
+                        days_array = []
+                for day in _parse_days(days_array):
+                    for time in time_slots:
+                        if _time_to_minutes(time) >= _time_to_minutes(item["start_time"]) and _time_to_minutes(time) < _time_to_minutes(item["end_time"]):
+                            blocked.add((day, time))
+        except Exception as e:
+            # If table doesn't exist yet, just log and continue
+            logging.warning(f"Could not load semester schedule items for user {user_id}: {e}")
 
         # Determine available slots FIRST (before group blocks)
         available_slots = [(day, time) for day in range(7) for time in time_slots if (day, time) not in blocked]

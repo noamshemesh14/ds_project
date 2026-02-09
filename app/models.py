@@ -81,7 +81,6 @@ class ConstraintBase(BaseModel):
     days: List[int] = Field(..., description="ימים בשבוע (0=ראשון, 1=שני, וכו')")
     start_time: str = Field(..., description="שעת התחלה (HH:MM)")
     end_time: str = Field(..., description="שעת סיום (HH:MM)")
-    is_hard: bool = Field(True, description="אילוץ קשיח או רך")
 
 
 class ConstraintCreate(ConstraintBase):
@@ -98,15 +97,15 @@ class Constraint(ConstraintBase):
         from_attributes = True
 
 
-# Weekly constraint models (disposable constraints for a specific week)
+# Weekly Constraint models
 class WeeklyConstraintBase(BaseModel):
     title: str = Field(..., description="שם האילוץ")
     description: Optional[str] = Field(None, description="תיאור האילוץ")
     days: List[int] = Field(..., description="ימים בשבוע (0=ראשון, 1=שני, וכו')")
     start_time: str = Field(..., description="שעת התחלה (HH:MM)")
     end_time: str = Field(..., description="שעת סיום (HH:MM)")
-    week_start: str = Field(..., description="תאריך תחילת שבוע (YYYY-MM-DD)")
-    is_hard: bool = Field(True, description="אילוץ קשיח או רך")
+    week_start: str = Field(..., description="תחילת השבוע (YYYY-MM-DD)")
+    is_hard: bool = Field(True, description="האם האילוץ קשיח")
 
 
 class WeeklyConstraintCreate(WeeklyConstraintBase):
@@ -118,7 +117,7 @@ class WeeklyConstraint(WeeklyConstraintBase):
     user_id: str
     created_at: datetime
     updated_at: datetime
-
+    
     class Config:
         from_attributes = True
 
@@ -207,23 +206,32 @@ class Notification(BaseModel):
         from_attributes = True
 
 
-# Assignment/Task models
-class AssignmentCreate(BaseModel):
-    title: str = Field(..., description="כותרת המטלה")
-    description: Optional[str] = Field(None, description="תיאור המטלה")
-    due_date: str = Field(..., description="תאריך יעד (YYYY-MM-DD)")
-    priority: Optional[str] = Field("medium", description="עדיפות: low, medium, high")
+# Semester Schedule Item models
+class SemesterScheduleItemBase(BaseModel):
+    course_name: str = Field(..., description="שם הקורס")
+    type: str = Field(..., description="סוג: lecture, tutorial, lab, seminar, other")
+    days: List[int] = Field(..., description="ימים בשבוע (0=ראשון, 1=שני, וכו')")
+    start_time: str = Field(..., description="שעת התחלה (HH:MM)")
+    end_time: str = Field(..., description="שעת סיום (HH:MM)")
+    location: Optional[str] = Field(None, description="מיקום")
 
 
-class Assignment(BaseModel):
+class SemesterScheduleItemCreate(SemesterScheduleItemBase):
+    pass
+
+
+class SemesterScheduleItemUpdate(BaseModel):
+    course_name: Optional[str] = None
+    type: Optional[str] = None
+    days: Optional[List[int]] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    location: Optional[str] = None
+
+
+class SemesterScheduleItem(SemesterScheduleItemBase):
     id: str
-    course_id: str
     user_id: str
-    title: str
-    description: Optional[str]
-    due_date: str  # ISO format date string (YYYY-MM-DD)
-    is_completed: bool = False
-    priority: str = "medium"
     created_at: datetime
     updated_at: datetime
     

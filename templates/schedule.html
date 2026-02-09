@@ -845,6 +845,9 @@
             
             <!-- Semester Schedule Tab -->
             <div id="schedule-tab" class="tab-content active">
+                <div style="margin-bottom: 1rem;">
+                    <button class="btn btn-primary" onclick="openSemesterScheduleModal()">➕ הוסף פריט מערכת סמסטר</button>
+                </div>
                 <div class="schedule-container">
                     <table class="schedule-table">
                         <thead>
@@ -1203,6 +1206,132 @@
         </div>
     </div>
     
+    <!-- Semester Schedule Modal -->
+    <div id="semesterScheduleModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="semesterScheduleModalTitle">הוסף פריט מערכת סמסטר</h3>
+                <button class="close-btn" onclick="closeSemesterScheduleModal()">×</button>
+            </div>
+            <form id="semesterScheduleForm" onsubmit="saveSemesterSchedule(event)">
+                <div class="form-group">
+                    <label>שם הקורס</label>
+                    <input type="text" id="semesterCourseName" required placeholder="למשל: נושאים נבחרים בהנדסת נתונים">
+                </div>
+                <div class="form-group">
+                    <label>סוג</label>
+                    <select id="semesterType" required style="width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 8px; font-size: 1em;">
+                        <option value="lecture">הרצאה</option>
+                        <option value="tutorial">תרגול</option>
+                        <option value="lab">מעבדה</option>
+                        <option value="seminar">סמינר</option>
+                        <option value="other">אחר</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>ימים</label>
+                    <div class="days-checkboxes">
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="semesterDay0" value="0">
+                            <label for="semesterDay0">ראשון</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="semesterDay1" value="1">
+                            <label for="semesterDay1">שני</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="semesterDay2" value="2">
+                            <label for="semesterDay2">שלישי</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="semesterDay3" value="3">
+                            <label for="semesterDay3">רביעי</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="semesterDay4" value="4">
+                            <label for="semesterDay4">חמישי</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="semesterDay5" value="5">
+                            <label for="semesterDay5">שישי</label>
+                        </div>
+                        <div class="day-checkbox">
+                            <input type="checkbox" id="semesterDay6" value="6">
+                            <label for="semesterDay6">שבת</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>שעת התחלה</label>
+                    <select id="semesterStartTime" required style="width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 8px; font-size: 1em;">
+                        <option value="00:00">00:00</option>
+                        <option value="01:00">01:00</option>
+                        <option value="02:00">02:00</option>
+                        <option value="03:00">03:00</option>
+                        <option value="04:00">04:00</option>
+                        <option value="05:00">05:00</option>
+                        <option value="06:00">06:00</option>
+                        <option value="07:00">07:00</option>
+                        <option value="08:00">08:00</option>
+                        <option value="09:00">09:00</option>
+                        <option value="10:00">10:00</option>
+                        <option value="11:00">11:00</option>
+                        <option value="12:00">12:00</option>
+                        <option value="13:00">13:00</option>
+                        <option value="14:00">14:00</option>
+                        <option value="15:00">15:00</option>
+                        <option value="16:00">16:00</option>
+                        <option value="17:00">17:00</option>
+                        <option value="18:00">18:00</option>
+                        <option value="19:00">19:00</option>
+                        <option value="20:00">20:00</option>
+                        <option value="21:00">21:00</option>
+                        <option value="22:00">22:00</option>
+                        <option value="23:00">23:00</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>שעת סיום</label>
+                    <select id="semesterEndTime" required style="width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 8px; font-size: 1em;">
+                        <option value="00:00">00:00</option>
+                        <option value="01:00">01:00</option>
+                        <option value="02:00">02:00</option>
+                        <option value="03:00">03:00</option>
+                        <option value="04:00">04:00</option>
+                        <option value="05:00">05:00</option>
+                        <option value="06:00">06:00</option>
+                        <option value="07:00">07:00</option>
+                        <option value="08:00">08:00</option>
+                        <option value="09:00">09:00</option>
+                        <option value="10:00">10:00</option>
+                        <option value="11:00">11:00</option>
+                        <option value="12:00">12:00</option>
+                        <option value="13:00">13:00</option>
+                        <option value="14:00">14:00</option>
+                        <option value="15:00">15:00</option>
+                        <option value="16:00">16:00</option>
+                        <option value="17:00">17:00</option>
+                        <option value="18:00">18:00</option>
+                        <option value="19:00">19:00</option>
+                        <option value="20:00">20:00</option>
+                        <option value="21:00">21:00</option>
+                        <option value="22:00">22:00</option>
+                        <option value="23:00">23:00</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>מיקום (אופציונלי)</label>
+                    <input type="text" id="semesterLocation" placeholder="למשל: בניין 1, חדר 101">
+                </div>
+                <div style="display: flex; gap: 1rem; margin-top: 1rem;">
+                    <button type="submit" class="btn btn-primary">שמור</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeSemesterScheduleModal()">ביטול</button>
+                    <button type="button" class="btn btn-danger" id="semesterScheduleDeleteBtn" onclick="deleteSemesterScheduleFromModal()" style="display: none;">מחק</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
     <script>
         // Check authentication
         const token = localStorage.getItem('auth_token');
@@ -1271,6 +1400,8 @@
         const weeklyPlanBlocks = [];
         const courses = [];
         let editingWeeklyConstraintId = null;
+        const semesterScheduleItems = [];
+        let editingSemesterScheduleId = null;
 
         function getWeekStartDate() {
             const input = document.getElementById('weekStartDate');
@@ -1390,8 +1521,76 @@
                     }
                     cell.onclick = () => openConstraintModal(constraint.id);
                 } else {
-                    cell.classList.add('available');
-                    cell.onclick = () => handleCellClick(day, time);
+                    // Check for semester schedule items (only if no constraint)
+                    const semesterItem = semesterScheduleItems.find(item => {
+                        let daysArray = item.days;
+                        if (!Array.isArray(daysArray)) {
+                            if (typeof daysArray === 'string') {
+                                try {
+                                    daysArray = JSON.parse(daysArray);
+                                } catch (e) {
+                                    daysArray = [];
+                                }
+                            } else {
+                                daysArray = [];
+                            }
+                        }
+                        return daysArray.includes(day) && isTimeInRange(time, item.start_time, item.end_time);
+                    });
+                    
+                    if (semesterItem) {
+                        cell.classList.remove('available');
+                        cell.classList.add('has-semester-item');
+                        
+                        const slotIndex = timeSlots.indexOf(time);
+                        const prevTime = slotIndex > 0 ? timeSlots[slotIndex - 1] : null;
+                        const nextTime = slotIndex < timeSlots.length - 1 ? timeSlots[slotIndex + 1] : null;
+                        const prevIn = prevTime && isTimeInRange(prevTime, semesterItem.start_time, semesterItem.end_time);
+                        const nextIn = nextTime && isTimeInRange(nextTime, semesterItem.start_time, semesterItem.end_time);
+                        const startsHere = !prevIn;
+                        
+                        if (startsHere) {
+                            const itemStartParts = semesterItem.start_time.split(':').map(Number);
+                            const itemEndParts = semesterItem.end_time.split(':').map(Number);
+                            const itemStartMinutes = itemStartParts[0] * 60 + (itemStartParts[1] || 0);
+                            const itemEndMinutes = itemEndParts[0] * 60 + (itemEndParts[1] || 0);
+                            const numHours = Math.ceil((itemEndMinutes - itemStartMinutes) / 60);
+                            
+                            const cellHeight = 80;
+                            const badgeHeight = (cellHeight * numHours) - 10;
+                            
+                            const badge = document.createElement('span');
+                            badge.className = 'semester-item-badge';
+                            badge.style.height = `${badgeHeight}px`;
+                            badge.style.minHeight = `${badgeHeight}px`;
+                            badge.style.zIndex = '10';
+                            
+                            const typeLabels = {
+                                'lecture': 'הרצאה',
+                                'tutorial': 'תרגול',
+                                'lab': 'מעבדה',
+                                'seminar': 'סמינר',
+                                'other': 'אחר'
+                            };
+                            
+                            let displayName = `${semesterItem.course_name} (${typeLabels[semesterItem.type] || semesterItem.type})`;
+                            if (displayName.length > 35) {
+                                displayName = displayName.substring(0, 32) + '...';
+                            }
+                            badge.textContent = displayName;
+                            badge.title = `${semesterItem.course_name} (${typeLabels[semesterItem.type] || semesterItem.type}, ${semesterItem.start_time}-${semesterItem.end_time}${semesterItem.location ? ', ' + semesterItem.location : ''})`;
+                            cell.appendChild(badge);
+                        } else {
+                            const invisibleBadge = document.createElement('span');
+                            invisibleBadge.style.visibility = 'hidden';
+                            invisibleBadge.style.height = '80px';
+                            cell.appendChild(invisibleBadge);
+                        }
+                        cell.onclick = () => openSemesterScheduleModal(semesterItem.id);
+                    } else {
+                        cell.classList.add('available');
+                        cell.onclick = () => handleCellClick(day, time);
+                    }
                 }
                 
                 // Check for courses (will be implemented later)
@@ -3950,6 +4149,164 @@
                 console.error('Error creating resize request:', error);
                 alert('❌ שגיאה ביצירת בקשת שינוי');
             }
+        }
+        
+        // Semester Schedule Functions
+        function openSemesterScheduleModal(itemId = null) {
+            editingSemesterScheduleId = itemId;
+            const modal = document.getElementById('semesterScheduleModal');
+            const form = document.getElementById('semesterScheduleForm');
+            const title = document.getElementById('semesterScheduleModalTitle');
+            const deleteBtn = document.getElementById('semesterScheduleDeleteBtn');
+            
+            if (itemId) {
+                title.textContent = 'ערוך פריט מערכת סמסטר';
+                deleteBtn.style.display = 'block';
+                const item = semesterScheduleItems.find(i => i.id === itemId);
+                if (item) {
+                    document.getElementById('semesterCourseName').value = item.course_name || '';
+                    document.getElementById('semesterType').value = item.type || 'lecture';
+                    document.getElementById('semesterLocation').value = item.location || '';
+                    document.getElementById('semesterStartTime').value = item.start_time || '08:00';
+                    document.getElementById('semesterEndTime').value = item.end_time || '09:00';
+                    
+                    // Set days checkboxes
+                    const daysArray = Array.isArray(item.days) ? item.days : (typeof item.days === 'string' ? JSON.parse(item.days) : []);
+                    for (let i = 0; i < 7; i++) {
+                        document.getElementById(`semesterDay${i}`).checked = daysArray.includes(i);
+                    }
+                }
+            } else {
+                title.textContent = 'הוסף פריט מערכת סמסטר';
+                deleteBtn.style.display = 'none';
+                form.reset();
+            }
+            modal.style.display = 'block';
+        }
+        
+        function closeSemesterScheduleModal() {
+            document.getElementById('semesterScheduleModal').style.display = 'none';
+            editingSemesterScheduleId = null;
+        }
+        
+        async function saveSemesterSchedule(event) {
+            event.preventDefault();
+            if (!token) {
+                alert('נא להתחבר תחילה');
+                return;
+            }
+            
+            const daysArray = [];
+            for (let i = 0; i < 7; i++) {
+                if (document.getElementById(`semesterDay${i}`).checked) {
+                    daysArray.push(i);
+                }
+            }
+            
+            if (daysArray.length === 0) {
+                alert('נא לבחור לפחות יום אחד');
+                return;
+            }
+            
+            const itemData = {
+                course_name: document.getElementById('semesterCourseName').value,
+                type: document.getElementById('semesterType').value,
+                days: daysArray,
+                start_time: document.getElementById('semesterStartTime').value,
+                end_time: document.getElementById('semesterEndTime').value,
+                location: document.getElementById('semesterLocation').value || null
+            };
+            
+            try {
+                let response;
+                if (editingSemesterScheduleId) {
+                    response = await fetch(`/api/semester-schedule/${editingSemesterScheduleId}`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify(itemData)
+                    });
+                } else {
+                    response = await fetch('/api/semester-schedule', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify(itemData)
+                    });
+                }
+                
+                if (response.ok) {
+                    closeSemesterScheduleModal();
+                    await loadSemesterScheduleItems();
+                    alert('✅ פריט מערכת סמסטר נשמר בהצלחה');
+                } else {
+                    const error = await response.json();
+                    alert('❌ שגיאה: ' + (error.detail || 'שגיאה לא ידועה'));
+                }
+            } catch (error) {
+                console.error('Error saving semester schedule item:', error);
+                alert('❌ שגיאה בשמירת פריט מערכת סמסטר');
+            }
+        }
+        
+        async function deleteSemesterScheduleFromModal() {
+            if (!editingSemesterScheduleId) return;
+            if (!confirm('האם אתה בטוח שברצונך למחוק פריט זה?')) return;
+            
+            try {
+                const response = await fetch(`/api/semester-schedule/${editingSemesterScheduleId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    closeSemesterScheduleModal();
+                    await loadSemesterScheduleItems();
+                    alert('✅ פריט מערכת סמסטר נמחק בהצלחה');
+                } else {
+                    const error = await response.json();
+                    alert('❌ שגיאה: ' + (error.detail || 'שגיאה לא ידועה'));
+                }
+            } catch (error) {
+                console.error('Error deleting semester schedule item:', error);
+                alert('❌ שגיאה במחיקת פריט מערכת סמסטר');
+            }
+        }
+        
+        async function loadSemesterScheduleItems() {
+            if (!token) return;
+            
+            try {
+                const response = await fetch('/api/semester-schedule', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    semesterScheduleItems.length = 0;
+                    semesterScheduleItems.push(...(data.items || []));
+                    updateScheduleDisplay();
+                } else if (response.status === 401) {
+                    console.warn('Not authenticated, skipping semester schedule load');
+                } else {
+                    console.error('Error loading semester schedule items:', response.status);
+                }
+            } catch (error) {
+                console.error('Error loading semester schedule items:', error);
+            }
+        }
+        
+        // Load semester schedule items on page load
+        if (token) {
+            loadSemesterScheduleItems();
         }
         
     </script>
