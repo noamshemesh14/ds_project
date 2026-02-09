@@ -909,8 +909,51 @@
         // Days array
         const days = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
         
-        // Courses are loaded from Supabase only
-        let courses = [];
+        // Courses array - demo courses (will be loaded from schedule or profile later)
+        const courses = [
+            {
+                id: '1',
+                course_name: 'מבוא למדעי המחשב',
+                course_number: '10401',
+                credit_points: 4,
+                semester: 'חורף'
+            },
+            {
+                id: '2',
+                course_name: 'מבני נתונים',
+                course_number: '10402',
+                credit_points: 5,
+                semester: 'חורף'
+            },
+            {
+                id: '3',
+                course_name: 'אלגוריתמים',
+                course_number: '10403',
+                credit_points: 5,
+                semester: 'אביב'
+            },
+            {
+                id: '4',
+                course_name: 'מסדי נתונים',
+                course_number: '10404',
+                credit_points: 4,
+                semester: 'אביב'
+            },
+            {
+                id: '5',
+                course_name: 'תכנות מונחה עצמים',
+                course_number: '10405',
+                credit_points: 4,
+                semester: 'קיץ'
+            },
+            {
+                id: '6',
+                course_name: 'רשתות מחשבים',
+                course_number: '10406',
+                credit_points: 3,
+                semester: 'קיץ'
+            }
+        ];
         
         // Store groups data
         let userGroups = {};
@@ -940,38 +983,6 @@
                 }
             } catch (error) {
                 console.error('Error loading notifications:', error);
-            }
-        }
-
-        // Load courses from Supabase (no hardcoded data)
-        async function loadCourses() {
-            const token = localStorage.getItem('auth_token');
-            if (!token) {
-                courses = [];
-                return;
-            }
-
-            try {
-                const response = await fetch('/api/user-data', {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
-                });
-
-                if (response.ok) {
-                    const data = await response.json();
-                    courses = Array.isArray(data.courses) ? data.courses : [];
-                    console.log('✅ Loaded courses from Supabase:', courses.length);
-                } else if (response.status === 401) {
-                    console.log('Not authenticated - skipping courses');
-                    courses = [];
-                } else {
-                    console.error('Error loading courses:', response.status);
-                    courses = [];
-                }
-            } catch (error) {
-                console.error('Error loading courses:', error);
-                courses = [];
             }
         }
         
@@ -1356,7 +1367,7 @@
             
             // Create tabs
             courseTabs.innerHTML = courses.map((course, index) => {
-                const courseId = course.course_number || course.id || index;
+                const courseId = course.id || course.course_number || index;
                 const courseName = course.course_name || course.name || 'קורס ללא שם';
                 const hasGroup = userGroups[courseId] && userGroups[courseId].length > 0;
                 return `
@@ -1368,7 +1379,7 @@
             
             // Create tab content
             courseTabContent.innerHTML = courses.map((course, index) => {
-                const courseId = course.course_number || course.id || index;
+                const courseId = course.id || course.course_number || index;
                 const courseName = course.course_name || course.name || 'קורס ללא שם';
                 const courseGroups = userGroups[courseId] || [];
                 const courseAssignments = (typeof getCourseAssignments === 'function') ? getCourseAssignments(courseId) || [] : [];
@@ -1551,12 +1562,10 @@
                     // Group groups by course_id
                     userGroups = {};
                     (data.groups || []).forEach(group => {
-                        const courseKey = group.course_id != null ? String(group.course_id).trim() : '';
-                        if (!courseKey) return;
-                        if (!userGroups[courseKey]) {
-                            userGroups[courseKey] = [];
+                        if (!userGroups[group.course_id]) {
+                            userGroups[group.course_id] = [];
                         }
-                        userGroups[courseKey].push(group);
+                        userGroups[group.course_id].push(group);
                     });
                 } else if (response.status === 401) {
                     // Token expired or invalid - don't redirect automatically, just skip
@@ -1820,11 +1829,9 @@
                 console.error('🔍 [DEBUG] Error in initializePage:', e);
             }
             
-            // Load courses then display
-            console.log('🔍 [DEBUG] Loading courses...');
-            await loadCourses();
+            // Display courses and load notifications
             console.log('🔍 [DEBUG] Calling displayMyCourses()...');
-            await displayMyCourses();
+            displayMyCourses();
             console.log('🔍 [DEBUG] Calling loadNotifications()...');
             loadNotifications();
             console.log('🔍 [DEBUG] initializePage() completed');

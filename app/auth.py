@@ -4,7 +4,7 @@ Authentication utilities for Supabase
 from fastapi import HTTPException, Depends, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase import Client
-from app.supabase_client import supabase, SUPABASE_URL, SUPABASE_ANON_KEY
+from app.supabase_client import supabase, SUPABASE_URL, SUPABASE_ANON_KEY, supabase_admin
 from typing import Optional
 import logging
 from jose import jwt
@@ -213,5 +213,51 @@ async def get_current_user(
             detail=f"Could not validate credentials: {str(e)}"
         )
 
+
+# מזהה קבוע של משתמש העל (Super User) עבור CLI
+SUPER_USER_ID = "56a2597d-62fc-49b3-9f98-1b852941b5ef"
+
+async def get_cli_user(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+) -> dict:
+    """
+    Get user for CLI endpoints - always returns super user.
+    שולף את משתמש העל ישירות מ-Supabase לפי UUID קבוע.
+    האתר ימשיך לעבוד בדיוק כמו עכשיו - רק CLI יעבוד עם משתמש העל.
+    """
+    if not supabase_admin:
+        raise HTTPException(
+            status_code=500,
+            detail="SUPABASE_SERVICE_ROLE_KEY is required for CLI super user"
+        )
+    
+    try:
+        # שלוף את המשתמש ישירות לפי UUID
+        # זה עובד כי UUID הוא קבוע ולא משתנה!
+        user_response = supabase_admin.auth.admin.get_user_by_id(SUPER_USER_ID)
+        
+        if user_response and hasattr(user_response, 'user') and user_response.user:
+            user = user_response.user
+            logging.info(f"🎭 CLI endpoint - using super user: {user.email} (id: {user.id})")
+            return {
+                "id": user.id,
+                "sub": user.id,
+                "email": user.email,
+                "user_metadata": user.user_metadata or {}
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Super user with ID {SUPER_USER_ID} not found in Supabase"
+            )
+    except Exception as e:
+        logging.error(f"❌ Error fetching super user: {e}")
+        import traceback
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching super user: {str(e)}"
+        )
 
 
