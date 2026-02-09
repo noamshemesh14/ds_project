@@ -224,7 +224,7 @@ Available executors:
 - group_manager: Create study groups and invite members. Use this when the user wants to create a new study group or invite people to a group. Requires: course_number (string, e.g., "10403"), group_name (string), invite_emails (list of email addresses). Optional: course_name (string), description (string). Validations: Only registered users enrolled in the course can be invited. At least one other user (besides the creator) must be invited. Cannot invite yourself.
 - notification_retriever: Get new notifications. No parameters needed
 - notification_cleaner: Clean/delete notifications. Optional: notification_id
-- request_handler: Approve/reject requests (group invitations or change requests). Use this when the user wants to approve/accept or reject/decline an invitation or change request. Requires: action ("accept"/"approve" or "reject"/"decline"). Optional: request_id (if not provided, will search by group_name or course_number for invitations), group_name (string, e.g., "קבוצת לימוד - רשתות מחשבים"), course_number (string, e.g., "10403"). The handler will find the pending invitation or change request automatically.
+- request_handler: Approve/reject requests (group invitations or change requests). Use this when the user wants to approve/accept or reject/decline an invitation or change request. Requires: action ("accept"/"approve" or "reject"/"decline"). Optional: request_id (if not provided, will search by group_name or course_number for invitations), group_name (string, e.g., "קבוצת לימוד - רשתות מחשבים"), course_number (string, e.g., "10403"), date (YYYY-MM-DD or YYYY/MM/DD format to find requests for a specific week), week_start (YYYY-MM-DD format, Sunday of the week), day_of_week (0-6, where 0=Sunday, to filter by day), time_of_day ("morning", "afternoon", "evening", "night" to filter by time). The handler will find the pending invitation or change request automatically. IMPORTANT: For change requests, extract date/day_of_week/time_of_day from the user's prompt to help find the correct request (e.g., "approve request for Friday evening on 13/2/26" → date="2026-02-13", day_of_week=5, time_of_day="evening").
 - preference_updater: Update user study preferences from natural language. Use this when the user wants to update their study preferences (e.g., "I prefer to study in the morning", "I like to study late at night", "I work better in short sessions"). Requires: preferences_text or user_prompt (the user's preference description). This updates the user's study_preferences_raw and generates a summary using LLM.
 - block_mover: Move study blocks. Requires: block_id, new_day, new_start_time, new_end_time. Optional: user_prompt (original user prompt for preference extraction)
 - block_resizer: Resize study blocks (change duration). Use this when the user wants to INCREASE or DECREASE the duration of an EXISTING block (e.g., "change from 3 hours to 2 hours", "reduce to 2 hours", "increase to 4 hours", "2 hours is sufficient so change it to 13-15"). Requires: block_id (optional), course_name or course_number, day_of_week, start_time, new_duration, week_start (optional). If block_id not provided, use course_name/course_number + day_of_week + start_time + week_start to find the block. For group blocks, creates a change request. For personal blocks, updates directly and updates course_time_preferences.personal_hours_per_week.
@@ -282,17 +282,18 @@ For block_mover:
   * "move course from 08:00 to 14:00" → course_name="course", original_day=null, original_start_time="08:00", new_day=null (same day), new_start_time="14:00"
 
 For block_resizer:
-- Extract block_id (optional) - look for UUID or block identifier. If not provided, use course_name/course_number + day_of_week + start_time + week_start to find the block.
+- Extract block_id (optional) - look for UUID or block identifier. If not provided, use course_name/course_number + day_of_week + week_start to find the block. start_time is optional and will help narrow down the search if provided.
 - Extract course_name or course_number (required if block_id not provided) - the course name or number to identify which block to resize.
 - Extract day_of_week (required if block_id not provided) - the current day of week (0-6, where 0=Sunday, 1=Monday, etc.). Can be extracted from day names like "Monday", "Friday", etc. or Hebrew names like "ראשון", "שישי", etc.
-- Extract start_time (required if block_id not provided) - the current start time in HH:MM format (e.g., "08:00", "12:00", "13:00"). Look for phrases like "from 13:00", "at 13:00", "starting at 13:00". Normalize formats like "012:00" to "12:00".
-- Extract new_duration (required) - the new duration in hours (e.g., 2, 3, 4). Look for phrases like "increase to 3 hours", "reduce to 2 hours", "make it 4 hours", "change duration to 3h", "resize to 2 hours", "extend to 4 hours", "shorten to 1 hour", "2 hours is sufficient", "change it to 13-15" (means 2 hours: 13:00-15:00), "from 13:00 to 15:00" (means 2 hours).
+- Extract start_time (optional if block_id not provided) - the current start time in HH:MM format (e.g., "08:00", "12:00", "13:00", "19:00"). Look for phrases like "from 13:00", "at 13:00", "starting at 13:00", "at 7:00", "at 19:00", "evening" (typically 17:00-21:00), "morning" (typically 08:00-12:00), "afternoon" (typically 12:00-17:00), "night" (typically 21:00-24:00). If time is mentioned as "evening" or "7 PM" or "19:00", extract as "19:00". Normalize formats like "012:00" to "12:00", "7:00" to "07:00", "19:00" is correct. If start_time is not provided, the system will search for all blocks on the specified day and course, and find the matching one.
+- Extract new_duration (required) - the new duration in hours (e.g., 2, 3, 4). Look for phrases like "increase to 3 hours", "reduce to 2 hours", "make it 4 hours", "change duration to 3h", "resize to 2 hours", "extend to 4 hours", "shorten to 1 hour", "2 hours is sufficient", "change it to 13-15" (means 2 hours: 13:00-15:00), "from 13:00 to 15:00" (means 2 hours), "from 2 to 3 hours" (means new_duration=3).
 - IMPORTANT: If user says "from X:00 to Y:00" and wants to change it to "from X:00 to Z:00" where Z < Y, this is a RESIZE (reducing duration), not a move. Calculate duration: if "from 13:00 to 16:00" (3 hours) and user wants "13-15" (2 hours), then new_duration=2.
-- Extract week_start (optional) - the week start date in YYYY-MM-DD or YYYY/MM/DD format. If not provided, the system will use the current week.
+- Extract week_start (optional) - the week start date in YYYY-MM-DD or YYYY/MM/DD format. If not provided, the system will use the current week. Can be extracted from dates like "13/2/26" (2026-02-13) - calculate the Sunday of that week.
 - Extract user_prompt (optional) - if the user provides an explanation for the resize (e.g., "I need more time", "I prefer shorter sessions", "2 hours is sufficient"), include the full user_prompt so the backend can extract and save these preferences.
 - Examples:
   * "resize אלגוריתמים on Monday 08:00 to 3 hours" → course_name="אלגוריתמים", day_of_week=1 (Monday), start_time="08:00", new_duration=3
   * "increase מעבדה on Friday 12:00 to 4 hours for week 2026-02-08" → course_name="מעבדה", day_of_week=5 (Friday), start_time="12:00", new_duration=4, week_start="2026-02-08"
+  * "submit a request to extend the time for the group meeting in group X on friday evening on 13/2/26 from 2 to 3 hours" → course_name from group name, day_of_week=5 (Friday), start_time=null (evening mentioned but not specific time - system will search), new_duration=3, week_start="2026-02-08" (Sunday of week containing 2026-02-13)
   * "I have a personal work from 13:00 to 16:00. 2 hours is sufficient so change it to 13-15" → course_name from context, day_of_week from context, start_time="13:00", new_duration=2 (13:00-15:00 = 2 hours)
   * "reduce block duration from 3 to 2 hours" → new_duration=2 (block_id or course info needed)
 
@@ -346,15 +347,36 @@ For block_creator:
 
 For request_handler:
 - Extract action (required) - "accept"/"approve" or "reject"/"decline". Look for phrases like "approve", "accept", "reject", "decline", "אישור", "אשר", "דחייה", "דחה".
-- Extract request_id (optional) - if provided explicitly as a UUID, use it. Otherwise, will search by group_name or course_number.
+- Extract request_id (optional) - if provided explicitly as a UUID, use it. Otherwise, will search by multiple criteria to find the exact request.
 - Extract group_name (REQUIRED if request_id not provided) - the name of the group for which to approve/reject invitation. Look for phrases like "for group X", "קבוצת X", "group named X", "group X". Extract the FULL group name including any text after "group" or "קבוצת". Examples: 
   * "approve invitation for group קבוצת לימוד - רשתות מחשבים" → group_name="קבוצת לימוד - רשתות מחשבים" (extract everything after "group" or "קבוצת")
   * "accept invitation for קבוצת לימוד - רשתות מחשבים" → group_name="קבוצת לימוד - רשתות מחשבים"
   * "approve invitation for group study group for algorithms" → group_name="study group for algorithms"
-- Extract course_number (optional) - the course number to find the group. Look for 3-6 digit numbers.
+- Extract course_number (optional) - the course number to find the group. Look for 3-6 digit numbers. Extract EXACTLY as written (e.g., "104043" not "10404").
+- Extract course_name (optional) - the course name if mentioned. This helps identify the group more precisely.
+- Extract date (optional) - specific date (YYYY-MM-DD or YYYY/MM/DD format) mentioned in the request. Look for phrases like "on 13/2/26", "on February 13", "on 2026-02-13", "for 13/2/26", "יום שישי 13/2/26". CRITICAL: Extract dates in any format and normalize to YYYY-MM-DD or YYYY/MM/DD. Examples: "13/2/26" → "2026-02-13" or "2026/02/13", "February 13, 2026" → "2026-02-13".
+- Extract week_start (optional) - week start date (YYYY-MM-DD format, Sunday) if explicitly mentioned. Usually extracted from date.
+- Extract day_of_week (optional) - day of week (0-6, where 0=Sunday) mentioned in the request. Look for day names like "Friday", "Monday", "Sunday", "Wednesday", etc. or Hebrew names like "שישי", "ראשון", "רביעי", etc. Can also be calculated from date if date is provided. Examples: "approve request for Friday evening" → day_of_week=5 (Friday). "approve request on 13/2/26" → if 13/2/26 is Friday, day_of_week=5.
+- Extract start_time (optional) - specific start time in HH:MM format (e.g., "08:00", "13:00", "17:00", "18:00"). Look for phrases like "at 18:00", "from 13:00", "starting at 08:00", "18:00-20:00" (extract 18:00), "between 13:00 and 15:00" (extract 13:00). Normalize formats: "8:00" → "08:00", "012:00" → "12:00".
+- Extract end_time (optional) - specific end time in HH:MM format. Look for phrases like "until 20:00", "to 20:00", "18:00-20:00" (extract 20:00), "ends at 20:00".
+- Extract time_of_day (optional) - time period mentioned: "morning" (08:00-12:00), "afternoon" (12:00-17:00), "evening" (17:00-21:00), "night" (20:00-23:00). Look for phrases like "Friday evening", "Monday morning", "afternoon meeting", etc. Examples: "approve request for Friday evening" → time_of_day="evening", day_of_week=5.
+- Extract original_duration (optional) - original duration in hours if mentioned (e.g., "from 2 hours", "was 2 hours", "currently 2 hours"). Look for phrases like "extend from 2 hours", "change from 2 to 3 hours", "was 2 hours now 3". This helps identify resize requests.
+- Extract proposed_duration (optional) - new duration in hours if mentioned (e.g., "to 3 hours", "make it 3 hours", "extend to 3 hours"). Look for phrases like "extend to 3 hours", "change to 3 hours", "make it 3 hours", "from 2 to 3 hours" (extract 3). This helps identify resize requests.
+- Extract request_type (optional) - "resize" if user mentions changing duration (e.g., "extend time", "increase hours", "from 2 to 3 hours"), "move" if user mentions changing time/day (e.g., "move meeting", "change time", "reschedule"). If not clear, leave null.
 - CRITICAL: If the user mentions a group name (e.g., "קבוצת לימוד - רשתות מחשבים"), you MUST extract it as group_name. Do NOT set it to null.
+- IMPORTANT: For change requests (not invitations), extract ALL available information (date, day_of_week, start_time, time_of_day, original_duration, proposed_duration) to help find the EXACT request. The more parameters you extract, the more accurate the search will be.
+- STRATEGY: When user says "approve request to extend time" or "approve request to change meeting", try to extract:
+  1. Group name (REQUIRED)
+  2. Date/week (if mentioned)
+  3. Day of week (if mentioned or can calculate from date)
+  4. Time/start_time (if mentioned)
+  5. Duration changes (if resize request)
+  6. Course name/number (if mentioned)
 - Examples:
   * "approve invitation for group קבוצת לימוד - רשתות מחשבים" → action="accept", group_name="קבוצת לימוד - רשתות מחשבים"
+  * "approve the request to extend the time for the group meeting in group קבוצת לימוד - מערכות נבונות אינטראקטיביות on friday evening on 13/2/26" → action="accept", group_name="קבוצת לימוד - מערכות נבונות אינטראקטיביות", date="2026-02-13", day_of_week=5 (Friday), time_of_day="evening", request_type="resize"
+  * "approve request to change meeting from 2 hours to 3 hours for קבוצת לימוד on Friday 13/2/26" → action="accept", group_name="קבוצת לימוד", date="2026-02-13", day_of_week=5, original_duration=2, proposed_duration=3, request_type="resize"
+  * "approve request to move meeting from Monday 08:00 to Wednesday 14:00 for group X on 13/2/26" → action="accept", group_name="X", date="2026-02-13", start_time="08:00" (original), request_type="move"
   * "reject invitation for course 10403" → action="reject", course_number="10403"
   * "accept invitation for קבוצת לימוד - רשתות מחשבים" → action="accept", group_name="קבוצת לימוד - רשתות מחשבים"
   * "accept invitation" (no group name) → action="accept", group_name=null (will search for any pending invitation)

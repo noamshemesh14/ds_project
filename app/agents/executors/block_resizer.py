@@ -79,11 +79,17 @@ class BlockResizer:
                     block = block_result.data[0]
             else:
                 # Find block by course + day + time + week
-                if not (course_name or course_number) or day_of_week is None or not start_time:
+                # Note: start_time is optional - if not provided, search across all times on the specified day
+                if not (course_name or course_number) or day_of_week is None:
                     raise HTTPException(
                         status_code=400,
-                        detail="Either block_id is required, or course_name/course_number + day_of_week + start_time + week_start are required"
+                        detail="Either block_id is required, or course_name/course_number + day_of_week + week_start are required"
                     )
+                
+                if start_time is None:
+                    logger.info(f"🔍 Looking up block by course: {course_name or course_number}, day {day_of_week} (time not specified, will search all times on this day)")
+                else:
+                    logger.info(f"🔍 Looking up block by course: {course_name or course_number}, day {day_of_week}, time {start_time}")
                 
                 # Determine which week to search in
                 if not week_start:
@@ -94,27 +100,79 @@ class BlockResizer:
                     week_start_date = today - timedelta(days=days_since_sunday)
                     week_start = week_start_date.strftime("%Y-%m-%d")
                     logger.info(f"📅 No week specified, using current week: {week_start}")
+                else:
+                    # Normalize date format (YYYY/MM/DD -> YYYY-MM-DD)
+                    if "/" in week_start:
+                        week_start = week_start.replace("/", "-")
+                    logger.info(f"📅 Using specified week: {week_start}")
                 
                 # Get plan for the specified week
                 plan_result = client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).limit(1).execute()
                 if not plan_result.data:
-                    raise HTTPException(status_code=404, detail=f"No schedule found for week starting {week_start}")
+                    # Try to find any plan for this user to see what weeks are available
+                    all_plans = client.table("weekly_plans").select("week_start").eq("user_id", user_id).order("week_start", desc=True).limit(5).execute()
+                    available_weeks = [p["week_start"] for p in (all_plans.data or [])]
+                    error_msg = f"No schedule found for week starting {week_start}. Available weeks: {available_weeks if available_weeks else 'none'}"
+                    logger.error(f"❌ {error_msg}")
+                    raise HTTPException(status_code=404, detail=error_msg)
                 
                 plan_id = plan_result.data[0]["id"]
+                logger.info(f"📅 Found plan {plan_id} for week {week_start}")
                 
                 # Search for block
-                query = client.table("weekly_plan_blocks").select("*").eq("plan_id", plan_id).eq("user_id", user_id).eq("day_of_week", day_of_week).eq("start_time", start_time)
+                query = client.table("weekly_plan_blocks").select("*").eq("plan_id", plan_id).eq("user_id", user_id).eq("day_of_week", day_of_week)
+                
+                # Add time filter only if start_time is provided
+                if start_time is not None:
+                    query = query.eq("start_time", start_time)
                 
                 if course_number:
                     query = query.eq("course_number", course_number)
+                    logger.info(f"🔍 Searching by course_number: {course_number}")
                 elif course_name:
                     query = query.eq("course_name", course_name)
+                    logger.info(f"🔍 Searching by course_name: {course_name}")
                 
                 block_result = query.limit(1).execute()
-                if not block_result.data:
-                    raise HTTPException(status_code=404, detail=f"Block not found for course '{course_name or course_number}' on day {day_of_week} at {start_time}")
+                logger.info(f"🔍 Exact match query returned {len(block_result.data) if block_result.data else 0} blocks")
                 
-                block = block_result.data[0]
+                if not block_result.data:
+                    # Try fuzzy match on course name (partial match) or search all blocks on this day
+                    logger.info(f"🔍 Trying fuzzy match for course name: {course_name}")
+                    fuzzy_query = client.table("weekly_plan_blocks").select("*").eq("plan_id", plan_id).eq("user_id", user_id).eq("day_of_week", day_of_week)
+                    if start_time is not None:
+                        fuzzy_query = fuzzy_query.eq("start_time", start_time)
+                    all_blocks = fuzzy_query.execute()
+                    time_info = f"at {start_time}" if start_time is not None else "at any time"
+                    logger.info(f"🔍 Found {len(all_blocks.data) if all_blocks.data else 0} blocks on day {day_of_week} {time_info}")
+                    
+                    if course_name and all_blocks.data:
+                        for b in all_blocks.data:
+                            block_course_name = b.get("course_name", "")
+                            logger.info(f"🔍 Comparing '{course_name}' with '{block_course_name}'")
+                            if course_name.lower() in block_course_name.lower() or block_course_name.lower() in course_name.lower():
+                                block = b
+                                logger.info(f"✅ Found fuzzy match: {block_course_name}")
+                                break
+                    
+                    if not block:
+                        # List available blocks for debugging
+                        available_blocks = []
+                        if all_blocks.data:
+                            for b in all_blocks.data:
+                                available_blocks.append({
+                                    "course_name": b.get("course_name"),
+                                    "course_number": b.get("course_number"),
+                                    "day": b.get("day_of_week"),
+                                    "time": b.get("start_time"),
+                                    "work_type": b.get("work_type")
+                                })
+                        error_msg = f"Block not found for course '{course_name or course_number}' on day {day_of_week} {time_info} in week {week_start}. Available blocks on this day: {available_blocks}"
+                        logger.error(f"❌ {error_msg}")
+                        raise HTTPException(status_code=404, detail=error_msg)
+                else:
+                    block = block_result.data[0]
+                    logger.info(f"✅ Found exact match: {block.get('course_name')} ({block.get('course_number')})")
             
             if not block:
                 raise HTTPException(status_code=404, detail="Block not found")
@@ -208,8 +266,8 @@ class BlockResizer:
                         client.table("notifications").insert({
                             "user_id": member_id,
                             "type": "group_change_request",
-                            "title": f"בקשה לשינוי משך מפגש",
-                            "message": f"בקשה להגדיל/להקטין את משך המפגש מ-{original_duration} שעות ל-{new_duration} שעות",
+                            "title": f"Request to change meeting duration",
+                            "message": f"Request to change meeting duration from {original_duration} hours to {new_duration} hours",
                             "link": f"/schedule?change_request={request_id}",
                             "read": False
                         }).execute()

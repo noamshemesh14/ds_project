@@ -271,8 +271,8 @@ class GroupManager:
                         client.table("notifications").insert({
                             "user_id": user_check.id,
                             "type": "group_invitation",
-                            "title": f"הזמנה לקבוצת לימוד: {group_name}",
-                            "message": f"{user_email} הזמין אותך להצטרף לקבוצת לימוד בקורס {course_name}",
+                            "title": f"Study group invitation: {group_name}",
+                            "message": f"{user_email} invited you to join a study group for course {course_name}",
                             "link": f"/my-courses?group={group_id}",
                             "read": False
                         }).execute()

@@ -336,10 +336,10 @@ class BlockCreator:
                 day_names = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
                 proposed_time_str = f"{day_names[day_of_week]} {start_time_normalized}-{proposed_end_time}"
                 
-                title = f"בקשת הוספת מפגש: {group_name}"
-                message = f"{requester_name} מבקש להוסיף מפגש חדש ב-{proposed_time_str} ({duration} שעות). נדרש אישור מכל החברים."
+                title = f"New meeting request: {group_name}"
+                message = f"{requester_name} requested to add a new meeting on {proposed_time_str} ({duration} hours). Approval from all members required."
                 if reason:
-                    message += f" סיבה: {reason}"
+                    message += f" Reason: {reason}"
                 
                 # Send notifications to all members
                 for member_id in member_ids:

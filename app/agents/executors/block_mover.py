@@ -369,10 +369,10 @@ class BlockMover:
                 original_time_str = f"{day_names[original_day]} {original_start}" if original_day is not None else "new block"
                 proposed_time_str = f"{day_names[new_day]} {new_start_time}"
                 
-                title = f"בקשת שינוי מפגש: {group_name}"
-                message = f"{requester_name} מבקש לשנות מפגש מ-{original_time_str} ל-{proposed_time_str}. נדרש אישור מכל החברים."
+                title = f"Meeting change request: {group_name}"
+                message = f"{requester_name} requested to change meeting from {original_time_str} to {proposed_time_str}. Approval from all members required."
                 if reason:
-                    message += f" סיבה: {reason}"
+                    message += f" Reason: {reason}"
                 
                 # Send notifications to all members
                 for member_id in member_ids:
