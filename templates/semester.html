@@ -75,6 +75,55 @@
             transform: translateY(-2px);
         }
         
+        /* Notifications Widget (unified nav) */
+        .notifications-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: white;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            width: 350px;
+            max-height: 500px;
+            overflow-y: auto;
+            z-index: 1000;
+            margin-top: 0.5rem;
+            direction: rtl;
+        }
+        .notifications-header {
+            padding: 1rem;
+            border-bottom: 2px solid #f0f0f0;
+            font-weight: bold;
+            background: #f8f9fa;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .btn-clear-notifications {
+            background: #ff9800;
+            color: white;
+            border: none;
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85em;
+        }
+        .btn-clear-notifications:hover { background: #f57c00; }
+        .notifications-list { max-height: 400px; overflow-y: auto; }
+        .notification-item {
+            padding: 1rem;
+            border-bottom: 1px solid #f0f0f0;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .notification-item:hover { background: #f8f9fa; }
+        .notification-item.unread { background: #e3f2fd; font-weight: bold; }
+        .notification-item.loading { text-align: center; color: #999; cursor: default; }
+        .notification-title { font-weight: bold; margin-bottom: 0.25rem; }
+        .notification-message { color: #666; font-size: 0.9em; }
+        .notification-time { color: #999; font-size: 0.8em; margin-top: 0.25rem; }
+        
         .container {
             max-width: 1200px;
             margin: 0 auto;
@@ -747,10 +796,21 @@
         <div class="navbar-content">
             <div class="logo">🎓 יועץ אקדמי חכם</div>
             <ul class="nav-links">
-                <li><a href="/">יועץ אקדמי</a></li>
-                <li><a href="/profile">פרופיל</a></li>
+                <li><a href="/profile" style="color: #667eea; font-weight: bold;">פרופיל</a></li>
                 <li><a href="/schedule">בניית מערכת</a></li>
                 <li><a href="/my-courses">📚 הקורסים שלי</a></li>
+                <li id="notificationsWidget" style="position: relative;">
+                    <button class="chat-btn" onclick="toggleNotifications()" id="notificationsBtn">🔔 התראות <span id="notificationBadge" style="display: none; background: #f44336; color: white; border-radius: 50%; padding: 0.2rem 0.5rem; font-size: 0.8em; margin-right: 0.5rem;">0</span></button>
+                    <div id="notificationsDropdown" class="notifications-dropdown" style="display: none;">
+                        <div class="notifications-header">
+                            <span>התראות</span>
+                            <button class="btn-clear-notifications" onclick="clearNotifications()" title="נקה התראות נקראות">🧹 נקה נקראות</button>
+                        </div>
+                        <div id="notificationsList" class="notifications-list">
+                            <div class="notification-item loading">טוען התראות...</div>
+                        </div>
+                    </div>
+                </li>
                 <li id="authButton">
                     <button class="chat-btn" id="loginBtn" onclick="window.location.href='/login'">🔐 התחבר</button>
                 </li>
@@ -1533,9 +1593,8 @@
             const loginBtn = document.getElementById('loginBtn');
             
             if (token && loginBtn) {
-                // User is logged in
-                const userEmail = localStorage.getItem('user_email') || 'משתמש';
-                loginBtn.textContent = `👤 ${userEmail}`;
+                // User is logged in - show התנתק on all pages
+                loginBtn.textContent = '🚪 התנתק';
                 loginBtn.onclick = function() {
                     if (confirm('האם אתה בטוח שברצונך להתנתק?')) {
                         logout();
@@ -1659,12 +1718,80 @@
             document.addEventListener('DOMContentLoaded', function() {
                 checkAuthStatus();
                 loadUserData();
+                if (localStorage.getItem('auth_token')) { loadNotifications(); }
             });
         } else {
-            // DOM is already loaded
             checkAuthStatus();
             loadUserData();
+            if (localStorage.getItem('auth_token')) { loadNotifications(); }
         }
+    </script>
+    <script>
+        // Notifications (unified nav - same as index/schedule/my_courses)
+        let notifications = [];
+        async function loadNotifications() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            try {
+                const response = await fetch('/api/notifications', { headers: { 'Authorization': 'Bearer ' + token } });
+                if (response.ok) {
+                    const data = await response.json();
+                    notifications = data.notifications || [];
+                    updateNotificationsUI();
+                }
+            } catch (e) { console.error('Error loading notifications:', e); }
+        }
+        function updateNotificationsUI() {
+            const badge = document.getElementById('notificationBadge');
+            const unreadCount = notifications.filter(n => !n.read).length;
+            if (badge) {
+                if (unreadCount > 0) { badge.textContent = unreadCount; badge.style.display = 'inline-block'; }
+                else { badge.style.display = 'none'; }
+            }
+            const list = document.getElementById('notificationsList');
+            if (list) {
+                if (notifications.length === 0) list.innerHTML = '<div class="notification-item loading">אין התראות</div>';
+                else list.innerHTML = notifications.map(notif => {
+                    const time = new Date(notif.created_at).toLocaleString('he-IL');
+                    return '<div class="notification-item ' + (!notif.read ? 'unread' : '') + '"><div onclick="handleNotificationClick(\'' + notif.id + '\', \'' + (notif.type || '') + '\', \'' + (notif.link || '') + '\')" style="cursor:pointer;"><div class="notification-title">' + (notif.title || '') + '</div><div class="notification-message">' + (notif.message || '') + '</div><div class="notification-time">' + time + '</div></div><button onclick="event.stopPropagation(); if(confirm(\'מחק התראה?\')) deleteNotification(\'' + notif.id + '\')" style="background:#f44336;color:white;border:none;padding:0.3rem 0.6rem;border-radius:4px;cursor:pointer;font-size:0.8em;margin-top:0.5rem;">×</button></div>';
+                }).join('');
+            }
+        }
+        function toggleNotifications() {
+            const dropdown = document.getElementById('notificationsDropdown');
+            if (dropdown) {
+                if (dropdown.style.display === 'none') { dropdown.style.display = 'block'; loadNotifications(); }
+                else dropdown.style.display = 'none';
+            }
+        }
+        async function handleNotificationClick(notificationId, type, link) {
+            const token = localStorage.getItem('auth_token');
+            if (link) window.location.href = link;
+            if (!token) return;
+            try {
+                await fetch('/api/notifications/' + notificationId + '/read', { method: 'POST', headers: { 'Authorization': 'Bearer ' + token } });
+                await loadNotifications();
+            } catch (e) { console.error(e); }
+        }
+        async function deleteNotification(notificationId) {
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            try {
+                const r = await fetch('/api/notifications/' + notificationId, { method: 'DELETE', headers: { 'Authorization': 'Bearer ' + token } });
+                if (r.ok) await loadNotifications();
+            } catch (e) { console.error(e); }
+        }
+        async function clearNotifications() {
+            if (!confirm('האם למחוק את כל ההתראות הנקראות?')) return;
+            const token = localStorage.getItem('auth_token');
+            if (!token) { alert('אנא התחבר'); return; }
+            try {
+                const r = await fetch('/api/notifications?read_only=true', { method: 'DELETE', headers: { 'Authorization': 'Bearer ' + token } });
+                if (r.ok) { alert('✅ נמחקו'); await loadNotifications(); }
+                else alert('שגיאה');
+            } catch (e) { alert('שגיאה'); }
+        }
+        if (localStorage.getItem('auth_token')) setInterval(loadNotifications, 60000);
     </script>
 </body>
 </html>

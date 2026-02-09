@@ -765,7 +765,6 @@
         <div class="navbar-content">
             <div class="logo">🎓 יועץ אקדמי חכם</div>
             <ul class="nav-links">
-                <li><a href="/">יועץ אקדמי</a></li>
                 <li><a href="/profile">פרופיל</a></li>
                 <li><a href="/schedule">בניית מערכת</a></li>
                 <li><a href="/my-courses" style="color: #667eea; font-weight: bold;">📚 הקורסים שלי</a></li>
@@ -887,22 +886,16 @@
             }
         } else {
             console.log('🔍 [DEBUG] Token found - updating button');
-            const userEmail = localStorage.getItem('user_email') || 'משתמש';
-            console.log('🔍 [DEBUG] User email:', userEmail);
             if (loginBtn) {
-                loginBtn.textContent = `👤 ${userEmail}`;
+                loginBtn.textContent = '🚪 התנתק';
                 loginBtn.onclick = () => {
                     if (confirm('האם אתה בטוח שברצונך להתנתק?')) {
-                        console.log('🔍 [DEBUG] User clicked logout - removing token');
                         localStorage.removeItem('auth_token');
                         localStorage.removeItem('user_id');
                         localStorage.removeItem('user_email');
                         window.location.href = '/login';
                     }
                 };
-                console.log('🔍 [DEBUG] Button updated successfully');
-            } else {
-                console.error('🔍 [DEBUG] ERROR: loginBtn not found!');
             }
         }
         
