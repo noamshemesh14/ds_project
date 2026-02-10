@@ -21,7 +21,17 @@ class RequestHandler:
         action: Optional[str] = None,
         group_name: Optional[str] = None,
         course_number: Optional[str] = None,
+        course_name: Optional[str] = None,
         user_prompt: Optional[str] = None,
+        date: Optional[str] = None,
+        week_start: Optional[str] = None,
+        day_of_week: Optional[int] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        time_of_day: Optional[str] = None,
+        original_duration: Optional[int] = None,
+        proposed_duration: Optional[int] = None,
+        request_type: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -95,28 +105,351 @@ class RequestHandler:
                     logger.info(f"🔍 Searching for invitation or change request by group_name={group_name}, course_number={course_number}")
                     
                     # Find groups matching the criteria
-                    group_query = client.table("study_groups").select("id, group_name, course_id")
+                    group_query = client.table("study_groups").select("id, group_name, course_id, course_name")
                     if group_name:
                         group_query = group_query.ilike("group_name", f"%{group_name}%")
                     if course_number:
                         group_query = group_query.eq("course_id", course_number)
+                    if course_name:
+                        # Also filter by course_name if provided
+                        group_query = group_query.ilike("course_name", f"%{course_name}%")
                     
                     groups_result = group_query.execute()
                     
+                    # #region agent log
+                    import json
+                    try:
+                        with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({"runId":"run1","hypothesisId":"I","location":"app/agents/executors/request_handler.py:execute","message":"Groups found","data":{"groups_count":len(groups_result.data or []),"groups":[{"id":g.get("id"),"name":g.get("group_name")} for g in (groups_result.data or [])]},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    
                     if not groups_result.data:
-                        raise HTTPException(status_code=404, detail=f"No group found matching: group_name={group_name}, course_number={course_number}")
+                        raise HTTPException(status_code=404, detail=f"No group found matching: group_name={group_name}, course_number={course_number}, course_name={course_name}")
                     
                     # Try to find pending invitation or change request for any of these groups
                     for group in groups_result.data:
                         group_id = group["id"]
                         logger.info(f"🔍 Checking group {group_id} ({group.get('group_name')})")
                         
-                        # First, try to find pending change request
-                        change_req_result = client.table("group_meeting_change_requests").select("id").eq("group_id", group_id).eq("status", "pending").order("created_at", desc=True).limit(1).execute()
+                        # Load existing blocks for this group to help populate missing parameters
+                        existing_blocks = []
+                        if week_start:
+                            # Try to get existing blocks from group_plan_blocks
+                            group_blocks_result = client.table("group_plan_blocks").select("day_of_week, start_time, end_time").eq("group_id", group_id).eq("week_start", week_start).order("day_of_week").order("start_time").execute()
+                            if group_blocks_result.data:
+                                existing_blocks = group_blocks_result.data
+                                logger.info(f"   Found {len(existing_blocks)} existing group blocks for week {week_start}")
+                                # #region agent log
+                                try:
+                                    with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                        f.write(json.dumps({"runId":"run1","hypothesisId":"N","location":"app/agents/executors/request_handler.py:execute","message":"Existing blocks loaded","data":{"group_id":group_id,"week_start":week_start,"blocks_count":len(existing_blocks),"blocks":[{"day":b.get("day_of_week"),"start":b.get("start_time"),"end":b.get("end_time")} for b in existing_blocks]},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                                except: pass
+                                # #endregion
+                        
+                        # If we have day_of_week and time_of_day but no start_time, try to infer from existing blocks
+                        if day_of_week is not None and time_of_day and not start_time and existing_blocks:
+                            time_mapping = {
+                                "morning": ("08:00", "12:00"),
+                                "afternoon": ("12:00", "17:00"),
+                                "evening": ("17:00", "21:00"),
+                                "night": ("20:00", "23:00")
+                            }
+                            if time_of_day.lower() in time_mapping:
+                                start_range, end_range = time_mapping[time_of_day.lower()]
+                                # Find blocks matching day_of_week and time range
+                                matching_blocks = [b for b in existing_blocks if b.get("day_of_week") == day_of_week and start_range <= b.get("start_time", "") < end_range]
+                                if matching_blocks:
+                                    # Use the first matching block's start_time
+                                    inferred_start_time = matching_blocks[0].get("start_time")
+                                    if inferred_start_time:
+                                        start_time = inferred_start_time[:5] if len(inferred_start_time) > 5 else inferred_start_time
+                                        logger.info(f"   ✅ Inferred start_time={start_time} from existing blocks (day={day_of_week}, time_of_day={time_of_day})")
+                                        # #region agent log
+                                        try:
+                                            with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                                f.write(json.dumps({"runId":"run1","hypothesisId":"O","location":"app/agents/executors/request_handler.py:execute","message":"Inferred start_time from existing blocks","data":{"day_of_week":day_of_week,"time_of_day":time_of_day,"inferred_start_time":start_time,"matching_blocks_count":len(matching_blocks)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                                        except: pass
+                                        # #endregion
+                        
+                        # If we have day_of_week and start_time but no durations, try to infer from existing blocks
+                        if day_of_week is not None and start_time and (original_duration is None or proposed_duration is None) and existing_blocks:
+                            # Normalize start_time for comparison
+                            normalized_start = start_time[:5] if len(start_time) > 5 else start_time
+                            matching_blocks = [b for b in existing_blocks if b.get("day_of_week") == day_of_week]
+                            for block in matching_blocks:
+                                block_start = block.get("start_time", "")
+                                block_start_normalized = block_start[:5] if len(block_start) > 5 else block_start
+                                if block_start_normalized == normalized_start:
+                                    # Calculate duration from start_time to end_time
+                                    block_end = block.get("end_time", "")
+                                    if block_end:
+                                        from datetime import datetime
+                                        try:
+                                            start_dt = datetime.strptime(block_start[:5], "%H:%M")
+                                            end_dt = datetime.strptime(block_end[:5], "%H:%M")
+                                            duration = int((end_dt - start_dt).total_seconds() / 3600)
+                                            if original_duration is None:
+                                                original_duration = duration
+                                                logger.info(f"   ✅ Inferred original_duration={original_duration} from existing block (start={block_start[:5]}, end={block_end[:5]})")
+                                                # #region agent log
+                                                try:
+                                                    with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                                        f.write(json.dumps({"runId":"run1","hypothesisId":"P","location":"app/agents/executors/request_handler.py:execute","message":"Inferred original_duration from existing block","data":{"day_of_week":day_of_week,"start_time":start_time,"inferred_original_duration":original_duration,"block_start":block_start,"block_end":block_end},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                                                except: pass
+                                                # #endregion
+                                            if proposed_duration is None and request_type == "resize":
+                                                # For resize, proposed_duration might be different, but we can't infer it
+                                                # Leave it as None and let the scoring system handle it
+                                                pass
+                                        except Exception as e:
+                                            logger.warning(f"   Could not calculate duration from block times: {e}")
+                                    break
+                        
+                        # First, try to find pending change request with more specific criteria
+                        change_req_query = client.table("group_meeting_change_requests").select("id, week_start, proposed_day_of_week, proposed_start_time, proposed_end_time, original_day_of_week, original_start_time, original_end_time, original_duration_hours, proposed_duration_hours, request_type, status").eq("group_id", group_id)
+                        
+                        # #region agent log
+                        try:
+                            with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                f.write(json.dumps({"runId":"run1","hypothesisId":"J","location":"app/agents/executors/request_handler.py:execute","message":"BEFORE filtering by status","data":{"group_id":group_id,"search_params":{"week_start":week_start,"date":date,"day_of_week":day_of_week,"time_of_day":time_of_day,"start_time":start_time,"original_duration":original_duration,"proposed_duration":proposed_duration,"request_type":request_type}},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                        except: pass
+                        # #endregion
+                        
+                        # Get ALL requests first (including non-pending) to see what's there
+                        all_requests = change_req_query.order("created_at", desc=True).limit(10).execute()
+                        
+                        # #region agent log
+                        try:
+                            with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                f.write(json.dumps({"runId":"run1","hypothesisId":"J","location":"app/agents/executors/request_handler.py:execute","message":"ALL requests for group (before status filter)","data":{"group_id":group_id,"total_requests":len(all_requests.data or []),"requests":[{"id":r.get("id"),"status":r.get("status"),"week_start":r.get("week_start"),"day":r.get("proposed_day_of_week") or r.get("original_day_of_week"),"start":r.get("proposed_start_time") or r.get("original_start_time"),"original_duration":r.get("original_duration_hours"),"proposed_duration":r.get("proposed_duration_hours"),"type":r.get("request_type")} for r in (all_requests.data or [])]},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                        except: pass
+                        # #endregion
+                        
+                        # Now filter by pending status
+                        change_req_query = change_req_query.eq("status", "pending")
+                        
+                        # Use date/week_start if provided
+                        if week_start:
+                            change_req_query = change_req_query.eq("week_start", week_start)
+                            logger.info(f"   Filtering by week_start: {week_start}")
+                        elif date:
+                            # Convert date to week_start (Sunday of that week)
+                            from datetime import datetime, timedelta
+                            try:
+                                date_normalized = date.replace("/", "-")
+                                date_obj = None
+                                for fmt in ["%Y-%m-%d", "%d-%m-%Y", "%d-%m-%y"]:
+                                    try:
+                                        date_obj = datetime.strptime(date_normalized, fmt)
+                                        break
+                                    except ValueError:
+                                        continue
+                                if date_obj:
+                                    days_since_sunday = (date_obj.weekday() + 1) % 7
+                                    sunday = date_obj - timedelta(days=days_since_sunday)
+                                    week_start_calculated = sunday.strftime("%Y-%m-%d")
+                                    change_req_query = change_req_query.eq("week_start", week_start_calculated)
+                                    logger.info(f"   Converted date {date} to week_start: {week_start_calculated}")
+                            except Exception as date_err:
+                                logger.warning(f"   Could not parse date {date}: {date_err}")
+                        
+                        # Use day_of_week if provided - fetch all and filter in Python
+                        # (Supabase doesn't support OR queries easily, so we'll filter after fetching)
+                        logger.info(f"   Will filter by day_of_week: {day_of_week} after fetching")
+                        
+                        # Use time_of_day if provided (convert to approximate time range)
+                        if time_of_day:
+                            time_mapping = {
+                                "morning": ("08:00", "12:00"),
+                                "afternoon": ("12:00", "17:00"),
+                                "evening": ("17:00", "21:00"),
+                                "night": ("20:00", "23:00")
+                            }
+                            if time_of_day.lower() in time_mapping:
+                                start_range, end_range = time_mapping[time_of_day.lower()]
+                                # Filter by proposed_start_time or original_start_time in range
+                                logger.info(f"   Filtering by time_of_day '{time_of_day}' (range: {start_range}-{end_range})")
+                                # Note: Supabase doesn't support range queries easily, so we'll filter after fetching
+                        
+                        change_req_result = change_req_query.order("created_at", desc=True).execute()
+                        
+                        # #region agent log
+                        try:
+                            with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                f.write(json.dumps({"runId":"run1","hypothesisId":"K","location":"app/agents/executors/request_handler.py:execute","message":"Pending requests BEFORE filters","data":{"group_id":group_id,"pending_count":len(change_req_result.data or []),"requests":[{"id":r.get("id"),"week_start":r.get("week_start"),"day":r.get("proposed_day_of_week") or r.get("original_day_of_week"),"start":r.get("proposed_start_time") or r.get("original_start_time"),"original_duration":r.get("original_duration_hours"),"proposed_duration":r.get("proposed_duration_hours"),"type":r.get("request_type")} for r in (change_req_result.data or [])]},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                        except: pass
+                        # #endregion
+                        
+                        # Filter by day_of_week if provided
+                        if day_of_week is not None and change_req_result.data:
+                            filtered_by_day = []
+                            for req in change_req_result.data:
+                                req_day = req.get("proposed_day_of_week") or req.get("original_day_of_week")
+                                if req_day == day_of_week:
+                                    filtered_by_day.append(req)
+                            
+                            if filtered_by_day:
+                                change_req_result.data = filtered_by_day
+                                logger.info(f"   Filtered to {len(filtered_by_day)} requests matching day_of_week={day_of_week}")
+                            else:
+                                change_req_result.data = []
+                        
+                        # Filter by start_time if provided (exact match or close)
+                        if start_time and change_req_result.data:
+                            filtered_by_time = []
+                            # Normalize start_time to HH:MM format (remove seconds if present)
+                            normalized_start_time = start_time
+                            if len(start_time) > 5 and start_time[5] == ':':
+                                normalized_start_time = start_time[:5]  # Take only HH:MM
+                            
+                            for req in change_req_result.data:
+                                proposed_start = req.get("proposed_start_time", "")
+                                original_start = req.get("original_start_time", "")
+                                
+                                # Normalize times from database (remove seconds if present)
+                                normalized_proposed = proposed_start[:5] if proposed_start and len(proposed_start) > 5 and proposed_start[5] == ':' else proposed_start
+                                normalized_original = original_start[:5] if original_start and len(original_start) > 5 and original_start[5] == ':' else original_start
+                                
+                                # Check if start_time matches either proposed or original (normalized)
+                                if normalized_proposed == normalized_start_time or normalized_original == normalized_start_time:
+                                    filtered_by_time.append(req)
+                            
+                            # #region agent log
+                            try:
+                                with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                    f.write(json.dumps({"runId":"run1","hypothesisId":"M","location":"app/agents/executors/request_handler.py:execute","message":"start_time filter","data":{"start_time":start_time,"normalized_start_time":normalized_start_time,"requests_before":len(change_req_result.data),"requests_after":len(filtered_by_time),"request_times":[{"id":r.get("id"),"proposed":r.get("proposed_start_time"),"original":r.get("original_start_time")} for r in change_req_result.data]},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                            except: pass
+                            # #endregion
+                            
+                            if filtered_by_time:
+                                change_req_result.data = filtered_by_time
+                                logger.info(f"   Filtered to {len(filtered_by_time)} requests matching start_time={start_time}")
+                            else:
+                                change_req_result.data = []
+                        
+                        # Filter by time_of_day if provided
+                        if time_of_day and change_req_result.data:
+                            time_mapping = {
+                                "morning": ("08:00", "12:00"),
+                                "afternoon": ("12:00", "17:00"),
+                                "evening": ("17:00", "21:00"),
+                                "night": ("20:00", "23:00")
+                            }
+                            if time_of_day.lower() in time_mapping:
+                                start_range, end_range = time_mapping[time_of_day.lower()]
+                                filtered_requests = []
+                                for req in change_req_result.data:
+                                    # Check proposed_start_time or original_start_time
+                                    proposed_start = req.get("proposed_start_time", "")
+                                    original_start = req.get("original_start_time", "")
+                                    start_to_check = proposed_start or original_start
+                                    
+                                    if start_to_check and start_range <= start_to_check < end_range:
+                                        filtered_requests.append(req)
+                                
+                                if filtered_requests:
+                                    change_req_result.data = filtered_requests
+                                    logger.info(f"   Filtered to {len(filtered_requests)} requests matching time_of_day '{time_of_day}'")
+                                else:
+                                    change_req_result.data = []
+                        
+                        # Filter by original_duration and proposed_duration if provided (for resize requests)
+                        if (original_duration is not None or proposed_duration is not None) and change_req_result.data:
+                            filtered_by_duration = []
+                            for req in change_req_result.data:
+                                req_original_duration = req.get("original_duration_hours")
+                                req_proposed_duration = req.get("proposed_duration_hours")
+                                
+                                # Check if durations match
+                                original_match = original_duration is None or req_original_duration == original_duration
+                                proposed_match = proposed_duration is None or req_proposed_duration == proposed_duration
+                                
+                                if original_match and proposed_match:
+                                    filtered_by_duration.append(req)
+                            
+                            if filtered_by_duration:
+                                change_req_result.data = filtered_by_duration
+                                logger.info(f"   Filtered to {len(filtered_by_duration)} requests matching duration (original={original_duration}, proposed={proposed_duration})")
+                            else:
+                                change_req_result.data = []
+                        
+                        # Filter by request_type if provided
+                        if request_type and change_req_result.data:
+                            filtered_by_type = [req for req in change_req_result.data if req.get("request_type") == request_type]
+                            if filtered_by_type:
+                                change_req_result.data = filtered_by_type
+                                logger.info(f"   Filtered to {len(filtered_by_type)} requests matching request_type={request_type}")
+                            else:
+                                change_req_result.data = []
+                        
+                        # #region agent log
+                        try:
+                            with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                f.write(json.dumps({"runId":"run1","hypothesisId":"L","location":"app/agents/executors/request_handler.py:execute","message":"Pending requests AFTER all filters","data":{"group_id":group_id,"final_count":len(change_req_result.data or []),"requests":[{"id":r.get("id"),"week_start":r.get("week_start"),"day":r.get("proposed_day_of_week") or r.get("original_day_of_week"),"start":r.get("proposed_start_time") or r.get("original_start_time"),"original_duration":r.get("original_duration_hours"),"proposed_duration":r.get("proposed_duration_hours"),"type":r.get("request_type")} for r in (change_req_result.data or [])]},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                        except: pass
+                        # #endregion
                         
                         if change_req_result.data:
-                            change_request_id = change_req_result.data[0]["id"]
-                            logger.info(f"✅ Found pending change request: {change_request_id} for group {group_id}")
+                            # If multiple requests found, score them by how well they match
+                            scored_requests = []
+                            for req in change_req_result.data:
+                                score = 0
+                                
+                                # Score by day_of_week match
+                                req_day = req.get("proposed_day_of_week") or req.get("original_day_of_week")
+                                if day_of_week is not None and req_day == day_of_week:
+                                    score += 10
+                                
+                                # Score by start_time match
+                                req_start = req.get("proposed_start_time") or req.get("original_start_time")
+                                req_start_normalized = req_start[:5] if req_start and len(req_start) > 5 else req_start
+                                start_time_normalized = start_time[:5] if start_time and len(start_time) > 5 else start_time
+                                if start_time_normalized and req_start_normalized == start_time_normalized:
+                                    score += 10
+                                
+                                # Score by duration match (for resize)
+                                if original_duration is not None and req.get("original_duration_hours") == original_duration:
+                                    score += 5
+                                if proposed_duration is not None and req.get("proposed_duration_hours") == proposed_duration:
+                                    score += 5
+                                
+                                # Score by request_type match
+                                if request_type and req.get("request_type") == request_type:
+                                    score += 3
+                                
+                                # Bonus score: match with existing blocks (if we have them)
+                                if existing_blocks:
+                                    req_original_start = req.get("original_start_time", "")
+                                    req_original_start_normalized = req_original_start[:5] if req_original_start and len(req_original_start) > 5 else req_original_start
+                                    req_original_day = req.get("original_day_of_week")
+                                    
+                                    # Check if this request matches an existing block
+                                    for block in existing_blocks:
+                                        block_day = block.get("day_of_week")
+                                        block_start = block.get("start_time", "")
+                                        block_start_normalized = block_start[:5] if block_start and len(block_start) > 5 else block_start
+                                        
+                                        if req_original_day == block_day and req_original_start_normalized == block_start_normalized:
+                                            score += 8  # Strong match with existing block
+                                            logger.info(f"   Request {req.get('id')} matches existing block (day={block_day}, start={block_start_normalized}) - bonus +8")
+                                            break
+                                
+                                scored_requests.append((score, req))
+                            
+                            # Sort by score (highest first) and take the best match
+                            scored_requests.sort(key=lambda x: x[0], reverse=True)
+                            selected_request = scored_requests[0][1] if scored_requests else change_req_result.data[0]
+                            best_score = scored_requests[0][0] if scored_requests else 0
+                            
+                            change_request_id = selected_request["id"]
+                            logger.info(f"✅ Found pending change request: {change_request_id} for group {group_id} (score={best_score}, week_start={selected_request.get('week_start')}, day={selected_request.get('proposed_day_of_week') or selected_request.get('original_day_of_week')}, start={selected_request.get('proposed_start_time') or selected_request.get('original_start_time')}, type={selected_request.get('request_type')}, original_duration={selected_request.get('original_duration_hours')}, proposed_duration={selected_request.get('proposed_duration_hours')})")
+                            # #region agent log
+                            try:
+                                with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                    f.write(json.dumps({"runId":"run1","hypothesisId":"Q","location":"app/agents/executors/request_handler.py:execute","message":"Selected request after scoring","data":{"request_id":change_request_id,"best_score":best_score,"total_requests_scored":len(scored_requests),"all_scores":[{"id":r[1].get("id"),"score":r[0]} for r in scored_requests]},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                            except: pass
+                            # #endregion
                             break
                         
                         # If no change request, try to find pending invitation
@@ -275,6 +608,27 @@ class RequestHandler:
                     if all_approved:
                         # All members approved! Apply the change by calling the internal function from main.py
                         logger.info(f"✅ All members approved! Applying change for request {change_request_id}")
+                        
+                        # If week_start is missing from change_request, try to calculate it from date
+                        if not change_request.get("week_start") and date:
+                            from datetime import datetime, timedelta
+                            try:
+                                date_normalized = date.replace("/", "-")
+                                date_obj = None
+                                for fmt in ["%Y-%m-%d", "%d-%m-%Y", "%d-%m-%y"]:
+                                    try:
+                                        date_obj = datetime.strptime(date_normalized, fmt)
+                                        break
+                                    except ValueError:
+                                        continue
+                                if date_obj:
+                                    days_since_sunday = (date_obj.weekday() + 1) % 7
+                                    sunday = date_obj - timedelta(days=days_since_sunday)
+                                    week_start_calculated = sunday.strftime("%Y-%m-%d")
+                                    change_request["week_start"] = week_start_calculated
+                                    logger.info(f"📅 Calculated and set week_start={week_start_calculated} from date={date}")
+                            except Exception as date_err:
+                                logger.warning(f"⚠️ Could not calculate week_start from date {date}: {date_err}")
                         
                         # Import the internal function from main.py
                         from app.main import _apply_group_change_request

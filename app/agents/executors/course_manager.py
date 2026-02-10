@@ -83,6 +83,24 @@ class CourseManager:
             added_course = result.data[0]
             logger.info(f"✅ Successfully added course {course_number} to user {user_id}")
 
+            # Create course_time_preferences entry with default values based on credit points
+            try:
+                credit_points_for_prefs = credit_points or 3
+                total_hours = credit_points_for_prefs * 3
+                default_personal_hours = max(1, int(total_hours * 0.5))  # Default 50%
+                default_group_hours = max(1, total_hours - default_personal_hours)
+                
+                client.table("course_time_preferences").upsert({
+                    "user_id": user_id,
+                    "course_number": course_number,
+                    "personal_hours_per_week": default_personal_hours,
+                    "group_hours_per_week": default_group_hours
+                }, on_conflict="user_id,course_number").execute()
+                
+                logger.info(f"✅ Created course_time_preferences: personal={default_personal_hours}h, group={default_group_hours}h")
+            except Exception as pref_err:
+                logger.warning(f"⚠️ Could not create course_time_preferences: {pref_err}")
+
             return {
                 "status": "success",
                 "message": f"Course {catalog_course_name} ({course_number}) successfully added to your course list for {final_semester} {final_year}",

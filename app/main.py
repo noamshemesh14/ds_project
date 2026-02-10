@@ -4759,16 +4759,16 @@ async def create_group_change_request(
         
         # Build notification message based on request type
         if request_type == "resize":
-            title = f"בקשת שינוי משך מפגש: {group_name}"
-            message = f"{requester_name} מבקש לשנות את משך המפגש מ-{original_duration} שעות ל-{proposed_duration} שעות."
+            title = f"Meeting duration change request: {group_name}"
+            message = f"{requester_name} requested to change meeting duration from {original_duration} hours to {proposed_duration} hours."
             if hours_explanation:
-                message += f" סיבה: {hours_explanation}"
-            message += " נדרש אישור מכל החברים."
+                message += f" Reason: {hours_explanation}"
+            message += " Approval from all members required."
         else:
-            original_time_str = f"{day_names[original_day]} {original_start}" if original_day is not None else "קיים"
+            original_time_str = f"{day_names[original_day]} {original_start}" if original_day is not None else "existing"
             proposed_time_str = f"{day_names[proposed_day]} {proposed_start}"
-            title = f"בקשת שינוי מפגש: {group_name}"
-            message = f"{requester_name} מבקש לשנות מפגש מ-{original_time_str} ל-{proposed_time_str}. נדרש אישור מכל החברים."
+            title = f"Meeting change request: {group_name}"
+            message = f"{requester_name} requested to change meeting from {original_time_str} to {proposed_time_str}. Approval from all members required."
         
         # Send notifications to all members
         for member_id in member_ids:
@@ -4790,7 +4790,7 @@ async def create_group_change_request(
         response_message = "Change request created. Waiting for approval from all members."
         if requester_conflicts:
             conflict_msg = "\n".join(requester_conflicts)
-            response_message += f"\n\n⚠️ שים לב: הזמן החדש מתנגש עם הלוח שלך:\n{conflict_msg}\n\nהבקשה תישלח לחברים, אבל אם תאושר, זה יתנגש עם הלוח שלך."
+            response_message += f"\n\n⚠️ Note: The new time conflicts with your schedule:\n{conflict_msg}\n\nThe request will be sent to members, but if approved, it will conflict with your schedule."
         
         return JSONResponse(content={
             "message": response_message,
@@ -4815,9 +4815,58 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
     This is extracted from approve_group_change_request to be reusable.
     """
     from app.agents.executors.block_creator import _time_to_minutes, _minutes_to_time
+    from datetime import datetime, timedelta
+    import json
     
-    week_start = change_request["week_start"]
+    # #region agent log
+    try:
+        with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({"runId":"run1","hypothesisId":"A","location":"app/main.py:_apply_group_change_request","message":"Function entry","data":{"request_id":request_id,"group_id":group_id,"member_ids":member_ids,"requester_id":requester_id,"change_request_keys":list(change_request.keys())},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+    except: pass
+    # #endregion
+    
+    week_start = change_request.get("week_start")
+    
+    # #region agent log
+    try:
+        with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({"runId":"run1","hypothesisId":"A","location":"app/main.py:_apply_group_change_request","message":"week_start from change_request","data":{"week_start":week_start,"date":change_request.get("date")},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+    except: pass
+    # #endregion
+    
+    # If week_start is not provided, try to calculate it from date or original_day/proposed_day
+    if not week_start:
+        # Try to get date from change_request
+        date_str = change_request.get("date")
+        if date_str:
+            try:
+                date_normalized = date_str.replace("/", "-")
+                date_obj = None
+                for fmt in ["%Y-%m-%d", "%d-%m-%Y", "%d-%m-%y"]:
+                    try:
+                        date_obj = datetime.strptime(date_normalized, fmt)
+                        break
+                    except ValueError:
+                        continue
+                if date_obj:
+                    days_since_sunday = (date_obj.weekday() + 1) % 7
+                    sunday = date_obj - timedelta(days=days_since_sunday)
+                    week_start = sunday.strftime("%Y-%m-%d")
+                    logging.info(f"📅 Calculated week_start={week_start} from date={date_str}")
+            except Exception as date_err:
+                logging.warning(f"⚠️ Could not parse date {date_str}: {date_err}")
+        
+        # If still no week_start, try to use current week
+        if not week_start:
+            today = datetime.now()
+            days_since_sunday = (today.weekday() + 1) % 7
+            week_start_date = today - timedelta(days=days_since_sunday)
+            week_start = week_start_date.strftime("%Y-%m-%d")
+            logging.warning(f"⚠️ No week_start found, using current week: {week_start}")
+    
     request_type = change_request.get("request_type", "move")
+    
+    logging.info(f"🔄 Applying group change request {request_id}: type={request_type}, week_start={week_start}, group_id={group_id}")
     proposed_day = change_request["proposed_day_of_week"]
     proposed_start = change_request["proposed_start_time"]
     proposed_end = change_request["proposed_end_time"]
@@ -4827,16 +4876,432 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
     original_duration = change_request.get("original_duration_hours", 0)
     hours_explanation = change_request.get("hours_explanation", "")
     
+    # #region agent log
+    try:
+        with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({"runId":"run1","hypothesisId":"B","location":"app/main.py:_apply_group_change_request","message":"Duration values BEFORE calculation","data":{"original_duration":original_duration,"proposed_duration":proposed_duration,"request_type":request_type},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+    except: pass
+    # #endregion
+    
     # Get course info
     group_info = client.table("study_groups").select("course_id, course_name").eq("id", group_id).limit(1).execute()
     course_number = group_info.data[0].get("course_id") if group_info.data else None
     course_name = group_info.data[0].get("course_name") if group_info.data else None
     
     if request_type == "resize" and proposed_duration:
-        # Handle resize logic (from approve_group_change_request)
-        # ... (keep existing resize logic)
-        pass
-    else:
+        # Handle resize: update duration of group blocks
+        # IMPORTANT: Keep the original time/position, only add/remove blocks at the end
+        time_slots = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
+        
+        # Use original time/position, not proposed (for resize, we keep the same location)
+        actual_day = original_day if original_day is not None else proposed_day
+        actual_start = original_start if original_start else proposed_start
+        
+        logging.info(f"📊 Resize request: original_duration={original_duration}h, proposed_duration={proposed_duration}h, day={actual_day}, start={actual_start}, week_start={week_start}")
+        
+        # Get existing blocks to preserve their order and position
+        existing_group_blocks = client.table("group_plan_blocks").select("*").eq("group_id", group_id).eq("week_start", week_start).eq("day_of_week", actual_day).order("start_time").execute()
+        
+        # #region agent log
+        try:
+            with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({"runId":"run1","hypothesisId":"D","location":"app/main.py:_apply_group_change_request","message":"Existing blocks query result","data":{"group_id":group_id,"week_start":week_start,"day":actual_day,"blocks_found":len(existing_group_blocks.data or []),"block_times":[b.get("start_time")+"-"+b.get("end_time") for b in (existing_group_blocks.data or [])]},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        logging.info(f"📋 Found {len(existing_group_blocks.data or [])} existing group blocks for group {group_id}, week {week_start}, day {actual_day}")
+        
+        # If no blocks found, try to find blocks in any week for debugging
+        if not existing_group_blocks.data or len(existing_group_blocks.data) == 0:
+            all_blocks_check = client.table("group_plan_blocks").select("week_start, day_of_week, start_time").eq("group_id", group_id).limit(5).execute()
+            logging.warning(f"⚠️ No blocks found for week {week_start}, day {actual_day}. Found blocks in other weeks: {[b.get('week_start') for b in (all_blocks_check.data or [])]}")
+        
+        # Find the start index based on existing blocks or original start
+        start_idx = time_slots.index(actual_start) if actual_start in time_slots else 0
+        
+        # Verify existing blocks match the original start (if they exist)
+        if existing_group_blocks.data and len(existing_group_blocks.data) > 0:
+            first_block_start = existing_group_blocks.data[0].get("start_time")
+            if first_block_start != actual_start:
+                logging.warning(f"⚠️ Existing blocks start at {first_block_start} but original was {actual_start}. Using original.")
+        
+        # Calculate how many blocks to add/remove
+        duration_diff = proposed_duration - original_duration
+        
+        # #region agent log
+        try:
+            with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({"runId":"run1","hypothesisId":"B","location":"app/main.py:_apply_group_change_request","message":"Duration diff AFTER calculation","data":{"duration_diff":duration_diff,"original_duration":original_duration,"proposed_duration":proposed_duration},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        logging.info(f"📊 Resize calculation: original_duration={original_duration}h, proposed_duration={proposed_duration}h, duration_diff={duration_diff}h")
+        logging.info(f"📊 Need to {'add' if duration_diff > 0 else 'remove' if duration_diff < 0 else 'no change'} {abs(duration_diff)} blocks")
+        
+        if duration_diff == 0:
+            logging.warning(f"⚠️ duration_diff is 0 - no changes will be made! original_duration={original_duration}, proposed_duration={proposed_duration}")
+        
+        if duration_diff > 0:
+            # Need to add blocks - find the last existing block's end time
+            if existing_group_blocks.data and len(existing_group_blocks.data) > 0:
+                last_block = existing_group_blocks.data[-1]
+                last_end = last_block.get("end_time")
+                last_start = last_block.get("start_time")
+                
+                # #region agent log
+                try:
+                    with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({"runId":"run1","hypothesisId":"F","location":"app/main.py:_apply_group_change_request","message":"Last block info","data":{"last_start":last_start,"last_end":last_end,"last_end_in_slots":last_end in time_slots,"time_slots":time_slots},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                except: pass
+                # #endregion
+                
+                if last_end in time_slots:
+                    start_idx = time_slots.index(last_end)
+                    logging.info(f"📍 Will add blocks starting from {last_end} (after last existing block)")
+                else:
+                    # last_end is not in time_slots (e.g., "21:00") - calculate next time slot
+                    # Convert last_end to minutes and find next hour
+                    last_end_minutes = _time_to_minutes(last_end)
+                    next_hour_minutes = last_end_minutes + 60
+                    next_hour_time = _minutes_to_time(next_hour_minutes)
+                    
+                    # If next hour is in time_slots, use it; otherwise add it manually
+                    if next_hour_time in time_slots:
+                        start_idx = time_slots.index(next_hour_time)
+                        logging.info(f"📍 Will add blocks starting from {next_hour_time} (calculated from last_end {last_end})")
+                    else:
+                        # Need to add time beyond time_slots - calculate manually
+                        # Use the last block's start + number of existing blocks
+                        if last_start in time_slots:
+                            start_idx = time_slots.index(last_start) + len(existing_group_blocks.data)
+                            logging.info(f"📍 Will add blocks starting from index {start_idx} (after {len(existing_group_blocks.data)} existing blocks)")
+                        else:
+                            # Fallback: use last_end directly as start_time (not in time_slots)
+                            # We'll create blocks manually using time calculations
+                            start_idx = None  # Signal to use manual time calculation
+                            logging.info(f"📍 Will add blocks manually starting from {last_end} (not in time_slots)")
+            else:
+                # No existing blocks - start from original_start
+                if actual_start in time_slots:
+                    start_idx = time_slots.index(actual_start)
+                    logging.info(f"📍 No existing blocks found - will add blocks starting from {actual_start} (index {start_idx})")
+                else:
+                    logging.warning(f"⚠️ actual_start {actual_start} not in time_slots, using index 0")
+                    start_idx = 0
+            
+            # Add new blocks starting from start_idx
+            new_group_blocks = []
+            if start_idx is not None:
+                # Use time_slots approach
+                for i in range(duration_diff):
+                    new_time = time_slots[start_idx + i] if (start_idx + i) < len(time_slots) else None
+                    if new_time:
+                        new_end = time_slots[start_idx + i + 1] if (start_idx + i + 1) < len(time_slots) else "21:00"
+                        new_group_blocks.append({
+                            "group_id": group_id,
+                            "week_start": week_start,
+                            "course_number": course_number,
+                            "day_of_week": actual_day,
+                            "start_time": new_time,
+                            "end_time": new_end,
+                            "created_by": requester_id
+                        })
+            else:
+                # Manual time calculation (when last_end is beyond time_slots)
+                last_block = existing_group_blocks.data[-1]
+                last_end = last_block.get("end_time")
+                start_minutes = _time_to_minutes(last_end)
+                
+                for i in range(duration_diff):
+                    block_start_minutes = start_minutes + (i * 60)
+                    block_end_minutes = block_start_minutes + 60
+                    new_time = _minutes_to_time(block_start_minutes)
+                    new_end = _minutes_to_time(block_end_minutes)
+                    new_group_blocks.append({
+                        "group_id": group_id,
+                        "week_start": week_start,
+                        "course_number": course_number,
+                        "day_of_week": actual_day,
+                        "start_time": new_time,
+                        "end_time": new_end,
+                        "created_by": requester_id
+                    })
+            
+            # #region agent log
+            try:
+                with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({"runId":"run1","hypothesisId":"F","location":"app/main.py:_apply_group_change_request","message":"BEFORE group_plan_blocks insert","data":{"new_group_blocks_count":len(new_group_blocks),"blocks":new_group_blocks},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+            except: pass
+            # #endregion
+            
+            if new_group_blocks:
+                try:
+                    insert_result = client.table("group_plan_blocks").insert(new_group_blocks).execute()
+                    # #region agent log
+                    try:
+                        with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({"runId":"run1","hypothesisId":"H","location":"app/main.py:_apply_group_change_request","message":"AFTER group_plan_blocks insert","data":{"inserted_count":len(insert_result.data) if insert_result.data else 0,"returned_data":insert_result.data},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    logging.info(f"✅ Added {len(new_group_blocks)} new group blocks: {insert_result.data if insert_result.data else 'no data returned'}")
+                except Exception as insert_err:
+                    # #region agent log
+                    try:
+                        with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({"runId":"run1","hypothesisId":"H","location":"app/main.py:_apply_group_change_request","message":"ERROR in group_plan_blocks insert","data":{"error":str(insert_err)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    logging.error(f"❌ Error inserting group_plan_blocks: {insert_err}")
+                    raise
+            else:
+                logging.warning(f"⚠️ No new group blocks to add (duration_diff={duration_diff}, start_idx={start_idx})")
+        
+        elif duration_diff < 0:
+            # Need to remove blocks - remove from the end
+            blocks_to_remove = abs(duration_diff)
+            if existing_group_blocks.data and len(existing_group_blocks.data) >= blocks_to_remove:
+                blocks_to_delete = existing_group_blocks.data[-blocks_to_remove:]
+                for block in blocks_to_delete:
+                    delete_result = client.table("group_plan_blocks").delete().eq("id", block["id"]).execute()
+                    logging.info(f"🗑️ Deleted group block {block['id']} (start={block.get('start_time')}, end={block.get('end_time')})")
+                logging.info(f"✅ Removed {blocks_to_remove} group blocks from the end")
+            else:
+                logging.warning(f"⚠️ Cannot remove {blocks_to_remove} blocks - only {len(existing_group_blocks.data or [])} blocks exist")
+        
+        # Ensure requester_id is included in member_ids (in case they're not in group_members table)
+        all_member_ids = list(member_ids) if member_ids else []
+        if requester_id and requester_id not in all_member_ids:
+            all_member_ids.append(requester_id)
+            logging.info(f"➕ Added requester {requester_id} to member list for block updates")
+        
+        # #region agent log
+        try:
+            with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({"runId":"run1","hypothesisId":"G","location":"app/main.py:_apply_group_change_request","message":"Member IDs for block updates","data":{"member_ids":member_ids,"all_member_ids":all_member_ids,"requester_id":requester_id},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        logging.info(f"👥 Will update blocks for {len(all_member_ids)} members: {all_member_ids}")
+        
+        # Now update each member's weekly_plan_blocks
+        for mid in all_member_ids:
+            member_plan = client.table("weekly_plans").select("id").eq("user_id", mid).eq("week_start", week_start).limit(1).execute()
+            if member_plan.data:
+                plan_id = member_plan.data[0]["id"]
+            else:
+                plan_result = client.table("weekly_plans").insert({
+                    "user_id": mid,
+                    "week_start": week_start,
+                    "source": "group_update"
+                }).execute()
+                plan_id = plan_result.data[0]["id"] if plan_result.data else None
+            
+            if plan_id:
+                existing_member_blocks = client.table("weekly_plan_blocks").select("*").eq("plan_id", plan_id).eq("work_type", "group").eq("course_number", course_number).eq("day_of_week", actual_day).order("start_time").execute()
+                
+                if duration_diff > 0:
+                    # Add new blocks for this member
+                    member_start_idx = None
+                    if existing_member_blocks.data and len(existing_member_blocks.data) > 0:
+                        last_block = existing_member_blocks.data[-1]
+                        last_end = last_block.get("end_time")
+                        last_start = last_block.get("start_time")
+                        
+                        if last_end in time_slots:
+                            member_start_idx = time_slots.index(last_end)
+                        else:
+                            # last_end is not in time_slots - calculate next time slot
+                            last_end_minutes = _time_to_minutes(last_end)
+                            next_hour_minutes = last_end_minutes + 60
+                            next_hour_time = _minutes_to_time(next_hour_minutes)
+                            
+                            if next_hour_time in time_slots:
+                                member_start_idx = time_slots.index(next_hour_time)
+                            else:
+                                # Use manual calculation
+                                member_start_idx = None
+                    else:
+                        # No existing blocks - use the same start_idx as group blocks
+                        member_start_idx = start_idx if start_idx is not None else None
+                    
+                    new_member_blocks = []
+                    if member_start_idx is not None:
+                        # Use time_slots approach
+                        for i in range(duration_diff):
+                            new_time = time_slots[member_start_idx + i] if (member_start_idx + i) < len(time_slots) else None
+                            if new_time:
+                                new_end = time_slots[member_start_idx + i + 1] if (member_start_idx + i + 1) < len(time_slots) else "21:00"
+                                new_member_blocks.append({
+                                    "plan_id": plan_id,
+                                    "user_id": mid,
+                                    "course_number": course_number,
+                                    "course_name": course_name,
+                                    "work_type": "group",
+                                    "day_of_week": actual_day,
+                                    "start_time": new_time,
+                                    "end_time": new_end,
+                                    "source": "group"
+                                })
+                    else:
+                        # Manual time calculation
+                        if existing_member_blocks.data and len(existing_member_blocks.data) > 0:
+                            last_block = existing_member_blocks.data[-1]
+                            last_end = last_block.get("end_time")
+                            start_minutes = _time_to_minutes(last_end)
+                        else:
+                            # Use original_start
+                            start_minutes = _time_to_minutes(actual_start) if actual_start else _time_to_minutes("19:00")
+                        
+                        for i in range(duration_diff):
+                            block_start_minutes = start_minutes + (i * 60)
+                            block_end_minutes = block_start_minutes + 60
+                            new_time = _minutes_to_time(block_start_minutes)
+                            new_end = _minutes_to_time(block_end_minutes)
+                            new_member_blocks.append({
+                                "plan_id": plan_id,
+                                "user_id": mid,
+                                "course_number": course_number,
+                                "course_name": course_name,
+                                "work_type": "group",
+                                "day_of_week": actual_day,
+                                "start_time": new_time,
+                                "end_time": new_end,
+                                "source": "group"
+                            })
+                    
+                    # #region agent log
+                    try:
+                        with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({"runId":"run1","hypothesisId":"E","location":"app/main.py:_apply_group_change_request","message":"BEFORE weekly_plan_blocks insert for member","data":{"member_id":mid,"plan_id":plan_id,"new_blocks_count":len(new_member_blocks),"blocks":new_member_blocks},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    
+                    if new_member_blocks:
+                        try:
+                            insert_result = client.table("weekly_plan_blocks").insert(new_member_blocks).execute()
+                            block_times = [f"{b['start_time']}-{b['end_time']}" for b in new_member_blocks]
+                            # #region agent log
+                            try:
+                                with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                    f.write(json.dumps({"runId":"run1","hypothesisId":"H","location":"app/main.py:_apply_group_change_request","message":"AFTER weekly_plan_blocks insert for member","data":{"member_id":mid,"inserted_count":len(insert_result.data) if insert_result.data else 0,"returned_data":insert_result.data},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                            except: pass
+                            # #endregion
+                            logging.info(f"✅ Added {len(new_member_blocks)} blocks for member {mid}: {block_times}")
+                            if not insert_result.data:
+                                logging.error(f"❌ Failed to insert blocks for member {mid} - no data returned from insert")
+                        except Exception as insert_err:
+                            # #region agent log
+                            try:
+                                with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                    f.write(json.dumps({"runId":"run1","hypothesisId":"H","location":"app/main.py:_apply_group_change_request","message":"ERROR in weekly_plan_blocks insert for member","data":{"member_id":mid,"error":str(insert_err)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                            except: pass
+                            # #endregion
+                            logging.error(f"❌ Error inserting weekly_plan_blocks for member {mid}: {insert_err}")
+                            raise
+                    else:
+                        logging.warning(f"⚠️ No new blocks to add for member {mid} (duration_diff={duration_diff}, member_start_idx={member_start_idx})")
+                
+                elif duration_diff < 0:
+                    # Remove blocks from the end for this member
+                    blocks_to_remove = abs(duration_diff)
+                    if existing_member_blocks.data and len(existing_member_blocks.data) >= blocks_to_remove:
+                        blocks_to_delete = existing_member_blocks.data[-blocks_to_remove:]
+                        for block in blocks_to_delete:
+                            client.table("weekly_plan_blocks").delete().eq("id", block["id"]).execute()
+                        logging.info(f"✅ Removed {blocks_to_remove} blocks for member {mid}")
+        
+        logging.info(f"✅ Successfully updated group_plan_blocks and all member weekly_plan_blocks for resize: {original_duration}h -> {proposed_duration}h")
+        
+        # Mark request as approved BEFORE updating preferences (in case preferences update fails)
+        client.table("group_meeting_change_requests").update({
+            "status": "approved",
+            "resolved_at": datetime.now().isoformat()
+        }).eq("id", request_id).execute()
+        logging.info(f"✅ Marked change request {request_id} as approved")
+        
+        # Update group preferences
+        try:
+            gp = client.table("group_preferences").select("*").eq("group_id", group_id).limit(1).execute()
+            is_new_block = (original_duration == 0 and original_day is None)
+            
+            if gp.data:
+                current_history = gp.data[0].get("hours_change_history", []) or []
+                if not isinstance(current_history, list):
+                    current_history = []
+                
+                history_entry = {
+                    "date": datetime.now().isoformat(),
+                    "old_hours": original_duration,
+                    "new_hours": proposed_duration,
+                    "approved_by": member_ids
+                }
+                if hours_explanation:
+                    history_entry["reason"] = hours_explanation
+                current_history.append(history_entry)
+                
+                current_hours = gp.data[0].get("preferred_hours_per_week", 4)
+                
+                if is_new_block and current_hours == 0:
+                    weighted_hours = proposed_duration
+                else:
+                    weighted_hours = int(0.8 * current_hours + 0.2 * proposed_duration)
+                
+                client.table("group_preferences").update({
+                    "preferred_hours_per_week": weighted_hours,
+                    "hours_change_history": current_history,
+                    "updated_at": datetime.now().isoformat()
+                }).eq("group_id", group_id).execute()
+            else:
+                history_entry = {
+                    "date": datetime.now().isoformat(),
+                    "old_hours": original_duration,
+                    "new_hours": proposed_duration,
+                    "approved_by": member_ids
+                }
+                if hours_explanation:
+                    history_entry["reason"] = hours_explanation
+                
+                client.table("group_preferences").insert({
+                    "group_id": group_id,
+                    "preferred_hours_per_week": proposed_duration,
+                    "hours_change_history": [history_entry]
+                }).execute()
+                weighted_hours = proposed_duration
+            
+            # Update course_time_preferences for all members (including requester)
+            if course_number:
+                for member_id in all_member_ids:
+                    try:
+                        member_pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", member_id).eq("course_number", course_number).limit(1).execute()
+                        
+                        if member_pref_result.data:
+                            current_group_hours = float(member_pref_result.data[0].get("group_hours_per_week", 0))
+                            
+                            if is_new_block and current_group_hours == 0:
+                                new_group_hours = float(weighted_hours)
+                            else:
+                                new_group_hours = round(0.8 * current_group_hours + 0.2 * float(weighted_hours), 2)
+                            
+                            client.table("course_time_preferences").update({
+                                "group_hours_per_week": new_group_hours
+                            }).eq("user_id", member_id).eq("course_number", course_number).execute()
+                        else:
+                            course_result = client.table("courses").select("credit_points").eq("user_id", member_id).eq("course_number", course_number).limit(1).execute()
+                            credit_points = course_result.data[0].get("credit_points") if course_result.data else 3
+                            total_hours = credit_points * 3
+                            default_personal_hours = max(1, int(total_hours * 0.5))
+                            
+                            client.table("course_time_preferences").insert({
+                                "user_id": member_id,
+                                "course_number": course_number,
+                                "personal_hours_per_week": default_personal_hours,
+                                "group_hours_per_week": weighted_hours
+                            }).execute()
+                    except Exception as member_err:
+                        logging.warning(f"⚠️ Failed to update course_time_preferences for member {member_id}: {member_err}")
+        except Exception as gp_err:
+            logging.error(f"Failed to update group preferences: {gp_err}")
+    elif request_type == "move" or (request_type != "resize" and original_day is not None):
         # Handle move or new block
         if original_day is None:
             # This is a new block - create it
@@ -4981,14 +5446,20 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
         else:
             # This is a move - use the existing move logic from approve_group_change_request
             # (The full move logic is already in approve_group_change_request, so we'll handle it there)
-            pass
+            logging.info(f"⚠️ Move request type not fully implemented in _apply_group_change_request - should be handled by approve_group_change_request")
+            # Mark request as approved even if move logic is not here
+            client.table("group_meeting_change_requests").update({
+                "status": "approved",
+                "resolved_at": datetime.now().isoformat()
+            }).eq("id", request_id).execute()
     
-    # Mark request as approved
-    from datetime import datetime
-    client.table("group_meeting_change_requests").update({
-        "status": "approved",
-        "resolved_at": datetime.now().isoformat()
-    }).eq("id", request_id).execute()
+    # Mark request as approved (if not already done in resize section)
+    if request_type != "resize" or not proposed_duration:
+        client.table("group_meeting_change_requests").update({
+            "status": "approved",
+            "resolved_at": datetime.now().isoformat()
+        }).eq("id", request_id).execute()
+        logging.info(f"✅ Marked change request {request_id} as approved")
     
     # Delete notifications for all members
     for member_id in member_ids:
@@ -5188,8 +5659,8 @@ async def approve_group_change_request(
                     client.table("notifications").insert({
                         "user_id": requester_id,
                         "type": "group_change_rejected",
-                        "title": f"בקשת שינוי נדחתה: {group_name}",
-                        "message": f"הבקשה {action_text} {time_text} נדחתה בגלל התנגשות בלוז של אחד החברים.",
+                        "title": f"Change request rejected: {group_name}",
+                        "message": f"The request to {action_text} {time_text} was rejected due to a schedule conflict with one of the members.",
                         "link": f"/schedule?week={week_start}",
                         "read": False
                     }).execute()
@@ -5261,8 +5732,8 @@ async def approve_group_change_request(
                         client.table("notifications").insert({
                             "user_id": mid,
                             "type": "group_change_approved",
-                            "title": f"שינוי אושר: {group_name}",
-                            "message": f"כל חברי הקבוצה אישרו את השינוי. בלוק חדש נוסף.",
+                            "title": f"Change approved: {group_name}",
+                            "message": f"All group members approved the change. New block added.",
                             "link": f"/schedule?week={week_start}",
                             "read": False
                         }).execute()
@@ -6095,8 +6566,8 @@ async def approve_group_change_request(
                     client.table("notifications").insert({
                         "user_id": mid,
                         "type": "group_change_approved",
-                        "title": f"שינוי אושר: {group_name}",
-                        "message": f"כל חברי הקבוצה אישרו את השינוי. {change_type_msg} עודכן.",
+                        "title": f"Change approved: {group_name}",
+                        "message": f"All group members approved the change. {change_type_msg} updated.",
                         "link": f"/schedule?week={week_start}",
                         "read": False
                     }).execute()
@@ -6215,8 +6686,8 @@ async def reject_group_change_request(
                 client.table("notifications").insert({
                     "user_id": mid,
                     "type": "group_change_rejected",
-                    "title": f"שינוי מפגש נדחה: {group_name}",
-                    "message": f"{rejector_name} דחה את הבקשה לשנות את מועד המפגש.",
+                    "title": f"Meeting change rejected: {group_name}",
+                    "message": f"{rejector_name} rejected the request to change the meeting time.",
                     "link": "/schedule",
                     "read": False
                 }).execute()
@@ -6745,8 +7216,8 @@ async def create_study_group(
                     client.table("notifications").insert({
                         "user_id": user_check.id,
                         "type": "group_invitation",
-                        "title": f"הזמנה לקבוצת לימוד: {group_data.group_name}",
-                        "message": f"{user_email} הזמין אותך להצטרף לקבוצת לימוד בקורס {group_data.course_name}",
+                        "title": f"Study group invitation: {group_data.group_name}",
+                        "message": f"{user_email} invited you to join a study group for course {group_data.course_name}",
                         "link": f"/my-courses?group={group_id}",
                         "read": False
                     }).execute()
