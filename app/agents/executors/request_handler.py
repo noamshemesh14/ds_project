@@ -132,6 +132,80 @@ class RequestHandler:
                         group_id = group["id"]
                         logger.info(f"🔍 Checking group {group_id} ({group.get('group_name')})")
                         
+                        # Load existing blocks for this group to help populate missing parameters
+                        existing_blocks = []
+                        if week_start:
+                            # Try to get existing blocks from group_plan_blocks
+                            group_blocks_result = client.table("group_plan_blocks").select("day_of_week, start_time, end_time").eq("group_id", group_id).eq("week_start", week_start).order("day_of_week").order("start_time").execute()
+                            if group_blocks_result.data:
+                                existing_blocks = group_blocks_result.data
+                                logger.info(f"   Found {len(existing_blocks)} existing group blocks for week {week_start}")
+                                # #region agent log
+                                try:
+                                    with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                        f.write(json.dumps({"runId":"run1","hypothesisId":"N","location":"app/agents/executors/request_handler.py:execute","message":"Existing blocks loaded","data":{"group_id":group_id,"week_start":week_start,"blocks_count":len(existing_blocks),"blocks":[{"day":b.get("day_of_week"),"start":b.get("start_time"),"end":b.get("end_time")} for b in existing_blocks]},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                                except: pass
+                                # #endregion
+                        
+                        # If we have day_of_week and time_of_day but no start_time, try to infer from existing blocks
+                        if day_of_week is not None and time_of_day and not start_time and existing_blocks:
+                            time_mapping = {
+                                "morning": ("08:00", "12:00"),
+                                "afternoon": ("12:00", "17:00"),
+                                "evening": ("17:00", "21:00"),
+                                "night": ("20:00", "23:00")
+                            }
+                            if time_of_day.lower() in time_mapping:
+                                start_range, end_range = time_mapping[time_of_day.lower()]
+                                # Find blocks matching day_of_week and time range
+                                matching_blocks = [b for b in existing_blocks if b.get("day_of_week") == day_of_week and start_range <= b.get("start_time", "") < end_range]
+                                if matching_blocks:
+                                    # Use the first matching block's start_time
+                                    inferred_start_time = matching_blocks[0].get("start_time")
+                                    if inferred_start_time:
+                                        start_time = inferred_start_time[:5] if len(inferred_start_time) > 5 else inferred_start_time
+                                        logger.info(f"   ✅ Inferred start_time={start_time} from existing blocks (day={day_of_week}, time_of_day={time_of_day})")
+                                        # #region agent log
+                                        try:
+                                            with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                                f.write(json.dumps({"runId":"run1","hypothesisId":"O","location":"app/agents/executors/request_handler.py:execute","message":"Inferred start_time from existing blocks","data":{"day_of_week":day_of_week,"time_of_day":time_of_day,"inferred_start_time":start_time,"matching_blocks_count":len(matching_blocks)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                                        except: pass
+                                        # #endregion
+                        
+                        # If we have day_of_week and start_time but no durations, try to infer from existing blocks
+                        if day_of_week is not None and start_time and (original_duration is None or proposed_duration is None) and existing_blocks:
+                            # Normalize start_time for comparison
+                            normalized_start = start_time[:5] if len(start_time) > 5 else start_time
+                            matching_blocks = [b for b in existing_blocks if b.get("day_of_week") == day_of_week]
+                            for block in matching_blocks:
+                                block_start = block.get("start_time", "")
+                                block_start_normalized = block_start[:5] if len(block_start) > 5 else block_start
+                                if block_start_normalized == normalized_start:
+                                    # Calculate duration from start_time to end_time
+                                    block_end = block.get("end_time", "")
+                                    if block_end:
+                                        from datetime import datetime
+                                        try:
+                                            start_dt = datetime.strptime(block_start[:5], "%H:%M")
+                                            end_dt = datetime.strptime(block_end[:5], "%H:%M")
+                                            duration = int((end_dt - start_dt).total_seconds() / 3600)
+                                            if original_duration is None:
+                                                original_duration = duration
+                                                logger.info(f"   ✅ Inferred original_duration={original_duration} from existing block (start={block_start[:5]}, end={block_end[:5]})")
+                                                # #region agent log
+                                                try:
+                                                    with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                                        f.write(json.dumps({"runId":"run1","hypothesisId":"P","location":"app/agents/executors/request_handler.py:execute","message":"Inferred original_duration from existing block","data":{"day_of_week":day_of_week,"start_time":start_time,"inferred_original_duration":original_duration,"block_start":block_start,"block_end":block_end},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                                                except: pass
+                                                # #endregion
+                                            if proposed_duration is None and request_type == "resize":
+                                                # For resize, proposed_duration might be different, but we can't infer it
+                                                # Leave it as None and let the scoring system handle it
+                                                pass
+                                        except Exception as e:
+                                            logger.warning(f"   Could not calculate duration from block times: {e}")
+                                    break
+                        
                         # First, try to find pending change request with more specific criteria
                         change_req_query = client.table("group_meeting_change_requests").select("id, week_start, proposed_day_of_week, proposed_start_time, proposed_end_time, original_day_of_week, original_start_time, original_end_time, original_duration_hours, proposed_duration_hours, request_type, status").eq("group_id", group_id)
                         
@@ -329,7 +403,9 @@ class RequestHandler:
                                 
                                 # Score by start_time match
                                 req_start = req.get("proposed_start_time") or req.get("original_start_time")
-                                if start_time and req_start == start_time:
+                                req_start_normalized = req_start[:5] if req_start and len(req_start) > 5 else req_start
+                                start_time_normalized = start_time[:5] if start_time and len(start_time) > 5 else start_time
+                                if start_time_normalized and req_start_normalized == start_time_normalized:
                                     score += 10
                                 
                                 # Score by duration match (for resize)
@@ -342,6 +418,23 @@ class RequestHandler:
                                 if request_type and req.get("request_type") == request_type:
                                     score += 3
                                 
+                                # Bonus score: match with existing blocks (if we have them)
+                                if existing_blocks:
+                                    req_original_start = req.get("original_start_time", "")
+                                    req_original_start_normalized = req_original_start[:5] if req_original_start and len(req_original_start) > 5 else req_original_start
+                                    req_original_day = req.get("original_day_of_week")
+                                    
+                                    # Check if this request matches an existing block
+                                    for block in existing_blocks:
+                                        block_day = block.get("day_of_week")
+                                        block_start = block.get("start_time", "")
+                                        block_start_normalized = block_start[:5] if block_start and len(block_start) > 5 else block_start
+                                        
+                                        if req_original_day == block_day and req_original_start_normalized == block_start_normalized:
+                                            score += 8  # Strong match with existing block
+                                            logger.info(f"   Request {req.get('id')} matches existing block (day={block_day}, start={block_start_normalized}) - bonus +8")
+                                            break
+                                
                                 scored_requests.append((score, req))
                             
                             # Sort by score (highest first) and take the best match
@@ -351,6 +444,12 @@ class RequestHandler:
                             
                             change_request_id = selected_request["id"]
                             logger.info(f"✅ Found pending change request: {change_request_id} for group {group_id} (score={best_score}, week_start={selected_request.get('week_start')}, day={selected_request.get('proposed_day_of_week') or selected_request.get('original_day_of_week')}, start={selected_request.get('proposed_start_time') or selected_request.get('original_start_time')}, type={selected_request.get('request_type')}, original_duration={selected_request.get('original_duration_hours')}, proposed_duration={selected_request.get('proposed_duration_hours')})")
+                            # #region agent log
+                            try:
+                                with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                    f.write(json.dumps({"runId":"run1","hypothesisId":"Q","location":"app/agents/executors/request_handler.py:execute","message":"Selected request after scoring","data":{"request_id":change_request_id,"best_score":best_score,"total_requests_scored":len(scored_requests),"all_scores":[{"id":r[1].get("id"),"score":r[0]} for r in scored_requests]},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                            except: pass
+                            # #endregion
                             break
                         
                         # If no change request, try to find pending invitation
