@@ -48,3 +48,4 @@ CREATE INDEX IF NOT EXISTS semester_schedule_items_user_id_idx
 -- =====================================================
 
 
+
