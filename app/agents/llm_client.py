@@ -273,11 +273,19 @@ For block_mover:
 - Extract new_start_time (required) - target start time in HH:MM format. Normalize formats: "012:00" -> "12:00", "13:00" is correct. Look for phrases like "to Wednesday 08:00", "to day X at Y:00", "to 13:00", or "at 13:00".
 - Extract new_end_time (optional) - target end time in HH:MM format, will be calculated if not provided
 - Extract specific_hours (optional) - if user explicitly specifies which hours to move (e.g., "only move 08:00-09:00", "move just the first hour"), set this to true. Otherwise, all consecutive blocks will be moved together.
+- Extract work_type (optional) - "personal" or "group". Look for phrases like:
+  * "personal work", "personal study", "עבודה אישית", "לימוד אישי", "my own" → work_type="personal"
+  * "group meeting", "group work", "קבוצתי", "עבודה קבוצתית", "meeting" (in context of groups), group names → work_type="group"
+  * If user mentions a group name or "group meeting" → work_type="group"
+  * If user says "personal" or "my own" → work_type="personal"
+  * If not specified, set to null (system will determine from existing block)
 - IMPORTANT: If the user provides any explanation or reason for the move (e.g., "because I prefer to study late", "I don't like studying on Sunday", "I find it easier in the morning"), include the full user_prompt in executor_params as "user_prompt" so the backend can extract and save these preferences to learn from user behavior.
 - Day name mapping: Sunday=0, Monday=1, Tuesday=2, Wednesday=3, Thursday=4, Friday=5, Saturday=6
 - Examples:
   * "reschedule נושאים נבחרים from Thursday 08:00 to Wednesday 08:00" → course_name="נושאים נבחרים", original_day=4 (Thursday), original_start_time="08:00", new_day=3 (Wednesday), new_start_time="08:00", week_start=null (will use current week)
   * "move אלגוריתמים from Monday 14:00 to Tuesday 16:00 for week 2026-02-08" → course_name="אלגוריתמים", original_day=1 (Monday), original_start_time="14:00", new_day=2 (Tuesday), new_start_time="16:00", week_start="2026-02-08"
+  * "move my personal אלגוריתמים block from Monday 14:00 to Tuesday 16:00" → course_name="אלגוריתמים", work_type="personal", original_day=1 (Monday), original_start_time="14:00", new_day=2 (Tuesday), new_start_time="16:00"
+  * "reschedule the group meeting for אלגוריתמים from Thursday 08:00 to Wednesday 08:00" → course_name="אלגוריתמים", work_type="group", original_day=4 (Thursday), original_start_time="08:00", new_day=3 (Wednesday), new_start_time="08:00"
   * "reschedule מעבדה from 12:00 to 13:00 on the week starts on 2026/02/08" → course_name="מעבדה", original_day=null (will be found from block), original_start_time="12:00", new_day=null (same day), new_start_time="13:00", week_start="2026-02-08"
   * "move course from 08:00 to 14:00" → course_name="course", original_day=null, original_start_time="08:00", new_day=null (same day), new_start_time="14:00"
 
@@ -289,12 +297,20 @@ For block_resizer:
 - Extract new_duration (required) - the new duration in hours (e.g., 2, 3, 4). Look for phrases like "increase to 3 hours", "reduce to 2 hours", "make it 4 hours", "change duration to 3h", "resize to 2 hours", "extend to 4 hours", "shorten to 1 hour", "2 hours is sufficient", "change it to 13-15" (means 2 hours: 13:00-15:00), "from 13:00 to 15:00" (means 2 hours), "from 2 to 3 hours" (means new_duration=3).
 - IMPORTANT: If user says "from X:00 to Y:00" and wants to change it to "from X:00 to Z:00" where Z < Y, this is a RESIZE (reducing duration), not a move. Calculate duration: if "from 13:00 to 16:00" (3 hours) and user wants "13-15" (2 hours), then new_duration=2.
 - Extract week_start (optional) - the week start date in YYYY-MM-DD or YYYY/MM/DD format. If not provided, the system will use the current week. Can be extracted from dates like "13/2/26" (2026-02-13) - calculate the Sunday of that week.
+- Extract work_type (optional) - "personal" or "group". Look for phrases like:
+  * "personal work", "personal study", "עבודה אישית", "my own" → work_type="personal"
+  * "group meeting", "group work", "קבוצתי", "עבודה קבוצתית", "meeting" (in context of groups), group names → work_type="group"
+  * If user mentions extending "group meeting" or mentions a group name → work_type="group"
+  * If user says "personal" or "my own" → work_type="personal"
+  * If not specified, set to null (system will determine from existing block)
 - Extract user_prompt (optional) - if the user provides an explanation for the resize (e.g., "I need more time", "I prefer shorter sessions", "2 hours is sufficient"), include the full user_prompt so the backend can extract and save these preferences.
 - Examples:
   * "resize אלגוריתמים on Monday 08:00 to 3 hours" → course_name="אלגוריתמים", day_of_week=1 (Monday), start_time="08:00", new_duration=3
   * "increase מעבדה on Friday 12:00 to 4 hours for week 2026-02-08" → course_name="מעבדה", day_of_week=5 (Friday), start_time="12:00", new_duration=4, week_start="2026-02-08"
-  * "submit a request to extend the time for the group meeting in group X on friday evening on 13/2/26 from 2 to 3 hours" → course_name from group name, day_of_week=5 (Friday), start_time=null (evening mentioned but not specific time - system will search), new_duration=3, week_start="2026-02-08" (Sunday of week containing 2026-02-13)
-  * "I have a personal work from 13:00 to 16:00. 2 hours is sufficient so change it to 13-15" → course_name from context, day_of_week from context, start_time="13:00", new_duration=2 (13:00-15:00 = 2 hours)
+  * "extend the group meeting for אלגוריתמים on Monday 08:00 to 3 hours" → course_name="אלגוריתמים", work_type="group", day_of_week=1 (Monday), start_time="08:00", new_duration=3
+  * "increase my personal work for מבני נתונים on Friday 12:00 to 4 hours" → course_name="מבני נתונים", work_type="personal", day_of_week=5 (Friday), start_time="12:00", new_duration=4
+  * "submit a request to extend the time for the group meeting in group X on friday evening on 13/2/26 from 2 to 3 hours" → course_name from group name, work_type="group", day_of_week=5 (Friday), start_time=null (evening mentioned but not specific time - system will search), new_duration=3, week_start="2026-02-08" (Sunday of week containing 2026-02-13)
+  * "I have a personal work from 13:00 to 16:00. 2 hours is sufficient so change it to 13-15" → course_name from context, work_type="personal", day_of_week from context, start_time="13:00", new_duration=2 (13:00-15:00 = 2 hours)
   * "reduce block duration from 3 to 2 hours" → new_duration=2 (block_id or course info needed)
 
 For preference_updater:

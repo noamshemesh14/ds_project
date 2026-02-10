@@ -126,6 +126,12 @@ class BlockResizer:
                 if start_time is not None:
                     query = query.eq("start_time", start_time)
                 
+                # Add work_type filter if provided (helps distinguish between personal and group blocks)
+                work_type = kwargs.get("work_type")
+                if work_type:
+                    query = query.eq("work_type", work_type)
+                    logger.info(f"🔍 Filtering by work_type: {work_type}")
+                
                 if course_number:
                     query = query.eq("course_number", course_number)
                     logger.info(f"🔍 Searching by course_number: {course_number}")
@@ -142,6 +148,9 @@ class BlockResizer:
                     fuzzy_query = client.table("weekly_plan_blocks").select("*").eq("plan_id", plan_id).eq("user_id", user_id).eq("day_of_week", day_of_week)
                     if start_time is not None:
                         fuzzy_query = fuzzy_query.eq("start_time", start_time)
+                    # Also filter by work_type in fuzzy search if provided
+                    if work_type:
+                        fuzzy_query = fuzzy_query.eq("work_type", work_type)
                     all_blocks = fuzzy_query.execute()
                     time_info = f"at {start_time}" if start_time is not None else "at any time"
                     logger.info(f"🔍 Found {len(all_blocks.data) if all_blocks.data else 0} blocks on day {day_of_week} {time_info}")
@@ -418,15 +427,14 @@ class BlockResizer:
                 insert_result = client.table("weekly_plan_blocks").insert(new_blocks).execute()
                 logger.info(f"✅ Created {len(new_blocks)} new blocks")
             
-            # Update course_time_preferences based on ALL blocks in the plan
+            # Update course_time_preferences based on the change (Y) and existing value (X)
+            # Formula: 80% * X + 20% * (X + Y)
+            personal_hours = None
+            group_hours = None
+            preferences_updated = False
+            
             try:
-                # Get all blocks for this course in the plan to calculate actual distribution
-                all_course_blocks = client.table("weekly_plan_blocks").select("work_type").eq("plan_id", plan_id).eq("course_number", course_number).execute()
-                
-                new_personal_hours = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "personal")
-                new_group_hours = sum(1 for b in (all_course_blocks.data or []) if b.get("work_type") == "group")
-                
-                # Get current preferences for weighted average (80% existing, 20% new)
+                # Get current preferences (X)
                 current_pref_result = client.table("course_time_preferences").select("personal_hours_per_week, group_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
                 
                 if current_pref_result.data and current_pref_result.data[0].get("personal_hours_per_week") is not None:
@@ -434,31 +442,83 @@ class BlockResizer:
                     current_personal_hours = float(current_pref_result.data[0]["personal_hours_per_week"])
                     current_group_hours = float(current_pref_result.data[0].get("group_hours_per_week", 0))
                     
-                    # Weighted average: 80% existing, 20% new (keep as decimal)
-                    personal_hours = round(0.8 * current_personal_hours + 0.2 * float(new_personal_hours), 2)
-                    group_hours = round(0.8 * current_group_hours + 0.2 * float(new_group_hours), 2)
+                    # Calculate change (Y) - duration_diff is the change for this work_type
+                    # Y = duration_diff if this is the same work_type, else 0
+                    personal_change = duration_diff if work_type == "personal" else 0
+                    group_change = duration_diff if work_type == "group" else 0
+                    
+                    # Weighted average: 80% * X + 20% * (X + Y)
+                    personal_hours = round(0.8 * current_personal_hours + 0.2 * (current_personal_hours + personal_change), 2)
+                    group_hours = round(0.8 * current_group_hours + 0.2 * (current_group_hours + group_change), 2)
+                    
+                    # Update the preferences in the database
+                    client.table("course_time_preferences").upsert({
+                        "user_id": user_id,
+                        "course_number": course_number,
+                        "personal_hours_per_week": personal_hours,
+                        "group_hours_per_week": group_hours
+                    }, on_conflict="user_id,course_number").execute()
+                    
+                    preferences_updated = True
+                    logger.info(f"✅ Updated course_time_preferences: personal={personal_hours}h (was {current_personal_hours}h), group={group_hours}h (was {current_group_hours}h), change: {duration_diff}h for {work_type}")
                 else:
-                    # No existing preferences, use new values (as decimal)
-                    personal_hours = float(new_personal_hours)
-                    group_hours = float(new_group_hours)
+                    # No existing preferences or preferences are NULL
+                    # Check if course exists to get credit points for default calculation
+                    course_result = client.table("courses").select("credit_points").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
+                    credit_points = course_result.data[0].get("credit_points") if course_result.data else 3
+                    total_hours = credit_points * 3
+                    
+                    if duration_diff > 0:
+                        # If increasing duration and no preferences exist, use the change as new value
+                        if work_type == "personal":
+                            personal_hours = float(duration_diff)
+                            group_hours = max(1.0, float(total_hours * 0.5))  # Default 50% for group
+                        else:
+                            personal_hours = max(1.0, float(total_hours * 0.5))  # Default 50% for personal
+                            group_hours = float(duration_diff)
+                        
+                        client.table("course_time_preferences").upsert({
+                            "user_id": user_id,
+                            "course_number": course_number,
+                            "personal_hours_per_week": personal_hours,
+                            "group_hours_per_week": group_hours
+                        }, on_conflict="user_id,course_number").execute()
+                        
+                        preferences_updated = True
+                        logger.info(f"✅ Created course_time_preferences: personal={personal_hours}h, group={group_hours}h (change: {duration_diff}h for {work_type})")
+                    else:
+                        # If decreasing duration and no preferences exist, don't update preferences
+                        # Don't create entry with 0 hours
+                        logger.info(f"⚠️ No existing preferences and duration_diff is negative ({duration_diff}), skipping preferences update")
+                        preferences_updated = False
+                        personal_hours = None
+                        group_hours = None
                 
-                client.table("course_time_preferences").upsert({
-                    "user_id": user_id,
-                    "course_number": course_number,
-                    "personal_hours_per_week": personal_hours,
-                    "group_hours_per_week": group_hours
-                }, on_conflict="user_id,course_number").execute()
-                
-                logger.info(f"✅ Updated course_time_preferences: personal={personal_hours}h (from {new_personal_hours}h in blocks), group={group_hours}h (from {new_group_hours}h in blocks)")
+                if preferences_updated and personal_hours is not None and group_hours is not None:
+                    # Only log if we actually updated
+                    logger.info(f"✅ Updated course_time_preferences: personal={personal_hours}h, group={group_hours}h (change: {duration_diff}h for {work_type})")
             except Exception as pref_err:
                 logger.warning(f"⚠️ Failed to update course_time_preferences: {pref_err}")
             
-            return {
+            # Build response with essential details
+            response_data = {
                 "status": "success",
                 "message": f"Block resized successfully from {current_duration}h to {new_duration}h",
                 "original_duration": current_duration,
-                "new_duration": new_duration
+                "new_duration": new_duration,
+                "duration_change": duration_diff,
+                "work_type": work_type
             }
+            
+            # Add preferences info if updated
+            if preferences_updated:
+                response_data["preferences_updated"] = True
+                if work_type == "personal" and personal_hours is not None:
+                    response_data["personal_hours_per_week"] = personal_hours
+                elif work_type == "group" and group_hours is not None:
+                    response_data["group_hours_per_week"] = group_hours
+            
+            return response_data
             
         except HTTPException as http_exc:
             logger.error(f"❌ HTTPException in block_resizer: {http_exc.detail}")

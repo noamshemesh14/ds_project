@@ -168,6 +168,12 @@ class BlockMover:
                 if original_day is not None:
                     query = query.eq("day_of_week", original_day)
                 
+                # Add work_type filter if provided (helps distinguish between personal and group blocks)
+                work_type = kwargs.get("work_type")
+                if work_type:
+                    query = query.eq("work_type", work_type)
+                    logger.info(f"🔍 Filtering by work_type: {work_type}")
+                
                 if course_number:
                     query = query.eq("course_number", course_number)
                     logger.info(f"🔍 Searching by course_number: {course_number}")
@@ -186,6 +192,9 @@ class BlockMover:
                         fuzzy_query = fuzzy_query.eq("start_time", original_start_time)
                     if original_day is not None:
                         fuzzy_query = fuzzy_query.eq("day_of_week", original_day)
+                    # Also filter by work_type in fuzzy search if provided
+                    if work_type:
+                        fuzzy_query = fuzzy_query.eq("work_type", work_type)
                     all_blocks = fuzzy_query.execute()
                     day_info = f"day {original_day}" if original_day is not None else "any day"
                     time_info = f"at {original_start_time}" if original_start_time is not None else "at any time"
