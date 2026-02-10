@@ -162,3 +162,4 @@ print(f"   ❌ Errors: {error_count} courses")
 print(f"   📝 Total processed: {len(courses_to_add)} courses")
 print("\n✅ Script completed!")
 
+
