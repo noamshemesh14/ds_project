@@ -877,13 +877,8 @@
             </div>
             
             <div id="resultSection" class="result-section" style="display: none;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-                    <h2>📊 תוצאות ניתוח</h2>
-                    <button class="submit-button" onclick="showUploadSection()" style="background: #4caf50; font-size: 0.9em; padding: 0.5rem 1rem;">📄 העלה גליון מעודכן</button>
-                </div>
-                <div id="studentInfoCard"></div>
+                <h2 style="margin-bottom: 1rem;">📋 הקורסים שלך</h2>
                 <div id="coursesList"></div>
-                <div id="statsSummary" class="stats-summary"></div>
                 <button class="submit-button" onclick="saveToDatabase()" style="margin-top: 20px;">💾 שמור במאגר (עם דריסה אם קיים)</button>
             </div>
         </section>
@@ -958,9 +953,7 @@
         const errorMessage = document.getElementById('errorMessage');
         const successMessage = document.getElementById('successMessage');
         const resultSection = document.getElementById('resultSection');
-        const studentInfoCard = document.getElementById('studentInfoCard');
         const coursesList = document.getElementById('coursesList');
-        const statsSummary = document.getElementById('statsSummary');
         
         // File input change handler
         fileInput.addEventListener('change', function(e) {
@@ -1032,41 +1025,7 @@
         }
         
         function displayResult(data) {
-            // Display student info
-            const studentInfo = data.student_info;
-            studentInfoCard.innerHTML = `
-                <div class="student-info-card">
-                    <h3>👤 פרטי סטודנט</h3>
-                    <div class="info-grid">
-                        <div class="info-item">
-                            <span class="info-label">שם:</span>
-                            <span class="info-value info-value-text">${studentInfo.name || 'לא זוהה'}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">תעודת זהות:</span>
-                            <span class="info-value info-value-number">${studentInfo.id_number || 'לא זוהה'}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">פקולטה:</span>
-                            <span class="info-value info-value-text">${studentInfo.faculty || 'לא זוהה'}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">מסלול לימודים:</span>
-                            <span class="info-value info-value-text">${studentInfo.study_track || 'לא זוהה'}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">ממוצע מצטבר:</span>
-                            <span class="info-value info-value-number">${studentInfo.cumulative_average ? studentInfo.cumulative_average.toFixed(2) : 'לא זוהה'}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">אחוזי הצלחה:</span>
-                            <span class="info-value info-value-number">${studentInfo.success_rate ? studentInfo.success_rate.toFixed(1) + '%' : 'לא זוהה'}</span>
-                        </div>
-                    </div>
-                </div>
-            `;
-            
-            // Display courses
+            // Display courses only (no student info card)
             const courses = data.courses || [];
             if (courses.length > 0) {
                 coursesList.innerHTML = `
@@ -1089,9 +1048,6 @@
                     </div>
                 `;
             }
-            
-            // Don't display calculated statistics - use only data from header
-            statsSummary.innerHTML = '';
             
             resultSection.style.display = 'block';
         }
@@ -1159,6 +1115,18 @@
                         ${course.retake_count > 0 ? `
                             <div class="course-detail">
                                 <span class="course-detail-label">מועד ב (${course.retake_count})</span>
+                            </div>
+                        ` : ''}
+                        ${(course.lecture_day || course.lecture_time) ? `
+                            <div class="course-detail">
+                                <span class="course-detail-label">הרצאה:</span>
+                                <span class="course-detail-value">${course.lecture_day || '-'} ${course.lecture_time || ''}</span>
+                            </div>
+                        ` : ''}
+                        ${(course.tutorial_day || course.tutorial_time) ? `
+                            <div class="course-detail">
+                                <span class="course-detail-label">תרגול:</span>
+                                <span class="course-detail-value">${course.tutorial_day || '-'} ${course.tutorial_time || ''}</span>
                             </div>
                         ` : ''}
                     </div>
@@ -1252,6 +1220,40 @@
                             <input type="number" id="editYear" min="2000" max="2100">
                         </div>
                         <div class="form-group">
+                            <label>יום הרצאה:</label>
+                            <select id="editLectureDay">
+                                <option value="">לא נבחר</option>
+                                <option value="ראשון">ראשון</option>
+                                <option value="שני">שני</option>
+                                <option value="שלישי">שלישי</option>
+                                <option value="רביעי">רביעי</option>
+                                <option value="חמישי">חמישי</option>
+                                <option value="שישי">שישי</option>
+                                <option value="שבת">שבת</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>שעות הרצאה:</label>
+                            <input type="text" id="editLectureTime" placeholder="14:30-17:30">
+                        </div>
+                        <div class="form-group">
+                            <label>יום תרגול:</label>
+                            <select id="editTutorialDay">
+                                <option value="">לא נבחר</option>
+                                <option value="ראשון">ראשון</option>
+                                <option value="שני">שני</option>
+                                <option value="שלישי">שלישי</option>
+                                <option value="רביעי">רביעי</option>
+                                <option value="חמישי">חמישי</option>
+                                <option value="שישי">שישי</option>
+                                <option value="שבת">שבת</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>שעות תרגול:</label>
+                            <input type="text" id="editTutorialTime" placeholder="17:30-19:30">
+                        </div>
+                        <div class="form-group">
                             <label>הערות:</label>
                             <textarea id="editNotes" rows="3"></textarea>
                         </div>
@@ -1282,6 +1284,10 @@
                     document.getElementById('editLetterGrade').value = course.letter_grade || '';
                     document.getElementById('editSemester').value = course.semester || '';
                     document.getElementById('editYear').value = course.year || '';
+                    document.getElementById('editLectureDay').value = course.lecture_day || '';
+                    document.getElementById('editLectureTime').value = course.lecture_time || '';
+                    document.getElementById('editTutorialDay').value = course.tutorial_day || '';
+                    document.getElementById('editTutorialTime').value = course.tutorial_time || '';
                     document.getElementById('editNotes').value = course.notes || '';
                     document.getElementById('editIsPassed').checked = course.is_passed || false;
                     document.getElementById('editRetakeCount').value = course.retake_count || 0;
@@ -1355,6 +1361,10 @@
                 letter_grade: document.getElementById('editLetterGrade').value.trim() || null,
                 semester: document.getElementById('editSemester').value || null,
                 year: document.getElementById('editYear').value ? parseInt(document.getElementById('editYear').value) : null,
+                lecture_day: document.getElementById('editLectureDay').value || null,
+                lecture_time: document.getElementById('editLectureTime').value.trim() || null,
+                tutorial_day: document.getElementById('editTutorialDay').value || null,
+                tutorial_time: document.getElementById('editTutorialTime').value.trim() || null,
                 notes: document.getElementById('editNotes').value.trim() || null,
                 is_passed: document.getElementById('editIsPassed').checked,
                 retake_count: document.getElementById('editRetakeCount').value ? parseInt(document.getElementById('editRetakeCount').value) : 0
@@ -1482,14 +1492,25 @@
                     return;
                 }
                 
-                console.log('📤 Sending save request to /api/save-user');
+                // Current week Sunday (same as בניית מערכת) so weekly plan updates for the right week
+                function getWeekStartForSave() {
+                    const now = new Date();
+                    const day = now.getDay();
+                    const diff = now.getDate() - day;
+                    const sunday = new Date(now);
+                    sunday.setDate(diff);
+                    const y = sunday.getFullYear(), m = String(sunday.getMonth() + 1).padStart(2, '0'), d = String(sunday.getDate()).padStart(2, '0');
+                    return `${y}-${m}-${d}`;
+                }
+                const weekStartParam = getWeekStartForSave();
+                console.log('📤 Sending save request to /api/save-user', { week_start: weekStartParam });
                 console.log('📦 User data:', {
                     name: userData.name,
                     id_number: userData.id_number,
                     courses_count: userData.courses?.length || 0
                 });
                 
-                const response = await fetch('/api/save-user', {
+                const response = await fetch(`/api/save-user?week_start=${encodeURIComponent(weekStartParam)}`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1669,11 +1690,10 @@
                 
                 console.log('📦 Full response data:', data);
                 
-                if (data.metadata && data.metadata.has_data && data.student_info) {
-                    console.log('✅ User data loaded:', data.metadata.courses_count, 'courses');
-                    // Convert to parsedData format
+                if ((data.metadata && data.metadata.has_data) || (data.courses && data.courses.length > 0)) {
+                    console.log('✅ User data loaded:', (data.courses || []).length, 'courses');
                     parsedData = {
-                        student_info: data.student_info,
+                        student_info: data.student_info || {},
                         courses: data.courses || []
                     };
                     

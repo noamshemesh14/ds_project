@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Form, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Form, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.requests import Request
@@ -360,7 +360,8 @@ async def upload_transcript(
 @app.post("/api/save-user")
 async def save_user(
     user_data: UserCreate,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    week_start: Optional[str] = Query(None, description="Sunday of week (YYYY-MM-DD) for weekly plan sync; use same as בניית מערכת")
 ):
     """
     Save or update user profile and courses to Supabase
@@ -428,12 +429,32 @@ async def save_user(
             logging.warning(f"   Error deleting courses (might not exist): {e}")
             # Continue even if delete fails - courses might not exist yet
         
+        # Delete existing semester_schedule_items and weekly_plan_blocks for this user (will re-create from course schedule)
+        try:
+            client.table("semester_schedule_items").delete().eq("user_id", user_id).execute()
+            logging.info(f"   Deleted existing semester_schedule_items for user {user_id}")
+        except Exception as e:
+            logging.warning(f"   Error deleting semester_schedule_items: {e}")
+        try:
+            # Use week_start from query (same as schedule page) so weekly view updates; else fallback to UTC Sunday
+            if not week_start or not week_start.strip():
+                week_start = (datetime.now(timezone.utc) - timedelta(days=((datetime.now(timezone.utc).weekday() + 1) % 7))).strftime("%Y-%m-%d")
+            else:
+                week_start = week_start.strip()[:10]
+            plans = client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).execute()
+            if plans.data:
+                for p in plans.data:
+                    client.table("weekly_plan_blocks").delete().eq("plan_id", p["id"]).execute()
+                logging.info(f"   Deleted current week's weekly_plan_blocks for user {user_id}")
+        except Exception as e:
+            logging.warning(f"   Error deleting weekly_plan_blocks: {e}")
+        
         # Insert new courses
         if user_data.courses:
             try:
                 courses_data = []
                 for course_data in user_data.courses:
-                    courses_data.append({
+                    row = {
                         "user_id": user_id,
                         "course_name": course_data.course_name,
                         "course_number": course_data.course_number,
@@ -445,10 +466,32 @@ async def save_user(
                         "notes": course_data.notes,
                         "is_passed": course_data.is_passed,
                         "retake_count": course_data.retake_count or 0
-                    })
+                    }
+                    if getattr(course_data, "lecture_day", None) is not None:
+                        row["lecture_day"] = course_data.lecture_day
+                    if getattr(course_data, "lecture_time", None) is not None:
+                        row["lecture_time"] = course_data.lecture_time
+                    if getattr(course_data, "tutorial_day", None) is not None:
+                        row["tutorial_day"] = course_data.tutorial_day
+                    if getattr(course_data, "tutorial_time", None) is not None:
+                        row["tutorial_time"] = course_data.tutorial_time
+                    courses_data.append(row)
                 
                 logging.info(f"   Inserting {len(courses_data)} courses for user {user_id}")
-                courses_result = client.table("courses").insert(courses_data).execute()
+                try:
+                    courses_result = client.table("courses").insert(courses_data).execute()
+                except Exception as insert_err:
+                    err_str = str(insert_err).lower()
+                    if "lecture" in err_str or "tutorial" in err_str or "column" in err_str or "does not exist" in err_str:
+                        logging.warning(f"   Courses table may lack schedule columns; retrying without lecture/tutorial fields. Run ADD_COURSES_SCHEDULE_COLUMNS.sql in Supabase.")
+                        for row in courses_data:
+                            row.pop("lecture_day", None)
+                            row.pop("lecture_time", None)
+                            row.pop("tutorial_day", None)
+                            row.pop("tutorial_time", None)
+                        courses_result = client.table("courses").insert(courses_data).execute()
+                    else:
+                        raise
                 logging.info(f"   Courses inserted: {len(courses_result.data) if courses_result.data else 0}")
                 
                 # Create course_time_preferences for each new course (default 50/50 split)
@@ -477,6 +520,102 @@ async def save_user(
                     except Exception as pref_err:
                         # If preferences already exist, that's okay (upsert would handle it, but we use insert for new courses)
                         logging.warning(f"   Could not create course_time_preferences (may already exist): {pref_err}")
+                
+                # Create semester_schedule_items and weekly_plan_blocks from lecture/tutorial times
+                DAY_NAME_TO_INT = {"ראשון": 0, "שני": 1, "שלישי": 2, "רביעי": 3, "חמישי": 4, "שישי": 5, "שבת": 6}
+                def parse_time_range(s: str):
+                    if not s or "-" not in s:
+                        return None, None
+                    parts = s.strip().split("-", 1)
+                    return parts[0].strip(), parts[1].strip()
+                
+                inserted_courses = courses_result.data or []
+                semester_items_to_insert = []
+                if not week_start or not week_start.strip():
+                    week_start = (datetime.now(timezone.utc) - timedelta(days=((datetime.now(timezone.utc).weekday() + 1) % 7))).strftime("%Y-%m-%d")
+                else:
+                    week_start = week_start.strip()[:10]
+                plan_result = client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).limit(1).execute()
+                plan_id = plan_result.data[0]["id"] if plan_result.data else None
+                if not plan_id:
+                    plan_row = client.table("weekly_plans").insert({"user_id": user_id, "week_start": week_start, "source": "profile"}).execute()
+                    plan_id = plan_row.data[0]["id"] if plan_row.data else None
+                blocks_to_insert = []
+                
+                for i, course_data in enumerate(user_data.courses):
+                    inserted = inserted_courses[i] if i < len(inserted_courses) else {}
+                    course_number = inserted.get("course_number") or getattr(course_data, "course_number", None)
+                    course_name = inserted.get("course_name") or course_data.course_name
+                    if not course_number:
+                        course_number = getattr(course_data, "course_number", None) or ""
+                    lecture_day = getattr(course_data, "lecture_day", None)
+                    lecture_time = getattr(course_data, "lecture_time", None)
+                    tutorial_day = getattr(course_data, "tutorial_day", None)
+                    tutorial_time = getattr(course_data, "tutorial_time", None)
+                    if lecture_day and lecture_time:
+                        start_t, end_t = parse_time_range(lecture_time)
+                        if start_t and end_t:
+                            day_int = DAY_NAME_TO_INT.get(lecture_day)
+                            if day_int is not None:
+                                semester_items_to_insert.append({
+                                    "user_id": user_id,
+                                    "course_name": course_name,
+                                    "type": "lecture",
+                                    "days": json.dumps([day_int]),
+                                    "start_time": start_t,
+                                    "end_time": end_t,
+                                    "location": None
+                                })
+                                if plan_id:
+                                    blocks_to_insert.append({
+                                        "plan_id": plan_id,
+                                        "user_id": user_id,
+                                        "course_number": str(course_number) if course_number else "",
+                                        "course_name": course_name or "",
+                                        "work_type": "group",
+                                        "day_of_week": day_int,
+                                        "start_time": start_t,
+                                        "end_time": end_t,
+                                        "source": "profile"
+                                    })
+                    if tutorial_day and tutorial_time:
+                        start_t, end_t = parse_time_range(tutorial_time)
+                        if start_t and end_t:
+                            day_int = DAY_NAME_TO_INT.get(tutorial_day)
+                            if day_int is not None:
+                                semester_items_to_insert.append({
+                                    "user_id": user_id,
+                                    "course_name": course_name,
+                                    "type": "tutorial",
+                                    "days": json.dumps([day_int]),
+                                    "start_time": start_t,
+                                    "end_time": end_t,
+                                    "location": None
+                                })
+                                if plan_id:
+                                    blocks_to_insert.append({
+                                        "plan_id": plan_id,
+                                        "user_id": user_id,
+                                        "course_number": str(course_number) if course_number else "",
+                                        "course_name": course_name or "",
+                                        "work_type": "group",
+                                        "day_of_week": day_int,
+                                        "start_time": start_t,
+                                        "end_time": end_t,
+                                        "source": "profile"
+                                    })
+                
+                if semester_items_to_insert:
+                    client.table("semester_schedule_items").insert(semester_items_to_insert).execute()
+                    logging.info(f"   Created {len(semester_items_to_insert)} semester_schedule_items from profile courses")
+                if blocks_to_insert and plan_id:
+                    try:
+                        client.table("weekly_plan_blocks").insert(blocks_to_insert).execute()
+                        logging.info(f"   Created {len(blocks_to_insert)} weekly_plan_blocks for week {week_start}")
+                    except Exception as wb_err:
+                        logging.error(f"   Failed to insert weekly_plan_blocks: {wb_err}")
+                        import traceback
+                        logging.error(traceback.format_exc())
             except Exception as e:
                 logging.error(f"   Error inserting courses: {e}")
                 import traceback
@@ -588,7 +727,37 @@ async def get_user_data(
             "current_year": profile.get("current_year")
         }
         
-        # Convert courses to CourseBase format
+        # Load semester_schedule_items to enrich courses with lecture/tutorial (so profile shows hours after refresh)
+        INT_TO_DAY = {0: "ראשון", 1: "שני", 2: "שלישי", 3: "רביעי", 4: "חמישי", 5: "שישי", 6: "שבת"}
+        schedule_by_course = {}  # key: (course_number, course_name) -> {"lecture": {day, time}, "tutorial": {day, time}}
+        try:
+            sem_res = client.table("semester_schedule_items").select("course_name, type, days, start_time, end_time").eq("user_id", user_id).execute()
+            for item in (sem_res.data or []):
+                cname = (item.get("course_name") or "").strip()
+                days_raw = item.get("days")
+                if isinstance(days_raw, str):
+                    try:
+                        days_list = json.loads(days_raw)
+                    except Exception:
+                        days_list = []
+                else:
+                    days_list = list(days_raw) if days_raw else []
+                day_int = days_list[0] if days_list else None
+                day_name = INT_TO_DAY.get(day_int) if day_int is not None else None
+                start_t = item.get("start_time") or ""
+                end_t = item.get("end_time") or ""
+                time_str = f"{start_t}-{end_t}" if start_t and end_t else None
+                key = (None, cname)
+                if key not in schedule_by_course:
+                    schedule_by_course[key] = {}
+                if (item.get("type") or "").lower() == "lecture" and day_name and time_str:
+                    schedule_by_course[key]["lecture"] = {"day": day_name, "time": time_str}
+                elif (item.get("type") or "").lower() == "tutorial" and day_name and time_str:
+                    schedule_by_course[key]["tutorial"] = {"day": day_name, "time": time_str}
+        except Exception as e:
+            logging.warning(f"   Could not load semester_schedule_items for enrichment: {e}")
+        
+        # Convert courses to CourseBase format and enrich with schedule from semester_schedule_items
         courses_list = []
         print("=" * 60)
         print(f"[USER-DATA API] Processing {len(courses)} courses:")
@@ -598,11 +767,25 @@ async def get_user_data(
             catalog_name = catalog_map.get(str(course.get("course_number")).strip())
             if catalog_name:
                 normalized_name = catalog_name
+            cnum = course.get("course_number") or ""
+            cname = normalized_name or (course.get("course_name") or "")
+            key = (cnum, cname)
+            schedule = schedule_by_course.get(key) or schedule_by_course.get((None, cname)) or schedule_by_course.get((None, course.get("course_name") or "")) or {}
+            lecture_day = course.get("lecture_day")
+            lecture_time = course.get("lecture_time")
+            tutorial_day = course.get("tutorial_day")
+            tutorial_time = course.get("tutorial_time")
+            if (lecture_day is None or lecture_time is None) and schedule.get("lecture"):
+                lecture_day = lecture_day or schedule["lecture"].get("day")
+                lecture_time = lecture_time or schedule["lecture"].get("time")
+            if (tutorial_day is None or tutorial_time is None) and schedule.get("tutorial"):
+                tutorial_day = tutorial_day or schedule["tutorial"].get("day")
+                tutorial_time = tutorial_time or schedule["tutorial"].get("time")
 
             course_data = {
                 "id": course.get("id"),  # Include course ID for frontend matching
                 "course_name": normalized_name,
-                "course_number": course.get("course_number", ""),
+                "course_number": str(cnum) if cnum is not None else "",
                 "credit_points": course.get("credit_points"),
                 "grade": course.get("grade"),
                 "letter_grade": course.get("letter_grade"),
@@ -610,7 +793,11 @@ async def get_user_data(
                 "year": course.get("year"),
                 "notes": course.get("notes", ""),
                 "is_passed": course.get("is_passed", False),
-                "retake_count": course.get("retake_count", 0)
+                "retake_count": course.get("retake_count", 0),
+                "lecture_day": lecture_day,
+                "lecture_time": lecture_time,
+                "tutorial_day": tutorial_day,
+                "tutorial_time": tutorial_time
             }
             courses_list.append(course_data)
             course_info = f"   Course: '{course_data['course_name']}' | course_number: '{course_data['course_number']}' | id: '{course_data['id']}' | semester: '{course_data['semester']}'"
@@ -2538,6 +2725,53 @@ async def get_weekly_plan(
             if direct_blocks_for_week:
                 blocks.extend(direct_blocks_for_week)
                 logging.info(f"✅ [GET_WEEKLY_PLAN] Added {len(direct_blocks_for_week)} additional blocks found via direct query")
+        
+        # Add blocks from semester_schedule_items (same as מערכת סמסטרית) so weekly view shows profile course hours
+        try:
+            sem_res = client.table("semester_schedule_items").select("id, course_name, type, days, start_time, end_time").eq("user_id", user_id).execute()
+            courses_res = client.table("courses").select("course_number, course_name").eq("user_id", user_id).execute()
+            course_name_to_number = {}
+            for c in (courses_res.data or []):
+                name = (c.get("course_name") or "").strip()
+                if name:
+                    course_name_to_number[name] = c.get("course_number") or ""
+            for item in (sem_res.data or []):
+                days_raw = item.get("days")
+                if isinstance(days_raw, str):
+                    try:
+                        days_list = json.loads(days_raw)
+                    except Exception:
+                        days_list = []
+                else:
+                    days_list = list(days_raw) if days_raw else []
+                if not days_list:
+                    continue
+                day_int = int(days_list[0]) if days_list else None
+                if day_int is None or day_int < 0 or day_int > 6:
+                    continue
+                start_t = (item.get("start_time") or "").strip()
+                end_t = (item.get("end_time") or "").strip()
+                if not start_t or not end_t:
+                    continue
+                course_name = (item.get("course_name") or "").strip()
+                course_number = course_name_to_number.get(course_name, "")
+                virtual_block = {
+                    "id": f"semester-{item.get('id')}",
+                    "plan_id": plan_ids_for_week[0] if plan_ids_for_week else None,
+                    "user_id": user_id,
+                    "course_number": str(course_number) if course_number else "",
+                    "course_name": course_name,
+                    "work_type": "group",
+                    "day_of_week": day_int,
+                    "start_time": start_t,
+                    "end_time": end_t,
+                    "source": "semester"
+                }
+                blocks.append(virtual_block)
+            if sem_res.data:
+                logging.info(f"📋 [GET_WEEKLY_PLAN] Added {len(sem_res.data)} blocks from semester_schedule_items (profile courses)")
+        except Exception as sem_err:
+            logging.warning(f"   Could not add semester items to weekly plan: {sem_err}")
         
         # Remove duplicates (in case same block was found both ways)
         seen_ids = set()

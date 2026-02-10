@@ -14,6 +14,11 @@ class CourseBase(BaseModel):
     notes: Optional[str] = Field(None, description="הערות")
     is_passed: bool = Field(True, description="האם עבר את הקורס")
     retake_count: int = Field(0, description="מספר פעמים שנלמד מחדש")
+    # Schedule: for sync to מערכת סמסטרית and מערכת שבועית
+    lecture_day: Optional[str] = Field(None, description="יום הרצאה (e.g. ראשון)")
+    lecture_time: Optional[str] = Field(None, description="שעות הרצאה (e.g. 14:30-17:30)")
+    tutorial_day: Optional[str] = Field(None, description="יום תרגול")
+    tutorial_time: Optional[str] = Field(None, description="שעות תרגול")
 
 
 class CourseCreate(CourseBase):
