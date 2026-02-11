@@ -213,6 +213,39 @@ If an error occurs, the response will have:
 }
 ```
 
+## System Endpoints
+
+### Weekly Plan Generation (System Function)
+
+**Generate weekly plans for ALL users** (automated system function):
+
+```cmd
+curl -X POST "http://127.0.0.1:8000/api/system/weekly-plan/generate?week_start=2025-02-22"
+```
+
+**With optional API key** (if `SYSTEM_API_KEY` is set in `.env`):
+
+```cmd
+curl -X POST "http://127.0.0.1:8000/api/system/weekly-plan/generate?week_start=2025-02-22&api_key=your_system_api_key"
+```
+
+**PowerShell:**
+```powershell
+curl -X POST "http://127.0.0.1:8000/api/system/weekly-plan/generate?week_start=2025-02-22"
+```
+
+**Important:**
+- This endpoint does NOT require user authentication - it's a system function
+- `week_start` must be in format `YYYY-MM-DD` (e.g., "2025-02-22" for February 22, 2025)
+- The system will:
+  1. Clean up ALL old plans and blocks for this week (including orphaned blocks)
+  2. Generate new plans for ALL users based on their current courses and preferences
+  3. Use LLM to optimize schedule placement according to user preferences
+  4. Insert the new plans into Supabase
+- **Automatic execution**: Runs automatically every week for the next week (calculates next Sunday)
+- **Manual execution**: You can call it manually anytime with any date for testing or to regenerate plans
+- **LLM Integration**: If `LLM_API_KEY` is configured, the system will use LLM to create personalized schedules based on user preferences. If LLM fails, it falls back to deterministic planning (without preferences).
+
 ## Notes
 
 - **Course Numbers**: Must be exact 3-6 digit numbers from the catalog (e.g., "104043", not "10404")

@@ -38,3 +38,4 @@ COMMENT ON COLUMN user_profiles.study_preferences_summary IS 'LLM-extracted stru
 
 
 
+
