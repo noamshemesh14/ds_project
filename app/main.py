@@ -46,7 +46,23 @@ except ImportError:
     logging.warning("OpenAI not installed. LLM-based schedule refinement will not be available.")
 
 # Load environment variables
+# #region agent log
+import json
+try:
+    with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+        f.write(json.dumps({"runId":"run1","hypothesisId":"A","location":"app/main.py:49","message":"BEFORE load_dotenv","data":{"cwd":os.getcwd(),"env_file_exists":os.path.exists('.env')},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+except: pass
+# #endregion
 load_dotenv()
+# #region agent log
+try:
+    with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+        llm_key = os.getenv('LLM_API_KEY')
+        llmod_key = os.getenv('LLMOD_API_KEY')
+        openai_key = os.getenv('OPENAI_API_KEY')
+        f.write(json.dumps({"runId":"run1","hypothesisId":"A","location":"app/main.py:49","message":"AFTER load_dotenv","data":{"LLM_API_KEY_exists":bool(llm_key),"LLM_API_KEY_length":len(llm_key) if llm_key else 0,"LLMOD_API_KEY_exists":bool(llmod_key),"LLMOD_API_KEY_length":len(llmod_key) if llmod_key else 0,"OPENAI_API_KEY_exists":bool(openai_key),"OPENAI_API_KEY_length":len(openai_key) if openai_key else 0},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+except: pass
+# #endregion
 
 # Configure logging to both console and file
 logging.basicConfig(
@@ -1581,7 +1597,8 @@ async def _refine_schedule_with_llm(
     time_slots: list,
     force_exact_count: bool = False,
     required_total_override: Optional[int] = None,
-    user_id: str = None
+    user_id: str = None,
+    group_info_map: dict = None
 ) -> dict:
     """
     Use GPT-4o mini to refine the schedule by optimally placing personal study blocks.
@@ -1605,15 +1622,48 @@ async def _refine_schedule_with_llm(
             _f.write(_j.dumps({"hypothesisId": hyp, "location": "main.py:_refine_schedule_with_llm", "message": msg, "data": data, "timestamp": int(__import__("time").time()*1000)}) + "\n")
     _debug_log("C", "ENTRY: Input params", {"user_id": user_id, "courses_count": len(courses), "available_slots_count": len(available_slots), "skeleton_blocks_count": len(skeleton_blocks), "prefs_len": len(user_preferences_raw or "")})
     # #endregion
+    # Check if OpenAI library is available
     if not HAS_OPENAI:
-        logging.warning("OpenAI not available, skipping LLM refinement")
-        return {"success": False, "blocks": [], "message": "OpenAI not configured"}
+        logging.error("❌ [LLM] OpenAI library not installed! Install with: pip install openai")
+        return {"success": False, "blocks": [], "message": "OpenAI library not installed"}
     
     try:
-        openai_api_key = os.getenv('OPENAI_API_KEY')
+        # Try multiple possible API key names (check all common variations)
+        openai_api_key = (
+            os.getenv('LLM_API_KEY') or 
+            os.getenv('LLMOD_API_KEY') or 
+            os.getenv('OPENAI_API_KEY')
+        )
+        
+        # Log what we found
+        # #region agent log
+        llm_key_check = os.getenv('LLM_API_KEY')
+        llmod_key_check = os.getenv('LLMOD_API_KEY')
+        openai_key_check = os.getenv('OPENAI_API_KEY')
+        try:
+            with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({"runId":"run1","hypothesisId":"B","location":"app/main.py:1436","message":"Checking API keys in _refine_schedule_with_llm","data":{"LLM_API_KEY_exists":bool(llm_key_check),"LLM_API_KEY_length":len(llm_key_check) if llm_key_check else 0,"LLMOD_API_KEY_exists":bool(llmod_key_check),"LLMOD_API_KEY_length":len(llmod_key_check) if llmod_key_check else 0,"OPENAI_API_KEY_exists":bool(openai_key_check),"OPENAI_API_KEY_length":len(openai_key_check) if openai_key_check else 0,"cwd":os.getcwd(),"env_file_exists":os.path.exists('.env')},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        except: pass
+        # #endregion
+        logging.info(f"🔍 [LLM] Checking for API keys:")
+        logging.info(f"   LLM_API_KEY: {'✅ Found' if llm_key_check else '❌ Not found'}")
+        logging.info(f"   LLMOD_API_KEY: {'✅ Found' if llmod_key_check else '❌ Not found'}")
+        logging.info(f"   OPENAI_API_KEY: {'✅ Found' if openai_key_check else '❌ Not found'}")
+        
         if not openai_api_key:
-            logging.warning("OPENAI_API_KEY not found in environment")
-            return {"success": False, "blocks": [], "message": "OpenAI API key missing"}
+            logging.error("❌ [LLM] No API key found in environment variables!")
+            logging.error("   Checked: LLM_API_KEY, LLMOD_API_KEY, OPENAI_API_KEY")
+            logging.error("   Please set one of these in your .env file")
+            return {"success": False, "blocks": [], "message": "LLM API key missing (check LLM_API_KEY, LLMOD_API_KEY, or OPENAI_API_KEY in .env)"}
+        
+        logging.info(f"✅ [LLM] API key found (length: {len(openai_api_key)} chars)")
+        # Log which key was used (without exposing the actual key)
+        if os.getenv('LLM_API_KEY'):
+            logging.info(f"   Using: LLM_API_KEY")
+        elif os.getenv('LLMOD_API_KEY'):
+            logging.info(f"   Using: LLMOD_API_KEY")
+        else:
+            logging.info(f"   Using: OPENAI_API_KEY")
         
         base_url = os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL")
         if base_url:
@@ -1622,41 +1672,83 @@ async def _refine_schedule_with_llm(
         else:
             client = OpenAI(api_key=openai_api_key)
         
-        # Calculate how many personal blocks are needed per course
+        # Calculate how many blocks are needed per course (both group and personal)
         # Use course_time_preferences if available to adjust distribution
+        # NOTE: Personal and group hours are INDEPENDENT - no subtraction between them
         course_requirements = []
+        group_requirements = []  # Separate list for group requirements
+        
         for course in courses:
             course_number = course.get("course_number")
             course_name = course.get("course_name")
             credit_points = course.get("credit_points") or 3
             total_hours = credit_points * 3
             
-            # Count group blocks already allocated
-            group_hours = sum(1 for b in skeleton_blocks if b.get("course_number") == course_number and b.get("work_type") == "group")
+            # Check if user has a group for this course
+            has_group = False
+            group_id_for_course = None
+            group_hours_needed = 0
+            group_preferences_raw = ""
+            group_preferences_summary = {}
+            
+            if group_info_map:
+                # Find group for this course
+                for gid, ginfo in group_info_map.items():
+                    if str(ginfo["course_number"]) == str(course_number):
+                        has_group = True
+                        group_id_for_course = gid
+                        group_hours_needed = ginfo.get("preferred_hours", 4)
+                        group_preferences_raw = ginfo.get("preferences_raw", "")
+                        group_preferences_summary = ginfo.get("preferences_summary", {})
+                        break
             
             # Try to get user's preferred hours from course_time_preferences
             # This is updated when user requests more/less hours
             personal_hours_preferred = max(1, int(total_hours * 0.5))  # Default 50% of total
             if user_id:
                 try:
-                    pref_result = client.table("course_time_preferences").select("personal_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
-                    if pref_result.data and pref_result.data[0].get("personal_hours_per_week") is not None:
-                        # Round to nearest integer when planning
-                        personal_hours_preferred = round(float(pref_result.data[0]["personal_hours_per_week"]))
-                        logging.info(f"Using course_time_preferences for {course_number}: personal_hours_per_week={personal_hours_preferred} (rounded from {pref_result.data[0]['personal_hours_per_week']})")
+                    # CRITICAL FIX: Use Supabase client, not OpenAI client!
+                    # The 'client' variable here is OpenAI, we need Supabase client for database queries
+                    supabase_client = supabase_admin if supabase_admin else supabase
+                    if not supabase_client:
+                        logging.warning(f"Could not load course_time_preferences: Supabase client not available")
+                    else:
+                        # #region agent log
+                        try:
+                            import json
+                            with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                f.write(json.dumps({"runId":"run1","hypothesisId":"A","location":"app/main.py:1523","message":"Loading course_time_preferences","data":{"user_id":user_id,"course_number":course_number,"client_type":type(client).__name__,"supabase_client_available":bool(supabase_client)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                        except: pass
+                        # #endregion
+                        pref_result = supabase_client.table("course_time_preferences").select("personal_hours_per_week").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
+                        if pref_result.data and pref_result.data[0].get("personal_hours_per_week") is not None:
+                            # Round to nearest integer when planning
+                            personal_hours_preferred = round(float(pref_result.data[0]["personal_hours_per_week"]))
+                            logging.info(f"Using course_time_preferences for {course_number}: personal_hours_per_week={personal_hours_preferred} (rounded from {pref_result.data[0]['personal_hours_per_week']})")
                 except Exception as pref_err:
                     logging.warning(f"Could not load course_time_preferences: {pref_err}")
             
-            # Calculate personal hours needed: preferred hours minus already allocated group hours
-            personal_hours_needed = max(0, personal_hours_preferred - group_hours)
+            # Personal hours needed = preferred hours (NO subtraction of group hours)
+            # They are independent distributions - personal and group hours don't affect each other
+            personal_hours_needed = personal_hours_preferred
             
             course_requirements.append({
                 "course_number": course_number,
                 "course_name": course_name,
                 "credit_points": credit_points,
-                "personal_hours_needed": personal_hours_needed,
-                "group_hours_allocated": group_hours
+                "personal_hours_needed": personal_hours_needed
             })
+            
+            # Add group requirements if group exists
+            if has_group and group_id_for_course:
+                group_requirements.append({
+                    "course_number": course_number,
+                    "course_name": course_name,
+                    "group_id": group_id_for_course,
+                    "group_hours_needed": group_hours_needed,
+                    "preferences_raw": group_preferences_raw,
+                    "preferences_summary": group_preferences_summary
+                })
         
         required_total = sum(c["personal_hours_needed"] for c in course_requirements)
         if required_total_override is not None:
@@ -1685,7 +1777,55 @@ async def _refine_schedule_with_llm(
         ]
         
         # Build the prompt
-        system_prompt = """You are a schedule optimization assistant. Your task is to place personal study blocks for courses based on user preferences.
+        has_groups = group_info_map and len(group_info_map) > 0
+        if has_groups:
+            system_prompt = """You are a schedule optimization assistant. Your task is to build a complete weekly schedule by placing BOTH group study blocks AND personal study blocks for courses based on user and group preferences.
+
+WORKFLOW - YOU MUST FOLLOW THIS ORDER:
+1. FIRST: Place group study blocks for courses where the user has a group (use group_preferences)
+2. THEN: Place personal study blocks for all courses (use user preferences)
+
+STRICT RULES:
+1. Each block is exactly 1 hour
+2. You must allocate the EXACT number of group hours required for each course with a group
+3. You must allocate the EXACT number of personal hours required for each course
+4. Group blocks and personal blocks CANNOT overlap - if you place a group block, remove that slot from available slots for personal blocks
+5. Return ONLY valid JSON, no explanations
+
+CRITICAL - PREFERENCES ARE THE TOP PRIORITY:
+- User preferences may be in Hebrew or English - understand and follow them exactly
+- Group preferences may be in Hebrew or English - understand and follow them exactly
+- First INTERPRET what the user/group wants, then APPLY it to the schedule
+- Common preferences:
+  * Wants breaks/gaps between study sessions = DO NOT place consecutive hours for the same course
+  * Wants concentrated/focused study = place multiple hours together
+  * Wants even distribution = spread across ALL available days, not just a few
+  * Prefers morning = use early time slots
+  * Prefers evening = use late time slots
+- If preferences mention breaks, you MUST leave at least 1-2 hours gap between study blocks
+
+OUTPUT FORMAT:
+{
+  "group_blocks": [
+    {
+      "course_number": "10401",
+      "course_name": "Course Name",
+      "group_id": "uuid-here",  # CRITICAL: You MUST include the group_id from GROUP REQUIREMENTS for each group block
+      "day_index": 0,
+      "start_time": "09:00"
+    }
+  ],
+  "personal_blocks": [
+    {
+      "course_number": "10401",
+      "course_name": "Course Name",
+      "day_index": 0,
+      "start_time": "10:00"
+    }
+  ]
+}"""
+        else:
+            system_prompt = """You are a schedule optimization assistant. Your task is to place personal study blocks for courses based on user preferences.
 
 STRICT RULES:
 1. You MUST NOT modify or move any blocks in the skeleton (group meetings or fixed blocks)
@@ -1719,7 +1859,45 @@ OUTPUT FORMAT:
         if force_exact_count:
             system_prompt += f"\nTOTAL PERSONAL BLOCKS REQUIRED: {required_total}\nYou MUST return exactly this number of personal_blocks."
 
-        user_prompt = f"""Please optimally place personal study blocks for the following schedule:
+        if has_groups:
+            user_prompt = f"""Please optimally build a complete weekly schedule with BOTH group and personal study blocks:
+
+COURSE REQUIREMENTS (PERSONAL):
+{json.dumps(course_requirements, indent=2)}
+
+GROUP REQUIREMENTS (each group has a group_id - you MUST include this group_id in your group_blocks response):
+{json.dumps(group_requirements, indent=2)}
+
+AVAILABLE TIME SLOTS (NO CONSTRAINTS - ALL SLOTS ARE AVAILABLE):
+{json.dumps(available_slots_readable, indent=2)}
+
+USER PREFERENCES (RAW):
+{user_preferences_raw or "No specific preferences provided"}
+
+USER PREFERENCES (STRUCTURED):
+{json.dumps(user_preferences_summary, indent=2) if user_preferences_summary else "{}"}
+
+GROUP PREFERENCES (for each group):
+{json.dumps([{"course_number": gr["course_number"], "course_name": gr["course_name"], "preferences_raw": gr.get("preferences_raw", ""), "preferences_summary": gr.get("preferences_summary", {})} for gr in group_requirements], indent=2) if group_requirements else "[]"}
+
+TASK - FOLLOW THIS ORDER:
+1. FIRST: Place group study blocks for each course that has a group (use GROUP REQUIREMENTS and GROUP PREFERENCES)
+   - Allocate the EXACT number of group_hours_needed for each group
+   - Remove these slots from available slots for personal blocks
+2. THEN: Place personal study blocks for all courses (use COURSE REQUIREMENTS and USER PREFERENCES)
+   - Allocate the EXACT number of personal_hours_needed for each course
+   - Use only the remaining available slots (after group blocks are placed)
+
+CRITICAL: 
+- First, read and understand ALL PREFERENCES (user and group, may be in Hebrew or any language)
+- Then apply those preferences strictly when placing blocks
+- If preferences mention breaks or gaps - spread blocks across different days and times, NOT consecutive
+- If preferences mention focus or concentration - group blocks together
+- If no clear preference - distribute evenly across all available days
+
+Return the JSON with BOTH group_blocks AND personal_blocks arrays."""
+        else:
+            user_prompt = f"""Please optimally place personal study blocks for the following schedule:
 
 COURSE REQUIREMENTS:
 {json.dumps(course_requirements, indent=2)}
@@ -1765,6 +1943,9 @@ Return only the JSON with personal_blocks array."""
         # Call LLM (configurable model)
         model = os.getenv("LLM_MODEL") or "gpt-4o-mini"
         base_url = os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+        # #region agent log
+        _debug_log("E", "PRE-LLM CALL: API config", {"model": model, "base_url": base_url or "default", "api_key_present": bool(llm_key), "api_key_length": len(llm_key) if llm_key else 0})
+        # #endregion
         logging.info(f"[LLM] Calling model={model}, base_url={base_url}")
         # #region agent log
         _debug_log("A", "PRE-API: LLM config", {"model": model, "base_url": base_url, "has_api_key": bool(openai_api_key)})
@@ -1779,6 +1960,10 @@ Return only the JSON with personal_blocks array."""
         _debug_log("B", "PRE-API: Request params", {"temperature": temperature, "max_tokens": 4000, "response_format": "json_object"})
         # #endregion
         try:
+            logging.info(f"🔄 [LLM] Calling API: model={model}, base_url={base_url or 'default'}")
+            logging.info(f"   [LLM] User preferences length: {len(user_preferences_raw or '')} chars")
+            logging.info(f"   [LLM] User preferences summary keys: {list(user_preferences_summary.keys()) if user_preferences_summary else 'none'}")
+            logging.info(f"   [LLM] Courses count: {len(courses)}, Available slots: {len(available_slots)}")
             response = client.chat.completions.create(
                 model=model,
                 messages=[
@@ -1789,17 +1974,23 @@ Return only the JSON with personal_blocks array."""
                 max_tokens=4000,
                 response_format={"type": "json_object"}
             )
+            logging.info(f"✅ [LLM] API call successful")
         except Exception as api_err:
             # #region agent log
             _debug_log("A", "API ERROR", {"error": str(api_err), "error_type": type(api_err).__name__})
             # #endregion
+            logging.error(f"❌ [LLM] API call failed: {api_err}")
+            logging.error(f"   Error type: {type(api_err).__name__}")
+            logging.error(f"   Model: {model}, Base URL: {base_url or 'default'}")
             raise
         
         # Parse response
         content = response.choices[0].message.content
         finish_reason = response.choices[0].finish_reason
-        logging.info(f"[LLM] Response received: {len(content) if content else 0} chars, finish_reason={finish_reason}")
-        logging.info(f"[LLM] Response (truncated): {(content[:500] if content else 'EMPTY')}")
+        logging.info(f"📥 [LLM] Response received: {len(content) if content else 0} chars, finish_reason={finish_reason}")
+        if finish_reason != "stop":
+            logging.warning(f"⚠️ [LLM] Unexpected finish_reason: {finish_reason} (expected 'stop')")
+        logging.info(f"   [LLM] Response preview (first 500 chars): {(content[:500] if content else 'EMPTY')}")
         # #region agent log
         _debug_log("F", "POST-API: Response metadata", {"content_len": len(content) if content else 0, "finish_reason": finish_reason, "content_preview": (content[:300] if content else "EMPTY")})
         _debug_log("FULL", "LLM FULL RESPONSE", {"user_id": user_id, "user_prefs": user_preferences_raw, "full_response": content, "required_total": required_total})
@@ -1815,14 +2006,42 @@ Return only the JSON with personal_blocks array."""
         
         try:
             llm_output = json.loads(content)
+            logging.info(f"✅ [LLM] Successfully parsed JSON response")
         except json.JSONDecodeError as json_err:
             # #region agent log
             _debug_log("E", "JSON PARSE ERROR", {"error": str(json_err), "content": content[:500]})
             # #endregion
-            raise
+            logging.error(f"❌ [LLM] JSON parse error: {json_err}")
+            logging.error(f"   Content preview (first 1000 chars): {content[:1000] if content else 'EMPTY'}")
+            # Try to extract JSON from the response if it's wrapped in markdown or text
+            try:
+                # Look for JSON block in markdown
+                import re
+                json_match = re.search(r'```(?:json)?\s*(\{.*\})\s*```', content, re.DOTALL)
+                if json_match:
+                    llm_output = json.loads(json_match.group(1))
+                    logging.info(f"✅ [LLM] Extracted JSON from markdown block")
+                else:
+                    # Try to find JSON object directly
+                    json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                    if json_match:
+                        llm_output = json.loads(json_match.group(0))
+                        logging.info(f"✅ [LLM] Extracted JSON from text")
+                    else:
+                        raise json_err
+            except:
+                logging.error(f"❌ [LLM] Could not extract JSON from response")
+                raise json_err
+        
+        # Extract both group and personal blocks from LLM response
+        group_blocks = llm_output.get("group_blocks", [])
         personal_blocks = llm_output.get("personal_blocks", [])
         
-        logging.info(f"[LLM] Proposed {len(personal_blocks)} personal blocks")
+        logging.info(f"✅ [LLM] Successfully parsed response: {len(group_blocks)} group blocks, {len(personal_blocks)} personal blocks")
+        if group_blocks:
+            logging.info(f"   📋 Sample group block: {group_blocks[0]}")
+        if personal_blocks:
+            logging.info(f"   📋 Sample personal block: {personal_blocks[0]}")
         
         # Store debug info (temporary)
         if user_id:
@@ -1831,7 +2050,8 @@ Return only the JSON with personal_blocks array."""
                 "system_prompt": system_prompt,
                 "user_prompt": user_prompt,
                 "response": content,
-                "parsed_blocks": personal_blocks,
+                "parsed_group_blocks": group_blocks,
+                "parsed_personal_blocks": personal_blocks,
                 "model": model,
                 "temperature": temperature,
                 "force_exact_count": force_exact_count,
@@ -1839,23 +2059,31 @@ Return only the JSON with personal_blocks array."""
             }
         
         # #region agent log
-        _debug_log("SUCCESS", "LLM SUCCESS", {"blocks_count": len(personal_blocks), "required_total": required_total})
+        _debug_log("SUCCESS", "LLM SUCCESS", {"group_blocks_count": len(group_blocks), "personal_blocks_count": len(personal_blocks), "required_total": required_total})
         # #endregion
         return {
             "success": True,
-            "blocks": personal_blocks,
+            "group_blocks": group_blocks,
+            "blocks": personal_blocks,  # Keep "blocks" for backward compatibility
             "required_total": required_total,
-            "message": f"LLM refinement successful, proposed {len(personal_blocks)} blocks"
+            "message": f"LLM refinement successful, proposed {len(group_blocks)} group blocks and {len(personal_blocks)} personal blocks"
         }
         
     except Exception as e:
-        logging.error(f"LLM refinement error: {e}")
+        logging.error(f"❌ [LLM] LLM refinement error: {e}")
         import traceback
         tb = traceback.format_exc()
-        logging.error(tb)
+        logging.error(f"   Full traceback:\n{tb}")
         # #region agent log
         _debug_log("FAIL", "LLM EXCEPTION", {"error": str(e), "error_type": type(e).__name__, "traceback": tb[:500]})
         # #endregion
+        
+        # Log detailed error info for debugging
+        logging.error(f"   [LLM DEBUG] Model: {os.getenv('LLM_MODEL') or 'gpt-4o-mini'}")
+        logging.error(f"   [LLM DEBUG] Base URL: {os.getenv('LLM_BASE_URL') or os.getenv('OPENAI_BASE_URL') or 'default'}")
+        logging.error(f"   [LLM DEBUG] API Key present: {bool(os.getenv('LLM_API_KEY') or os.getenv('OPENAI_API_KEY'))}")
+        logging.error(f"   [LLM DEBUG] HAS_OPENAI: {HAS_OPENAI}")
+        
         return {
             "success": False,
             "blocks": [],
@@ -2027,31 +2255,247 @@ async def _run_weekly_auto_for_all_users(week_start_override: Optional[str] = No
     4. Individual Fill: Find long blocks for personal work.
     """
     try:
+        # CRITICAL: Use admin client for cleanup to bypass RLS
         client = supabase_admin if supabase_admin else supabase
         if not client:
             logging.error("Weekly scheduler: Supabase client not configured")
             return
+        
+        if not supabase_admin:
+            logging.warning("⚠️ [GLOBAL AGENT] WARNING: supabase_admin not available! Cleanup may fail due to RLS restrictions.")
+        else:
+            logging.info("✅ [GLOBAL AGENT] Using supabase_admin client - RLS bypassed for cleanup")
 
         # 1. Determine the week (Next Sunday by default, or override)
         if week_start_override:
             week_start = week_start_override
+            logging.info(f"📅 [GLOBAL AGENT] Using provided week_start: {week_start}")
         else:
             current_week_start = _get_week_start(datetime.utcnow())
             next_week_start_dt = datetime.strptime(current_week_start, "%Y-%m-%d") + timedelta(days=7)
             week_start = next_week_start_dt.strftime("%Y-%m-%d")
+            logging.info(f"📅 [GLOBAL AGENT] Auto-calculated next week: {week_start} (current week: {current_week_start})")
         
         logging.info(f"🚀 [GLOBAL AGENT] Starting weekly planning for week {week_start}")
 
-        # 2. Cleanup
-        # Since we have cascade deletes, deleting the plans will delete the blocks
-        logging.info(f"🧹 [GLOBAL AGENT] Cleaning up old data for week {week_start}")
+        # 2. Cleanup - Delete ALL existing plans and blocks for this week
+        # IMPORTANT: Delete blocks first, then plans, to ensure complete cleanup
+        # This prevents mixed schedules with old versions
+        # CRITICAL: Use admin client to bypass RLS
+        logging.info(f"🧹 [GLOBAL AGENT] Cleaning up ALL old data for week {week_start}")
+        logging.info(f"   🔧 Using {'admin' if supabase_admin else 'anon'} client for cleanup")
         try:
-            client.table("weekly_plans").delete().eq("week_start", week_start).execute()
-            client.table("group_plan_blocks").delete().eq("week_start", week_start).execute()
-            # Also clear notifications for this week to avoid duplicates
-            client.table("notifications").delete().eq("type", "plan_ready").like("link", f"%week={week_start}%").execute()
+            # Step 1: Find all plans for this week (by week_start - the date the plans are scheduled for)
+            # CRITICAL: Only delete plans for the SPECIFIC week_start, not all plans!
+            logging.info(f"   🔍 Step 1: Finding all plans for week_start={week_start} (ONLY this week, not all weeks!)")
+            
+            # CRITICAL: First, check what plans exist for OTHER weeks to make sure we don't delete them
+            all_plans_all_weeks = client.table("weekly_plans").select("id, week_start, user_id").order("week_start", desc=True).limit(20).execute()
+            if all_plans_all_weeks.data:
+                other_weeks = [p for p in all_plans_all_weeks.data if p.get("week_start") != week_start]
+                logging.info(f"   📊 Found {len(other_weeks)} plans for OTHER weeks (these should NOT be deleted): {[(p.get('id'), p.get('week_start')) for p in other_weeks[:5]]}")
+            
+            all_plans_for_week = client.table("weekly_plans").select("id,week_start,user_id").eq("week_start", week_start).execute()
+            plan_ids_for_week = [p["id"] for p in (all_plans_for_week.data or [])]
+            logging.info(f"   🔍 Query result: {len(plan_ids_for_week)} plans found for week_start={week_start}")
+            
+            # CRITICAL: Verify we're only deleting the correct week
+            if all_plans_for_week.data:
+                sample_weeks = [p.get("week_start") for p in all_plans_for_week.data[:5]]
+                if any(w != week_start for w in sample_weeks if w):
+                    logging.error(f"   ❌ CRITICAL ERROR: Found plans with different week_start! Expected: {week_start}, Found: {sample_weeks}")
+                    raise Exception(f"Cleanup error: Found plans with wrong week_start")
+                logging.info(f"   ✅ Verified: All plans are for week_start={week_start}")
+                # Log user_ids to verify we're deleting plans for all users (this is correct for global cleanup)
+                user_ids_in_plans = list(set([p.get("user_id") for p in all_plans_for_week.data]))
+                logging.info(f"   👥 Plans belong to {len(user_ids_in_plans)} different users (this is correct for global cleanup)")
+            
+            if plan_ids_for_week:
+                logging.info(f"   🗑️ Found {len(plan_ids_for_week)} existing plan(s) to delete (identified by week_start={week_start}): {plan_ids_for_week[:5]}...")
+                # Step 2: Delete all blocks for these plans (by plan_id)
+                # This is the correct way: find plans by week_start, then delete blocks by plan_id
+                total_blocks_deleted = 0
+                for plan_id in plan_ids_for_week:
+                    try:
+                        logging.info(f"   🗑️ Deleting blocks for plan_id={plan_id} (from week_start={week_start})")
+                        blocks_deleted = client.table("weekly_plan_blocks").delete().eq("plan_id", plan_id).execute()
+                        # Note: Supabase delete() may not return data, so we check if it exists
+                        deleted_count = len(blocks_deleted.data) if blocks_deleted.data else 0
+                        total_blocks_deleted += deleted_count
+                        logging.info(f"   🗑️ Deleted {deleted_count} blocks for plan_id {plan_id} (response had data: {blocks_deleted.data is not None})")
+                    except Exception as block_del_err:
+                        logging.error(f"   ❌ Error deleting blocks for plan_id {plan_id}: {block_del_err}", exc_info=True)
+                logging.info(f"   ✅ Total blocks deleted: {total_blocks_deleted} across {len(plan_ids_for_week)} plans")
+            else:
+                logging.info(f"   ✅ No existing plans found for week {week_start}")
+            
+            # Step 3: Delete all plans for this week (CASCADE DELETE will also remove blocks, but we already did it explicitly above)
+            # CRITICAL: Only delete plans with the exact week_start - this is safe because we verified above
+            try:
+                logging.info(f"   🗑️ Deleting all plans for week_start={week_start} (ONLY this week, not other weeks!)")
+                # Double-check: Get plans before deletion to verify they're all for the correct week
+                plans_to_delete_check = client.table("weekly_plans").select("id, week_start").eq("week_start", week_start).execute()
+                if plans_to_delete_check.data:
+                    # Verify all plans are for the correct week_start
+                    wrong_weeks = [p for p in plans_to_delete_check.data if p.get("week_start") != week_start]
+                    if wrong_weeks:
+                        logging.error(f"   ❌ CRITICAL ERROR: Found plans with wrong week_start before deletion! Expected: {week_start}, Found: {wrong_weeks}")
+                        raise Exception(f"Cleanup error: Found plans with wrong week_start before deletion")
+                    logging.info(f"   ✅ Verified: All {len(plans_to_delete_check.data)} plans are for week_start={week_start}")
+                
+                # CRITICAL: Before deletion, count plans for OTHER weeks to ensure we don't delete them
+                plans_before_deletion = client.table("weekly_plans").select("id, week_start").order("week_start", desc=True).limit(50).execute()
+                if plans_before_deletion.data:
+                    plans_by_week_before = {}
+                    for p in plans_before_deletion.data:
+                        ws = p.get("week_start")
+                        plans_by_week_before[ws] = plans_by_week_before.get(ws, 0) + 1
+                    logging.info(f"   📊 Plans count BEFORE deletion (by week): {plans_by_week_before}")
+                
+                plans_deleted = client.table("weekly_plans").delete().eq("week_start", week_start).execute()
+                deleted_count = len(plans_deleted.data) if plans_deleted.data else 0
+                logging.info(f"   ✅ Deleted {deleted_count} weekly_plans for week {week_start} (response had data: {plans_deleted.data is not None})")
+                
+                # CRITICAL: After deletion, verify that plans for OTHER weeks were NOT deleted
+                plans_after_deletion = client.table("weekly_plans").select("id, week_start").order("week_start", desc=True).limit(50).execute()
+                if plans_after_deletion.data:
+                    plans_by_week_after = {}
+                    for p in plans_after_deletion.data:
+                        ws = p.get("week_start")
+                        plans_by_week_after[ws] = plans_by_week_after.get(ws, 0) + 1
+                    logging.info(f"   📊 Plans count AFTER deletion (by week): {plans_by_week_after}")
+                    
+                    # Check if any plans from other weeks were deleted
+                    for ws in plans_by_week_before:
+                        if ws != week_start:
+                            before_count = plans_by_week_before.get(ws, 0)
+                            after_count = plans_by_week_after.get(ws, 0)
+                            if after_count < before_count:
+                                logging.error(f"   ❌ CRITICAL ERROR: Plans for week {ws} were deleted! Before: {before_count}, After: {after_count}")
+                                raise Exception(f"Cleanup error: Plans for week {ws} were incorrectly deleted!")
+                            elif after_count == before_count:
+                                logging.info(f"   ✅ Verified: Plans for week {ws} were NOT deleted (count: {after_count})")
+                
+                # Verify deletion - check if any plans still exist for this week
+                remaining_plans_check = client.table("weekly_plans").select("id, week_start").eq("week_start", week_start).execute()
+                if remaining_plans_check.data:
+                    logging.warning(f"   ⚠️ WARNING: {len(remaining_plans_check.data)} plans still exist after deletion! This might indicate a problem.")
+                else:
+                    logging.info(f"   ✅ Verified: No plans remain for week_start={week_start}")
+            except Exception as plan_del_err:
+                logging.error(f"   ❌ Error deleting weekly_plans: {plan_del_err}", exc_info=True)
+            
+            # Step 3.5: Delete ALL orphaned blocks for this week (blocks without valid plan_id)
+            # This catches blocks that were left behind if plans were manually deleted
+            # IMPORTANT: This is a safety measure to ensure complete cleanup
+            # CRITICAL: Only delete blocks that belong to THIS week_start, not other weeks!
+            try:
+                logging.info(f"   🔍 Step 3.5: Finding and deleting orphaned blocks for week_start={week_start} ONLY")
+                # Get all plan_ids that exist for this week_start (should be empty after deletion above, but check anyway)
+                valid_plans = client.table("weekly_plans").select("id").eq("week_start", week_start).execute()
+                valid_plan_ids = {p["id"] for p in (valid_plans.data or [])}
+                
+                # CRITICAL: Only check blocks that reference the deleted plan_ids for THIS week
+                # We must NOT check blocks from other weeks!
+                orphaned_block_ids = []
+                
+                # Only check blocks that reference the deleted plan_ids (if any still exist)
+                # These plan_ids are guaranteed to be from this week_start (we verified above)
+                if plan_ids_for_week:
+                    remaining_blocks_check = client.table("weekly_plan_blocks").select("id, plan_id").in_("plan_id", plan_ids_for_week).execute()
+                    if remaining_blocks_check.data:
+                        orphaned_block_ids.extend([b["id"] for b in remaining_blocks_check.data])
+                        logging.info(f"   🗑️ Found {len(orphaned_block_ids)} blocks still referencing deleted plan_ids for week {week_start}")
+                else:
+                    logging.info(f"   ℹ️ No plan_ids_for_week to check for orphaned blocks (this is normal if no plans existed)")
+                
+                # CRITICAL: Do NOT check blocks from other weeks!
+                # We only delete blocks that reference plan_ids we know belong to this week_start
+                # This prevents accidentally deleting blocks from other weeks
+                
+                # Delete orphaned blocks in batch
+                if orphaned_block_ids:
+                    logging.info(f"   🗑️ Found {len(orphaned_block_ids)} orphaned blocks to delete (all verified to belong to week {week_start})")
+                    # Delete in batches to avoid overwhelming the database
+                    batch_size = 50
+                    for i in range(0, len(orphaned_block_ids), batch_size):
+                        batch = orphaned_block_ids[i:i+batch_size]
+                        for block_id in batch:
+                            try:
+                                client.table("weekly_plan_blocks").delete().eq("id", block_id).execute()
+                            except Exception as orphan_del_err:
+                                logging.warning(f"   ⚠️ Could not delete orphaned block {block_id}: {orphan_del_err}")
+                    logging.info(f"   ✅ Deleted {len(orphaned_block_ids)} orphaned blocks")
+                else:
+                    logging.info(f"   ✅ No orphaned blocks found")
+            except Exception as orphan_err:
+                logging.warning(f"   ⚠️ Could not check for orphaned blocks: {orphan_err}")
+            
+            # Step 3.6: Final sweep - Delete ALL blocks that might reference non-existent plans for this week
+            # This is a safety measure to catch any blocks that slipped through
+            # CRITICAL: This step is now redundant since we already deleted all plans above
+            # But we keep it as a safety check - it should find 0 plans since we deleted them all
+            try:
+                logging.info(f"   🔍 Step 3.6: Final sweep - checking for any remaining plans for week_start={week_start}")
+                # Get all remaining plan_ids for this week (should be none after deletion above)
+                remaining_plans = client.table("weekly_plans").select("id, week_start").eq("week_start", week_start).execute()
+                remaining_plan_ids = [p["id"] for p in (remaining_plans.data or [])]
+                
+                if remaining_plan_ids:
+                    logging.warning(f"   ⚠️ Found {len(remaining_plan_ids)} plans still remaining after deletion! This shouldn't happen.")
+                    # Verify these are actually for the correct week_start
+                    for p in remaining_plans.data:
+                        if p.get("week_start") != week_start:
+                            logging.error(f"   ❌ CRITICAL: Found plan {p.get('id')} with wrong week_start! Expected: {week_start}, Found: {p.get('week_start')}")
+                            raise Exception(f"Final sweep found plan with wrong week_start: {p.get('week_start')} != {week_start}")
+                    # Only delete blocks for plans we verified belong to this week
+                    for plan_id in remaining_plan_ids:
+                        try:
+                            client.table("weekly_plan_blocks").delete().eq("plan_id", plan_id).execute()
+                        except Exception as block_del_err:
+                            logging.warning(f"   ⚠️ Could not delete blocks for plan {plan_id}: {block_del_err}")
+                    logging.info(f"   🗑️ Final sweep: Deleted blocks for {len(remaining_plan_ids)} remaining plans")
+                else:
+                    logging.info(f"   ✅ Final sweep: No remaining plans found (as expected after deletion)")
+            except Exception as final_sweep_err:
+                logging.warning(f"   ⚠️ Final sweep error: {final_sweep_err}")
+            
+            # Step 4: Delete all group_plan_blocks for this week
+            # CRITICAL: This must happen BEFORE creating new plans to avoid conflicts
+            try:
+                logging.info(f"   🗑️ Deleting all group_plan_blocks for week_start={week_start}")
+                group_blocks_deleted = client.table("group_plan_blocks").delete().eq("week_start", week_start).execute()
+                deleted_count = len(group_blocks_deleted.data) if group_blocks_deleted.data else 0
+                logging.info(f"   ✅ Deleted {deleted_count} group_plan_blocks for week {week_start} (response had data: {group_blocks_deleted.data is not None})")
+                
+                # Verify deletion - check if any group_plan_blocks still exist for this week
+                verify_group_blocks = client.table("group_plan_blocks").select("id").eq("week_start", week_start).execute()
+                if verify_group_blocks.data and len(verify_group_blocks.data) > 0:
+                    logging.warning(f"   ⚠️ WARNING: {len(verify_group_blocks.data)} group_plan_blocks still exist after deletion! Force deleting...")
+                    # Force delete any remaining group_plan_blocks
+                    for block in verify_group_blocks.data:
+                        try:
+                            client.table("group_plan_blocks").delete().eq("id", block["id"]).execute()
+                        except:
+                            pass
+                    logging.info(f"   ✅ Force deleted remaining group_plan_blocks")
+                else:
+                    logging.info(f"   ✅ Verified: No group_plan_blocks found after deletion")
+            except Exception as group_del_err:
+                logging.error(f"   ❌ Error deleting group_plan_blocks: {group_del_err}", exc_info=True)
+            
+            # Step 5: Also clear notifications for this week to avoid duplicates
+            try:
+                notifications_deleted = client.table("notifications").delete().eq("type", "plan_ready").like("link", f"%week={week_start}%").execute()
+                deleted_count = len(notifications_deleted.data) if notifications_deleted.data else 0
+                logging.info(f"   ✅ Deleted {deleted_count} notifications for week {week_start}")
+            except Exception as notif_del_err:
+                logging.error(f"   ❌ Error deleting notifications: {notif_del_err}")
+            
+            logging.info(f"✅ [GLOBAL AGENT] Cleanup complete for week {week_start}")
         except Exception as cleanup_err:
-            logging.warning(f"⚠️ Cleanup warning: {cleanup_err}")
+            logging.error(f"❌ [GLOBAL AGENT] Cleanup ERROR: {cleanup_err}", exc_info=True)
+            # Don't fail the entire operation if cleanup fails, but log it
 
         # 3. Get all users and their active courses (from Supabase only)
         users_result = client.table("user_profiles").select("id").execute()
@@ -2195,7 +2639,53 @@ async def _run_weekly_auto_for_all_users(week_start_override: Optional[str] = No
                                 if mid in user_blocked_slots:
                                     user_blocked_slots[mid].add((day, t))
                         
+                        # Insert group_plan_blocks
                         client.table("group_plan_blocks").insert(new_blocks).execute()
+                        logging.info(f"✅ [GLOBAL AGENT] Created {len(new_blocks)} group_plan_blocks for group {group_id}")
+                        
+                        # CRITICAL: Also create weekly_plan_blocks for ALL members of the group
+                        # This ensures the blocks appear in each user's weekly plan
+                        for member_id in member_ids:
+                            try:
+                                # Get or create plan for this member
+                                member_plan_result = client.table("weekly_plans").select("id").eq("user_id", member_id).eq("week_start", week_start).limit(1).execute()
+                                if not member_plan_result.data:
+                                    # Create new plan if it doesn't exist
+                                    plan_result = client.table("weekly_plans").insert({
+                                        "user_id": member_id,
+                                        "week_start": week_start,
+                                        "source": "auto"
+                                    }).execute()
+                                    if plan_result.data:
+                                        plan_id = plan_result.data[0]["id"]
+                                    else:
+                                        logging.warning(f"⚠️ [GLOBAL AGENT] Failed to create weekly_plan for member {member_id}, skipping blocks")
+                                        continue
+                                else:
+                                    plan_id = member_plan_result.data[0]["id"]
+                                
+                                # Create weekly_plan_blocks for this member (one for each hour in the 2-hour block)
+                                member_blocks = []
+                                for block in new_blocks:
+                                    member_blocks.append({
+                                        "plan_id": plan_id,
+                                        "user_id": member_id,
+                                        "course_number": course_number,
+                                        "course_name": course_name,
+                                        "work_type": "group",
+                                        "day_of_week": block["day_of_week"],
+                                        "start_time": block["start_time"],
+                                        "end_time": block["end_time"],
+                                        "is_locked": False,
+                                        "source": "auto"
+                                    })
+                                
+                                if member_blocks:
+                                    client.table("weekly_plan_blocks").insert(member_blocks).execute()
+                                    logging.info(f"✅ [GLOBAL AGENT] Created {len(member_blocks)} weekly_plan_blocks for member {member_id} (group {group_id})")
+                            except Exception as member_block_err:
+                                logging.error(f"❌ [GLOBAL AGENT] Error creating weekly_plan_blocks for member {member_id}: {member_block_err}", exc_info=True)
+                        
                         allocated_count += 2
                         
                         if day not in daily_ranges: daily_ranges[day] = []
@@ -2271,7 +2761,7 @@ async def _run_weekly_auto_for_all_users(week_start_override: Optional[str] = No
                 except: pass
                 # #endregion
                 fake_user = {"id": uid, "sub": uid}
-                plan_res = await generate_weekly_plan(week_start, fake_user, notify=False)
+                plan_res = await generate_weekly_plan(week_start, fake_user, notify=False, user_id=uid)
                 # #region agent log
                 try:
                     import json
@@ -2680,8 +3170,62 @@ async def get_weekly_plan(
             except: pass
         # #endregion
         # Get all plan_ids for this user and week_start
+        # #region agent log
+        try:
+            import json
+            with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({"runId":"run1","hypothesisId":"FILTER","location":"app/main.py:2913","message":"BEFORE plans_for_week query","data":{"week_start":week_start,"user_id":user_id,"using_admin_client":bool(supabase_admin)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        # Query plans - try both with and without user_id filter to debug
         plans_for_week = client.table("weekly_plans").select("id, user_id, week_start").eq("user_id", user_id).eq("week_start", week_start).execute()
         plan_ids_for_week = [p["id"] for p in (plans_for_week.data or [])]
+        
+        # Debug: Also check what plans exist for this week_start (without user_id filter)
+        all_plans_for_week_debug = client.table("weekly_plans").select("id, user_id, week_start").eq("week_start", week_start).execute()
+        
+        # #region agent log
+        try:
+            import json
+            # Also check ALL plans for this user to see what exists
+            all_plans_check = client.table("weekly_plans").select("id, user_id, week_start").eq("user_id", user_id).order("week_start", desc=True).limit(10).execute()
+            with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({"runId":"run1","hypothesisId":"FILTER","location":"app/main.py:2914","message":"plans_for_week query result","data":{"plans_count":len(plans_for_week.data) if plans_for_week.data else 0,"plan_ids":plan_ids_for_week,"week_start":week_start,"user_id":user_id,"all_plans_for_user":all_plans_check.data if all_plans_check.data else [],"all_plans_for_week_debug":all_plans_for_week_debug.data if all_plans_for_week_debug.data else []},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        # If no plans found but we know they exist, log detailed debug info
+        if not plan_ids_for_week:
+            logging.warning(f"⚠️ [GET_WEEKLY_PLAN] No plans found for user {user_id} and week {week_start}")
+            logging.warning(f"   But found {len(all_plans_for_week_debug.data or [])} plans for week_start={week_start} (all users)")
+            if all_plans_for_week_debug.data:
+                for p in all_plans_for_week_debug.data:
+                    if p.get("user_id") == user_id:
+                        logging.warning(f"   ⚠️ FOUND PLAN FOR THIS USER BUT QUERY MISSED IT! plan_id={p.get('id')}, week_start={p.get('week_start')}")
+                        # Add it manually
+                        plan_ids_for_week.append(p.get("id"))
+                        logging.warning(f"   ✅ Manually added plan_id {p.get('id')} to plan_ids_for_week")
+        
+        # CRITICAL FIX: Also check if the specific plan_id exists (direct query by ID)
+        # This handles cases where the .eq() filter might fail due to RLS or data type issues
+        if not plan_ids_for_week:
+            logging.warning(f"⚠️ [GET_WEEKLY_PLAN] Still no plans found. Trying direct query by week_start only...")
+            # Try querying without user_id filter first
+            all_plans_by_week = client.table("weekly_plans").select("id, user_id, week_start").eq("week_start", week_start).execute()
+            if all_plans_by_week.data:
+                logging.warning(f"   Found {len(all_plans_by_week.data)} plans for week_start={week_start} (all users)")
+                for p in all_plans_by_week.data:
+                    # Compare user_id as strings to avoid type mismatch
+                    p_user_id = str(p.get("user_id", ""))
+                    req_user_id = str(user_id)
+                    if p_user_id == req_user_id:
+                        logging.warning(f"   ✅ FOUND MATCHING PLAN! plan_id={p.get('id')}, user_id={p_user_id}, week_start={p.get('week_start')}")
+                        if p.get("id") not in plan_ids_for_week:
+                            plan_ids_for_week.append(p.get("id"))
+                            logging.warning(f"   ✅ Added plan_id {p.get('id')} to plan_ids_for_week")
+                    else:
+                        logging.debug(f"   ⏭️ Skipping plan {p.get('id')}: user_id mismatch ({p_user_id} != {req_user_id})")
         
         # Get the first plan for response (or None if no plan)
         plan = plans_for_week.data[0] if plans_for_week.data else None
@@ -2689,13 +3233,110 @@ async def get_weekly_plan(
         # Fetch blocks for ALL plans of this week
         blocks = []
         if plan_ids_for_week:
-            blocks_result = client.table("weekly_plan_blocks").select("*").in_("plan_id", plan_ids_for_week).order("day_of_week").order("start_time").execute()
-            blocks = blocks_result.data or []
-            logging.info(f"📋 [GET_WEEKLY_PLAN] Found {len(blocks)} blocks via plan_ids: {plan_ids_for_week}")
+            # Try with admin client first (to bypass RLS), then fallback to regular client
+            blocks_client = supabase_admin if supabase_admin else client
+            
+            # PRIMARY METHOD: Query directly by user_id (like constraints do!), then filter by plan_id
+            # This is more reliable than querying by plan_id directly
+            logging.info(f"📋 [GET_WEEKLY_PLAN] Querying blocks directly by user_id (like constraints method)...")
+            logging.info(f"   Using {'admin' if blocks_client == supabase_admin else 'regular'} client")
+            logging.info(f"   Query: weekly_plan_blocks where user_id={user_id}")
+            try:
+                all_user_blocks_direct = blocks_client.table("weekly_plan_blocks").select("*").eq("user_id", user_id).order("day_of_week").order("start_time").execute()
+                all_user_blocks_list = all_user_blocks_direct.data or []
+                logging.info(f"   ✅ Found {len(all_user_blocks_list)} total blocks for user {user_id}")
+                # Log sample of plan_ids in blocks
+                if all_user_blocks_list:
+                    sample_plan_ids = list(set([b.get("plan_id") for b in all_user_blocks_list[:10]]))
+                    logging.info(f"   Sample plan_ids in blocks: {sample_plan_ids}")
+            except Exception as e:
+                logging.error(f"   ❌ Error querying blocks: {e}")
+                all_user_blocks_list = []
+            
+            # Get all plans to map plan_id -> week_start
+            # CRITICAL: Query ALL plans for this user (not just by week_start) to build complete map
+            all_plans_map = {}
+            all_plans_result = blocks_client.table("weekly_plans").select("id, week_start").eq("user_id", user_id).execute()
+            for p in (all_plans_result.data or []):
+                all_plans_map[p["id"]] = p["week_start"]
+            
+            logging.info(f"   Plans map: {all_plans_map}")
+            logging.info(f"   Requested week_start: {week_start}")
+            logging.info(f"   Plan IDs for week: {plan_ids_for_week}")
+            
+            # CRITICAL: Check if plan_ids_for_week are in all_plans_map
+            missing_plans = [pid for pid in plan_ids_for_week if pid not in all_plans_map]
+            if missing_plans:
+                logging.warning(f"   ⚠️ Plan IDs not found in all_plans_map: {missing_plans}")
+                logging.warning(f"   This means the plans query didn't find them. Trying direct query...")
+                # Try to get these plans directly
+                for pid in missing_plans:
+                    try:
+                        direct_plan = blocks_client.table("weekly_plans").select("id, week_start").eq("id", pid).execute()
+                        if direct_plan.data:
+                            p = direct_plan.data[0]
+                            all_plans_map[p["id"]] = p["week_start"]
+                            logging.warning(f"   ✅ Found plan {pid} via direct query: week_start={p.get('week_start')}")
+                    except Exception as e:
+                        logging.error(f"   ❌ Error querying plan {pid} directly: {e}")
+            
+            # Filter blocks that belong to plans with the requested week_start
+            blocks = [b for b in all_user_blocks_list if all_plans_map.get(b.get("plan_id")) == week_start]
+            logging.info(f"   After filtering by week_start={week_start}: {len(blocks)} blocks")
+            
+            # Debug: Check if blocks exist for the plan_ids we found
+            if not blocks and plan_ids_for_week:
+                logging.warning(f"   ⚠️ No blocks found after filtering. Checking blocks for each plan_id...")
+                for pid in plan_ids_for_week:
+                    plan_week = all_plans_map.get(pid)
+                    blocks_for_plan = [b for b in all_user_blocks_list if b.get("plan_id") == pid]
+                    logging.warning(f"   Plan {pid}: week_start={plan_week}, blocks_count={len(blocks_for_plan)}")
+                    if plan_week != week_start:
+                        logging.warning(f"   ⚠️ Plan {pid} has week_start={plan_week} but we're looking for {week_start}!")
+                    elif blocks_for_plan:
+                        logging.warning(f"   ✅ Found {len(blocks_for_plan)} blocks for plan {pid}, but they didn't match week_start filter!")
+                        # If blocks exist but weren't filtered, add them manually
+                        blocks.extend(blocks_for_plan)
+                        logging.warning(f"   ✅ Manually added {len(blocks_for_plan)} blocks to result")
+            
+            # If that didn't work, try the original plan_id method as fallback
+            if not blocks:
+                logging.warning(f"⚠️ [GET_WEEKLY_PLAN] Direct user_id query found 0 blocks, trying plan_id method as fallback...")
+                blocks_result = blocks_client.table("weekly_plan_blocks").select("*").in_("plan_id", plan_ids_for_week).order("day_of_week").order("start_time").execute()
+                blocks = blocks_result.data or []
+                logging.info(f"📋 [GET_WEEKLY_PLAN] Found {len(blocks)} blocks via plan_ids: {plan_ids_for_week} (using {'admin' if supabase_admin else 'regular'} client)")
+                
+                # If query returned empty but we have plan_ids, try alternative query method
+                if not blocks and plan_ids_for_week:
+                    logging.warning(f"⚠️ [GET_WEEKLY_PLAN] Query returned 0 blocks but plan_ids exist: {plan_ids_for_week}")
+                    logging.warning(f"   Trying alternative query method: querying each plan_id individually...")
+                    # Try querying each plan_id individually (in case .in_() has issues)
+                    all_blocks = []
+                    for pid in plan_ids_for_week:
+                        try:
+                            individual_query = blocks_client.table("weekly_plan_blocks").select("*").eq("plan_id", pid).order("day_of_week").order("start_time").execute()
+                            individual_blocks = individual_query.data or []
+                            if individual_blocks:
+                                logging.warning(f"   ✅ Plan {pid}: Found {len(individual_blocks)} blocks via individual query")
+                                all_blocks.extend(individual_blocks)
+                            else:
+                                logging.warning(f"   ⚠️ Plan {pid}: 0 blocks found via individual query")
+                        except Exception as e:
+                            logging.error(f"   ❌ Error querying plan {pid}: {e}")
+                    
+                    if all_blocks:
+                        logging.warning(f"   ✅ Alternative method found {len(all_blocks)} total blocks! Using these instead.")
+                        blocks = all_blocks
+                    else:
+                        logging.warning(f"   ❌ Alternative method also found 0 blocks. Blocks may not exist or RLS is blocking.")
+            
             # #region agent log
             try:
+                import json
+                # Log the results
+                filtered_plan_ids = list(set([b.get("plan_id") for b in blocks]))
                 with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"app/main.py:2150","message":"blocks fetched for week","data":{"blocks_count":len(blocks),"plan_ids_count":len(plan_ids_for_week),"week_start":week_start,"plan_ids":plan_ids_for_week},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"app/main.py:2150","message":"blocks fetched for week","data":{"blocks_count":len(blocks),"plan_ids_count":len(plan_ids_for_week),"week_start":week_start,"plan_ids":plan_ids_for_week,"using_admin_client":bool(supabase_admin),"filtered_plan_ids":filtered_plan_ids,"sample_blocks":blocks[:3] if blocks else []},"timestamp":int(__import__('time').time()*1000)}) + '\n')
             except: pass
             # #endregion
         else:
@@ -2911,6 +3552,14 @@ async def get_weekly_plan(
         
         # #region agent log
         try:
+            import json
+            with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({"runId":"run1","hypothesisId":"UI","location":"app/main.py:3070","message":"get_weekly_plan RETURNING","data":{"blocks_count":len(blocks),"week_start":week_start,"user_id":user_id,"has_plan":plan is not None,"plan_id":plan.get("id") if plan else None,"group_blocks":len([b for b in blocks if b.get("work_type") == "group"]),"personal_blocks":len([b for b in blocks if b.get("work_type") == "personal"])},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        # #region agent log
+        try:
             with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
                 f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"ALL","location":"app/main.py:2129","message":"returning result","data":{"blocks_count":len(blocks),"plan_id":plan.get("id") if plan else None,"group_blocks":len([b for b in blocks if b.get("work_type") == "group"]),"personal_blocks":len([b for b in blocks if b.get("work_type") == "personal"])},"timestamp":int(__import__('time').time()*1000)}) + '\n')
         except: pass
@@ -3087,22 +3736,286 @@ async def get_llm_debug_info(
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
-@app.post("/api/weekly-plan/generate")
-async def generate_weekly_plan(
+@app.post("/api/system/weekly-plan/generate")
+async def system_generate_weekly_plan(
     week_start: str,
-    current_user: dict = Depends(get_current_user),
+    api_key: Optional[str] = None,
     notify: bool = True
 ):
     """
-    Generate a weekly plan using hard/soft constraints and course credit points.
+    System endpoint for generating weekly plans for ALL users.
+    This is the automated weekly planning function that runs every week.
+    Can be called manually for testing/debugging.
+    
+    IMPORTANT: 
+    - week_start must be in format YYYY-MM-DD (e.g., "2025-02-22" for February 22, 2025)
+    - Optional: api_key query parameter for basic security (set SYSTEM_API_KEY in .env)
+    - This endpoint does NOT require user authentication - it's a system function
+    
+    The system will:
+    1. Clean up ALL old plans and blocks for this week_start (including orphaned blocks)
+    2. Generate new plans for ALL users based on current courses and constraints
+    3. Insert the new plans into Supabase
+    
+    This ensures a fresh start - old data is completely removed before new planning.
     """
     try:
-        user_id = current_user.get("id") or current_user.get("sub")
+        # Optional API key check (if SYSTEM_API_KEY is set in .env)
+        system_api_key = os.getenv("SYSTEM_API_KEY")
+        if system_api_key:
+            if not api_key or api_key != system_api_key:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid or missing API key. Set SYSTEM_API_KEY in .env and provide it as api_key query parameter."
+                )
+        
+        logging.info(f"📋 [SYSTEM GENERATE] System function: Generating plans for ALL users (week_start={week_start})")
+        await _run_weekly_auto_for_all_users(week_start_override=week_start)
+        return {
+            "status": "success",
+            "message": f"Weekly plans generated for all users (week_start={week_start})",
+            "week_start": week_start
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"❌ [SYSTEM GENERATE] Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error generating weekly plans: {str(e)}")
+
+
+@app.post("/api/weekly-plan/generate")
+async def generate_weekly_plan(
+    week_start: str,
+    current_user: dict = Depends(get_cli_user),
+    notify: bool = True,
+    user_id: Optional[str] = None
+):
+    """
+    Generate a weekly plan using hard/soft constraints and course credit points.
+    System function: If user_id query parameter is not provided, generates plans for ALL users.
+    If user_id is explicitly provided, generates plan for that specific user only.
+    
+    IMPORTANT: week_start must be in format YYYY-MM-DD (e.g., "2025-02-22" for February 22, 2025).
+    The system will:
+    1. Clean up ALL old plans and blocks for this week_start (including orphaned blocks)
+    2. Generate new plans based on current courses and constraints
+    3. Insert the new plans into Supabase
+    
+    This ensures a fresh start - old data is completely removed before new planning.
+    """
+    try:
+        # If user_id query parameter is not provided, generate for ALL users (system function)
+        if user_id is None:
+            logging.info(f"📋 [GENERATE] System function: Generating plans for ALL users (week_start={week_start})")
+            await _run_weekly_auto_for_all_users(week_start_override=week_start)
+            return {"message": f"Weekly plans generated for all users (week_start={week_start})"}
+        
+        # Single user generation (only if user_id is explicitly provided)
+        logging.info(f"📋 [GENERATE] Generating plan for specific user: {user_id}")
+        # CRITICAL: Use admin client for cleanup to bypass RLS
+        cleanup_client = supabase_admin if supabase_admin else supabase
+        if not cleanup_client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+        
+        # Use admin client for all operations to ensure proper access
         client = supabase_admin if supabase_admin else supabase
         if not client:
             raise HTTPException(status_code=500, detail="Supabase client not configured")
         
         logging.info(f"📋 [GENERATE] Using {'admin' if supabase_admin else 'anon'} client for user {user_id}")
+
+        # Clean up existing plans and blocks for this user and week before generating new ones
+        # IMPORTANT: Only clean up if plans exist - don't delete blocks from weeks that haven't been planned yet!
+        # This ensures no orphaned blocks remain and prevents mixed schedules with old versions
+        # CRITICAL: Use admin client for cleanup to bypass RLS
+        # #region agent log
+        try:
+            import json
+            with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({"runId":"run1","hypothesisId":"B","location":"app/main.py:3581","message":"BEFORE cleanup check","data":{"user_id":user_id,"week_start":week_start},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        except: pass
+        # #endregion
+        logging.info(f"🧹 [GENERATE] Checking if cleanup needed for user {user_id}, week {week_start}")
+        try:
+            # Step 1: Find all existing plans for this user and week (by week_start - the date the plans are scheduled for)
+            logging.info(f"   🔍 Step 1: Finding plans for user {user_id}, week_start={week_start}")
+            existing_plans_to_delete = cleanup_client.table("weekly_plans").select("id,week_start").eq("user_id", user_id).eq("week_start", week_start).execute()
+            plans_found = len(existing_plans_to_delete.data or [])
+            logging.info(f"   🔍 Query result: {plans_found} plans found")
+            
+            # #region agent log
+            try:
+                import json
+                with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({"runId":"run1","hypothesisId":"B","location":"app/main.py:3586","message":"Cleanup check result","data":{"plans_found":plans_found,"will_cleanup":bool(existing_plans_to_delete.data)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+            except: pass
+            # #endregion
+            
+            # CRITICAL: Only clean up if plans exist - don't delete blocks from weeks that haven't been planned yet!
+            if existing_plans_to_delete.data:
+                logging.info(f"🧹 [GENERATE] Cleaning up {plans_found} existing plan(s) for user {user_id}, week {week_start}")
+                plan_ids = [plan["id"] for plan in existing_plans_to_delete.data]
+                logging.info(f"   🗑️ Found {len(plan_ids)} existing plan(s) to delete (identified by week_start={week_start}): {plan_ids}")
+                
+                # Step 2: Delete all weekly_plan_blocks for these plans (by plan_id)
+                # This is the correct way: find plans by week_start, then delete blocks by plan_id
+                total_blocks_deleted = 0
+                for plan_id in plan_ids:
+                    try:
+                        logging.info(f"   🗑️ Deleting blocks for plan_id={plan_id} (from week_start={week_start})")
+                        blocks_deleted = cleanup_client.table("weekly_plan_blocks").delete().eq("plan_id", plan_id).execute()
+                        # Note: Supabase delete() may not return data, so we check if it exists
+                        deleted_count = len(blocks_deleted.data) if blocks_deleted.data else 0
+                        total_blocks_deleted += deleted_count
+                        logging.info(f"   🗑️ Deleted {deleted_count} blocks for plan_id {plan_id} (response had data: {blocks_deleted.data is not None})")
+                    except Exception as block_del_err:
+                        logging.error(f"   ❌ Error deleting blocks for plan_id {plan_id}: {block_del_err}", exc_info=True)
+                logging.info(f"   ✅ Total blocks deleted: {total_blocks_deleted} across {len(plan_ids)} plans")
+                
+                # Step 3: Also delete blocks by user_id as a safety measure (in case of orphaned blocks)
+                # This catches any blocks that might not have been deleted above
+                # CRITICAL: Only delete blocks that reference the plan_ids we know belong to this week_start!
+                # We use .in_("plan_id", plan_ids) to ensure we only delete blocks for this week's plans
+                try:
+                    # #region agent log
+                    try:
+                        import json
+                        with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({"runId":"run1","hypothesisId":"CLEANUP","location":"app/main.py:3644","message":"Step 3: Deleting orphaned blocks","data":{"user_id":user_id,"plan_ids":plan_ids,"plan_ids_count":len(plan_ids)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    orphan_blocks_deleted = cleanup_client.table("weekly_plan_blocks").delete().eq("user_id", user_id).in_("plan_id", plan_ids).execute()
+                    deleted_count = len(orphan_blocks_deleted.data) if orphan_blocks_deleted.data else 0
+                    logging.info(f"   🗑️ Deleted {deleted_count} orphaned blocks by user_id (only for plan_ids: {plan_ids})")
+                except Exception as orphan_err:
+                    logging.error(f"   ❌ Error deleting orphaned blocks: {orphan_err}")
+                
+                # Step 4: Delete the plans themselves
+                # This is inside the if block, so it only runs if plans exist
+                try:
+                    logging.info(f"   🗑️ Deleting plans for user {user_id}, week_start={week_start}")
+                    plans_deleted = cleanup_client.table("weekly_plans").delete().eq("user_id", user_id).eq("week_start", week_start).execute()
+                    deleted_count = len(plans_deleted.data) if plans_deleted.data else 0
+                    logging.info(f"   ✅ Deleted {deleted_count} plan(s) (response had data: {plans_deleted.data is not None})")
+                except Exception as plan_del_err:
+                    logging.error(f"   ❌ Error deleting plans: {plan_del_err}", exc_info=True)
+                
+                # Step 4.5: Delete ALL orphaned blocks for this user and week (blocks without valid plan_id)
+                # This catches blocks that were left behind if plans were manually deleted
+                # CRITICAL: Only check blocks that belong to THIS week_start, not other weeks!
+                try:
+                    logging.info(f"   🔍 Step 4.5: Finding and deleting orphaned blocks for user {user_id}, week_start={week_start} ONLY")
+                    # Get all plan_ids that exist for this user and week_start (should be empty after deletion above)
+                    valid_plans = cleanup_client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).execute()
+                    valid_plan_ids = {p["id"] for p in (valid_plans.data or [])}
+                    
+                    # CRITICAL: Only check blocks that reference the deleted plan_ids for THIS week
+                    # We must NOT check blocks from other weeks!
+                    orphaned_block_ids = []
+                    
+                    # Only check blocks that reference the deleted plan_ids (if any still exist)
+                    # These plan_ids are guaranteed to be from this week_start (we verified above)
+                    if plan_ids:
+                        remaining_blocks_check = cleanup_client.table("weekly_plan_blocks").select("id, plan_id").eq("user_id", user_id).in_("plan_id", plan_ids).execute()
+                        if remaining_blocks_check.data:
+                            orphaned_block_ids.extend([b["id"] for b in remaining_blocks_check.data])
+                            logging.info(f"   🗑️ Found {len(orphaned_block_ids)} blocks still referencing deleted plan_ids for week {week_start}")
+                    else:
+                        logging.info(f"   ℹ️ No plan_ids to check for orphaned blocks (this is normal if no plans existed)")
+                    
+                    # CRITICAL: Do NOT check blocks from other weeks!
+                    # We only delete blocks that reference plan_ids we know belong to this week_start
+                    # This prevents accidentally deleting blocks from other weeks
+                    
+                    # Delete orphaned blocks
+                    if orphaned_block_ids:
+                        logging.info(f"   🗑️ Found {len(orphaned_block_ids)} orphaned blocks to delete (all verified to belong to week {week_start})")
+                        for block_id in orphaned_block_ids:
+                            try:
+                                cleanup_client.table("weekly_plan_blocks").delete().eq("id", block_id).execute()
+                            except Exception as orphan_del_err:
+                                logging.warning(f"   ⚠️ Could not delete orphaned block {block_id}: {orphan_del_err}")
+                        logging.info(f"   ✅ Deleted {len(orphaned_block_ids)} orphaned blocks")
+                    else:
+                        logging.info(f"   ✅ No orphaned blocks found")
+                except Exception as orphan_err:
+                    logging.warning(f"   ⚠️ Could not check for orphaned blocks: {orphan_err}")
+                
+                # Step 4.6: Final sweep - ONLY check blocks that reference the deleted plan_ids (NOT all user blocks!)
+                # CRITICAL: We must NOT query all blocks by user_id - this could delete blocks from other weeks!
+                try:
+                    logging.info(f"   🔍 Step 4.6: Final sweep - checking only blocks for deleted plan_ids (week_start={week_start})")
+                    # Only check blocks that reference the plan_ids we deleted (these are guaranteed to be from this week)
+                    if plan_ids:
+                        final_blocks_check = cleanup_client.table("weekly_plan_blocks").select("id, plan_id").eq("user_id", user_id).in_("plan_id", plan_ids).execute()
+                        if final_blocks_check.data:
+                            # These blocks should have been deleted already, but double-check
+                            for block in final_blocks_check.data:
+                                try:
+                                    cleanup_client.table("weekly_plan_blocks").delete().eq("id", block["id"]).execute()
+                                    logging.info(f"   🗑️ Final sweep: Deleted remaining block {block['id']} (from deleted plan_ids)")
+                                except:
+                                    pass
+                            logging.info(f"   ✅ Final sweep: Cleaned up {len(final_blocks_check.data)} remaining blocks from deleted plan_ids")
+                        else:
+                            logging.info(f"   ✅ Final sweep: No remaining blocks found for deleted plan_ids")
+                    else:
+                        logging.info(f"   ✅ Final sweep: No plan_ids to check (this is normal)")
+                except Exception as final_sweep_err:
+                    logging.warning(f"   ⚠️ Final sweep error: {final_sweep_err}")
+            else:
+                logging.info(f"   ✅ No existing plans found for user {user_id}, week {week_start} - skipping cleanup (no blocks to delete)")
+                # #region agent log
+                try:
+                    import json
+                    with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({"runId":"run1","hypothesisId":"B","location":"app/main.py:3739","message":"Skipping cleanup - no plans found","data":{"user_id":user_id,"week_start":week_start},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                except: pass
+                # #endregion
+                # CRITICAL: Do NOT check for orphaned blocks if no plans exist - this could delete blocks from other weeks!
+                # Only clean up if we actually found plans to delete
+            
+            # Step 5: Also clean up group_plan_blocks for this user's groups and this week
+            # CRITICAL: This must happen BEFORE creating new plans to avoid conflicts
+            # Get all groups this user belongs to
+            try:
+                group_members_result = cleanup_client.table("group_members").select("group_id").eq("user_id", user_id).eq("status", "approved").execute()
+                user_group_ids = [gm["group_id"] for gm in (group_members_result.data or [])]
+                
+                if user_group_ids:
+                    # Delete group_plan_blocks for these groups and this week
+                    # Note: We delete ALL group blocks for these groups, not just for this user
+                    # because group blocks are shared across all members
+                    try:
+                        logging.info(f"   🗑️ Deleting group_plan_blocks for {len(user_group_ids)} groups: {user_group_ids}, week_start={week_start}")
+                        group_blocks_deleted = cleanup_client.table("group_plan_blocks").delete().in_("group_id", user_group_ids).eq("week_start", week_start).execute()
+                        deleted_count = len(group_blocks_deleted.data) if group_blocks_deleted.data else 0
+                        logging.info(f"   ✅ Deleted {deleted_count} group_plan_blocks for {len(user_group_ids)} groups (response had data: {group_blocks_deleted.data is not None})")
+                        
+                        # Verify deletion - check if any group_plan_blocks still exist for these groups and this week
+                        verify_group_blocks = cleanup_client.table("group_plan_blocks").select("id").in_("group_id", user_group_ids).eq("week_start", week_start).execute()
+                        if verify_group_blocks.data and len(verify_group_blocks.data) > 0:
+                            logging.warning(f"   ⚠️ WARNING: {len(verify_group_blocks.data)} group_plan_blocks still exist after deletion! Force deleting...")
+                            # Force delete any remaining group_plan_blocks
+                            for block in verify_group_blocks.data:
+                                try:
+                                    cleanup_client.table("group_plan_blocks").delete().eq("id", block["id"]).execute()
+                                except:
+                                    pass
+                            logging.info(f"   ✅ Force deleted remaining group_plan_blocks")
+                        else:
+                            logging.info(f"   ✅ Verified: No group_plan_blocks found after deletion")
+                    except Exception as group_del_err:
+                        logging.error(f"   ❌ Error deleting group_plan_blocks: {group_del_err}", exc_info=True)
+                else:
+                    logging.info(f"   ✅ No groups found for user {user_id}")
+            except Exception as group_query_err:
+                logging.error(f"   ❌ Error querying group_members: {group_query_err}", exc_info=True)
+            
+            logging.info(f"✅ [GENERATE] Cleanup complete for user {user_id}, week {week_start}")
+        except Exception as cleanup_err:
+            logging.error(f"❌ [GENERATE] Cleanup ERROR: {cleanup_err}", exc_info=True)
+            # Don't fail the entire operation if cleanup fails, but log it
 
         courses_result = client.table("courses").select("*").eq("user_id", user_id).execute()
         all_courses = courses_result.data or []
@@ -3180,18 +4093,50 @@ async def generate_weekly_plan(
         # Determine available slots FIRST (before group blocks)
         available_slots = [(day, time) for day in range(7) for time in time_slots if (day, time) not in blocked]
         
-        # 1. First, identify all group blocks for this user and remove them from available_slots
+        # 1. First, identify all groups for this user (but DON'T remove group blocks from available_slots yet - LLM will build them)
         group_members_result = client.table("group_members").select("group_id").eq("user_id", user_id).eq("status", "approved").execute()
         user_group_ids = [gm["group_id"] for gm in (group_members_result.data or [])]
         
         # Build course_id -> group_id map for this user
         group_map = {}
+        group_info_map = {}  # group_id -> {course_number, course_name, preferred_hours}
         for gid in user_group_ids:
-            g_res = client.table("study_groups").select("id,course_id").eq("id", gid).limit(1).execute()
+            g_res = client.table("study_groups").select("id,course_id,course_name").eq("id", gid).limit(1).execute()
             if g_res.data:
-                group_map[g_res.data[0]["course_id"]] = gid
+                course_id = g_res.data[0]["course_id"]
+                group_map[course_id] = gid
+                # Load group preferences
+                group_quota = 4  # Default
+                try:
+                    group_pref_result = client.table("group_preferences").select("preferred_hours_per_week,preferences_raw,preferences_summary").eq("group_id", gid).limit(1).execute()
+                    if group_pref_result.data:
+                        group_quota = group_pref_result.data[0].get("preferred_hours_per_week", 4)
+                        group_info_map[gid] = {
+                            "course_number": course_id,
+                            "course_name": g_res.data[0].get("course_name", ""),
+                            "preferred_hours": group_quota,
+                            "preferences_raw": group_pref_result.data[0].get("preferences_raw", ""),
+                            "preferences_summary": group_pref_result.data[0].get("preferences_summary", {})
+                        }
+                    else:
+                        group_info_map[gid] = {
+                            "course_number": course_id,
+                            "course_name": g_res.data[0].get("course_name", ""),
+                            "preferred_hours": group_quota,
+                            "preferences_raw": "",
+                            "preferences_summary": {}
+                        }
+                except Exception as gp_err:
+                    logging.warning(f"Could not load group_preferences for group {gid}: {gp_err}")
+                    group_info_map[gid] = {
+                        "course_number": course_id,
+                        "course_name": g_res.data[0].get("course_name", ""),
+                        "preferred_hours": group_quota,
+                        "preferences_raw": "",
+                        "preferences_summary": {}
+                    }
 
-        # Remove ALL existing group slots from availability
+        # Check for existing group blocks (but don't remove from available_slots - LLM will rebuild them)
         actual_group_blocks = []
         if user_group_ids:
             all_gb_res = client.table("group_plan_blocks").select("*").in_("group_id", user_group_ids).eq("week_start", week_start).execute()
@@ -3203,10 +4148,7 @@ async def generate_weekly_plan(
                     f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"G","location":"app/main.py:2385","message":"generate_weekly_plan: group_plan_blocks fetched","data":{"week_start":week_start,"user_group_ids_count":len(user_group_ids),"actual_group_blocks_count":len(actual_group_blocks)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
             except: pass
             # #endregion
-            for gb in actual_group_blocks:
-                g_day, g_time = gb["day_of_week"], gb["start_time"]
-                if (g_day, g_time) in available_slots:
-                    available_slots.remove((g_day, g_time))
+            # NOTE: We don't remove group blocks from available_slots here - LLM will build them
 
         # Compute total hours and weights AFTER group blocks are removed
         total_credits = sum([c.get("credit_points") or 3 for c in courses]) or 1
@@ -3214,35 +4156,34 @@ async def generate_weekly_plan(
         if total_slots == 0 and not actual_group_blocks:
             return {"message": "No available slots for plan", "plan": None, "blocks": []}
 
-        # Create plan record - get ALL plans for this week (not just first one)
-        existing_plans = client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).execute()
+        # Create plan record (old plans were already deleted in cleanup above)
+        # Verify cleanup was successful before creating new plan
+        logging.info(f"🔍 [GENERATE] Verifying cleanup was successful...")
+        verify_cleanup = cleanup_client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).execute()
+        if verify_cleanup.data:
+            logging.warning(f"⚠️ [GENERATE] WARNING: Found {len(verify_cleanup.data)} plan(s) still existing after cleanup! Attempting force delete...")
+            # Force delete any remaining plans
+            for plan in verify_cleanup.data:
+                try:
+                    # Delete blocks first
+                    cleanup_client.table("weekly_plan_blocks").delete().eq("plan_id", plan["id"]).execute()
+                    # Then delete plan
+                    cleanup_client.table("weekly_plans").delete().eq("id", plan["id"]).execute()
+                    logging.info(f"   🗑️ Force deleted plan {plan['id']}")
+                except Exception as force_del_err:
+                    logging.error(f"   ❌ Error force deleting plan {plan['id']}: {force_del_err}")
+        else:
+            logging.info(f"✅ [GENERATE] Verified: No existing plans found after cleanup - safe to create new plan")
+        
+        plan_id = client.table("weekly_plans").insert({"user_id": user_id, "week_start": week_start, "source": "auto"}).execute().data[0]["id"]
+        logging.info(f"✅ [GENERATE] Created new plan_id: {plan_id} for user {user_id}, week {week_start}")
         # #region agent log
         try:
             import json
             with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"G","location":"app/main.py:2405","message":"generate_weekly_plan: checking existing plans","data":{"user_id":user_id,"week_start":week_start,"existing_plans_count":len(existing_plans.data) if existing_plans.data else 0,"existing_plan_ids":[p["id"] for p in (existing_plans.data or [])]},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"G","location":"app/main.py:2422","message":"generate_weekly_plan: NEW plan created","data":{"plan_id":plan_id,"week_start":week_start},"timestamp":int(__import__('time').time()*1000)}) + '\n')
         except: pass
         # #endregion
-        if existing_plans.data:
-            # Use the first existing plan and delete ALL blocks for ALL plans of this week
-            plan_id = existing_plans.data[0]["id"]
-            # Delete blocks for ALL plans of this week (not just the first one)
-            for plan in existing_plans.data:
-                client.table("weekly_plan_blocks").delete().eq("plan_id", plan["id"]).execute()
-            # #region agent log
-            try:
-                with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"G","location":"app/main.py:2413","message":"generate_weekly_plan: using existing plan","data":{"plan_id":plan_id,"week_start":week_start,"deleted_blocks_for_plans":len(existing_plans.data)},"timestamp":int(__import__('time').time()*1000)}) + '\n')
-            except: pass
-            # #endregion
-        else:
-            plan_id = client.table("weekly_plans").insert({"user_id": user_id, "week_start": week_start, "source": "auto"}).execute().data[0]["id"]
-            # #region agent log
-            try:
-                with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"G","location":"app/main.py:2422","message":"generate_weekly_plan: NEW plan created","data":{"plan_id":plan_id,"week_start":week_start},"timestamp":int(__import__('time').time()*1000)}) + '\n')
-            except: pass
-            # #endregion
 
         plan_blocks = []
         # #region agent log
@@ -3253,38 +4194,7 @@ async def generate_weekly_plan(
         except: pass
         # #endregion
 
-        # 2. Add the pre-calculated group blocks to the plan
-        for gb in actual_group_blocks:
-            # Find the course name for this group block
-            course_for_group = next((c for c in courses if c["course_number"] == gb["course_number"]), None)
-            
-            # CRITICAL FIX: If this group block belongs to a course NOT in the filtered 'courses' list, SKIP IT!
-            if not course_for_group:
-                logging.info(f"⏭️ Skipping group block for course {gb['course_number']} - not in user's courses")
-                continue
-
-            course_name = course_for_group["course_name"]
-            
-            # Use study_groups course_name only if no catalog name exists
-            if not course_name:
-                g_res = client.table("study_groups").select("course_name").eq("id", gb["group_id"]).limit(1).execute()
-                if g_res.data and g_res.data[0].get("course_name"):
-                    course_name = g_res.data[0]["course_name"]
-
-            plan_blocks.append({
-                "plan_id": plan_id,
-                "user_id": user_id,
-                "course_number": gb["course_number"],
-                "course_name": course_name,
-                "work_type": "group",
-                "day_of_week": gb["day_of_week"],
-                "start_time": gb["start_time"],
-                "end_time": gb["end_time"],
-                "source": "group",
-                "group_id": gb.get("group_id")  # Include group_id for pending requests lookup
-            })
-
-        # 3. Load user preferences for LLM refinement
+        # 2. Load user preferences for LLM refinement
         profile_result = client.table("user_profiles").select("study_preferences_raw, study_preferences_summary").eq("id", user_id).limit(1).execute()
         user_preferences_raw = ""
         user_preferences_summary = {}
@@ -3292,17 +4202,22 @@ async def generate_weekly_plan(
             user_preferences_raw = profile_result.data[0].get("study_preferences_raw") or ""
             user_preferences_summary = profile_result.data[0].get("study_preferences_summary") or {}
         
-        logging.info(f"[LLM] User preferences loaded: {len(user_preferences_raw)} chars raw, {len(user_preferences_summary)} keys in summary")
+        logging.info(f"📋 [GENERATE] User preferences loaded: {len(user_preferences_raw)} chars raw, {len(user_preferences_summary)} keys in summary")
+        if user_preferences_raw:
+            logging.info(f"   Preview: {user_preferences_raw[:200]}...")
+        else:
+            logging.warning(f"   ⚠️ No user preferences found - LLM will use default behavior")
         
-        # 4. Try LLM-based personal block placement
+        # 4. Try LLM-based block placement (both group and personal blocks)
         llm_result = await _refine_schedule_with_llm(
-            skeleton_blocks=plan_blocks,  # Group blocks already placed
-            available_slots=available_slots[:],  # Copy of available slots
+            skeleton_blocks=[],  # No pre-placed blocks - LLM will build everything
+            available_slots=available_slots[:],  # Copy of available slots (without constraints, as requested)
             courses=courses,
             user_preferences_raw=user_preferences_raw,
             user_preferences_summary=user_preferences_summary,
             time_slots=time_slots,
-            user_id=user_id
+            user_id=user_id,
+            group_info_map=group_info_map  # Pass group information to LLM
         )
 
         required_total = llm_result.get("required_total")
@@ -3319,17 +4234,151 @@ async def generate_weekly_plan(
                 time_slots=time_slots,
                 force_exact_count=True,
                 required_total_override=required_total,
-                user_id=user_id
+                user_id=user_id,
+                group_info_map=group_info_map  # CRITICAL: Pass group_info_map to retry too!
             )
         
-        if llm_result["success"] and llm_result["blocks"]:
-            logging.info("Using LLM-refined schedule")
-            llm_blocks = llm_result["blocks"]
-            applied_llm_blocks = 0
+        # #region agent log
+        try:
+            import json
+            with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({"runId":"run1","hypothesisId":"F","location":"app/main.py:3995","message":"LLM result check","data":{"llm_success":llm_result.get("success"),"llm_message":llm_result.get("message",""),"group_blocks_count":len(llm_result.get('group_blocks',[])),"personal_blocks_count":len(llm_result.get('blocks',[]))},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        if llm_result.get("success"):
+            logging.info(f"✅ [GENERATE] LLM returned success. Group blocks: {len(llm_result.get('group_blocks', []))}, Personal blocks: {len(llm_result.get('blocks', []))}")
+            logging.info("✅ [GENERATE] Using LLM-refined schedule (NOT fallback)")
             # Use catalog names ONLY (courses already have catalog names from validation above)
             course_name_map = {str(c.get("course_number")).strip(): valid_catalog.get(str(c.get("course_number")).strip(), c.get("course_name")) for c in courses}
             
-            # Validate and add LLM blocks
+            # FIRST: Process group blocks from LLM (if any)
+            llm_group_blocks = llm_result.get("group_blocks", [])
+            applied_group_blocks = 0
+            logging.info(f"🔍 [GENERATE] LLM returned {len(llm_group_blocks)} group blocks")
+            if llm_group_blocks:
+                logging.info(f"📋 [GENERATE] Processing {len(llm_group_blocks)} LLM-proposed group blocks")
+                # Log sample to see if group_id is present
+                sample_gb = llm_group_blocks[0] if llm_group_blocks else {}
+                logging.info(f"   📋 Sample group block from LLM: {sample_gb}")
+                logging.info(f"   📋 Sample has group_id: {sample_gb.get('group_id') is not None}")
+                
+                for gb in llm_group_blocks:
+                    day_index = gb.get("day_index")
+                    start_time = gb.get("start_time")
+                    course_number = gb.get("course_number")
+                    group_id = gb.get("group_id")
+                    course_name = course_name_map.get(str(course_number).strip()) or gb.get("course_name")
+                    
+                    # If group_id is missing, try to find it from group_info_map
+                    if not group_id and course_number:
+                        for gid, ginfo in group_info_map.items():
+                            if str(ginfo.get("course_number")) == str(course_number):
+                                group_id = gid
+                                logging.info(f"   🔍 Found missing group_id={group_id} for course_number={course_number}")
+                                break
+                    
+                    if not group_id:
+                        logging.error(f"   ❌ CRITICAL: group_id is missing for group block! course={course_number}, day={day_index}, time={start_time}. Block will be skipped.")
+                        continue
+                    
+                    # Validate slot is actually available
+                    if (day_index, start_time) in available_slots:
+                        # Add to plan_blocks
+                        plan_blocks.append({
+                            "plan_id": plan_id,
+                            "user_id": user_id,
+                            "course_number": course_number,
+                            "course_name": course_name,
+                            "work_type": "group",
+                            "day_of_week": day_index,
+                            "start_time": start_time,
+                            "end_time": _minutes_to_time(_time_to_minutes(start_time) + 60),
+                            "source": "llm",
+                            "group_id": group_id
+                        })
+                        # Also add to group_plan_blocks table (if group_id exists)
+                        if group_id:
+                            try:
+                                logging.info(f"   💾 Inserting group_plan_block: group_id={group_id}, week_start={week_start}, course={course_number}, day={day_index}, time={start_time}")
+                                group_block_data = {
+                                    "group_id": group_id,
+                                    "week_start": week_start,
+                                    "course_number": course_number,
+                                    "day_of_week": day_index,
+                                    "start_time": start_time,
+                                    "end_time": _minutes_to_time(_time_to_minutes(start_time) + 60),
+                                    "created_by": user_id
+                                }
+                                insert_result = client.table("group_plan_blocks").insert(group_block_data).execute()
+                                if insert_result.data:
+                                    logging.info(f"   ✅ Successfully inserted group_plan_block: {insert_result.data[0].get('id', 'unknown')}")
+                                    
+                                    # CRITICAL: Also create weekly_plan_blocks for ALL members of the group
+                                    # Get all approved members of this group
+                                    group_members_result = client.table("group_members").select("user_id").eq("group_id", group_id).eq("status", "approved").execute()
+                                    member_ids = [m["user_id"] for m in (group_members_result.data or [])]
+                                    
+                                    for member_id in member_ids:
+                                        try:
+                                            # Get or create plan for this member
+                                            member_plan_result = client.table("weekly_plans").select("id").eq("user_id", member_id).eq("week_start", week_start).limit(1).execute()
+                                            if not member_plan_result.data:
+                                                # Create new plan if it doesn't exist
+                                                plan_result = client.table("weekly_plans").insert({
+                                                    "user_id": member_id,
+                                                    "week_start": week_start,
+                                                    "source": "auto"
+                                                }).execute()
+                                                if plan_result.data:
+                                                    member_plan_id = plan_result.data[0]["id"]
+                                                else:
+                                                    logging.warning(f"⚠️ [GENERATE] Failed to create weekly_plan for member {member_id}, skipping blocks")
+                                                    continue
+                                            else:
+                                                member_plan_id = member_plan_result.data[0]["id"]
+                                            
+                                            # Create weekly_plan_block for this member
+                                            member_block = {
+                                                "plan_id": member_plan_id,
+                                                "user_id": member_id,
+                                                "course_number": course_number,
+                                                "course_name": course_name,
+                                                "work_type": "group",
+                                                "day_of_week": day_index,
+                                                "start_time": start_time,
+                                                "end_time": _minutes_to_time(_time_to_minutes(start_time) + 60),
+                                                "is_locked": False,
+                                                "source": "auto"
+                                            }
+                                            
+                                            client.table("weekly_plan_blocks").insert(member_block).execute()
+                                            logging.info(f"   ✅ Created weekly_plan_block for member {member_id} (group {group_id})")
+                                        except Exception as member_block_err:
+                                            logging.error(f"   ❌ Error creating weekly_plan_block for member {member_id}: {member_block_err}", exc_info=True)
+                                else:
+                                    logging.error(f"   ❌ group_plan_blocks insert returned no data! group_id={group_id}, week_start={week_start}")
+                            except Exception as gb_err:
+                                logging.error(f"   ❌ Failed to insert group_plan_block: {gb_err}", exc_info=True)
+                        else:
+                            logging.warning(f"   ⚠️ group_id is missing for group block! course={course_number}, day={day_index}, time={start_time}")
+                        
+                        available_slots.remove((day_index, start_time))
+                        applied_group_blocks += 1
+                    else:
+                        logging.warning(f"LLM proposed invalid group slot ({day_index}, {start_time}), skipping")
+                
+                logging.info(f"✅ [GENERATE] Applied {applied_group_blocks} LLM-refined group blocks")
+                logging.info(f"📊 [GENERATE] plan_blocks count after group blocks: {len(plan_blocks)}")
+            else:
+                logging.warning(f"⚠️ [GENERATE] No group blocks to process (llm_group_blocks is empty or None)")
+            
+            # THEN: Process personal blocks from LLM
+            llm_blocks = llm_result.get("blocks", [])
+            applied_llm_blocks = 0
+            logging.info(f"🔍 [GENERATE] LLM returned {len(llm_blocks)} personal blocks")
+            
+            # Validate and add LLM personal blocks
             for llm_block in llm_blocks:
                 day_index = llm_block.get("day_index")
                 start_time = llm_block.get("start_time")
@@ -3352,12 +4401,13 @@ async def generate_weekly_plan(
                     available_slots.remove((day_index, start_time))
                     applied_llm_blocks += 1
                 else:
-                    logging.warning(f"LLM proposed invalid slot ({day_index}, {start_time}), skipping")
+                    logging.warning(f"LLM proposed invalid personal slot ({day_index}, {start_time}), skipping")
             
-            logging.info(f"Applied {applied_llm_blocks} LLM-refined personal blocks")
+            logging.info(f"✅ [GENERATE] Applied {applied_llm_blocks} LLM-refined personal blocks")
+            logging.info(f"📊 [GENERATE] plan_blocks count after personal blocks: {len(plan_blocks)}")
 
             # If LLM returned too few blocks, fill remaining deterministically
-            logging.info("Checking for remaining personal hours after LLM placement")
+            logging.info("🔍 [GENERATE] Checking for remaining personal hours after LLM placement")
             courses.sort(key=lambda x: x.get("credit_points") or 3, reverse=True)
             for course in courses:
                 course_number = course.get("course_number")
@@ -3418,8 +4468,148 @@ async def generate_weekly_plan(
                 logging.info(f"Filled {allocated_personal} personal blocks for {course_name}")
         else:
             # FALLBACK: Use deterministic placement if LLM fails
-            logging.warning("LLM refinement failed, falling back to deterministic placement")
-            logging.warning(f"   Reason: {llm_result.get('message', 'Unknown')}")
+            logging.error("❌ [GENERATE] LLM refinement failed, falling back to deterministic placement")
+            logging.error(f"   ❌ Reason: {llm_result.get('message', 'Unknown')}")
+            logging.error(f"   ⚠️ WARNING: User preferences will NOT be used in fallback mode!")
+            logging.error(f"   ⚠️ WARNING: This is a basic schedule without personalization!")
+            # #region agent log
+            try:
+                import json
+                with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({"runId":"run1","hypothesisId":"F","location":"app/main.py:4226","message":"FALLBACK MODE - LLM failed","data":{"llm_success":llm_result.get("success"),"llm_message":llm_result.get("message",""),"llm_blocks_count":len(llm_result.get('blocks',[])),"user_id":user_id,"week_start":week_start},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+            except: pass
+            # #endregion
+            
+            # CRITICAL: In fallback mode, we need to create group_plan_blocks from group_info_map
+            # First, create group blocks for courses that have groups
+            logging.info(f"🔍 [FALLBACK] Processing group blocks from group_info_map: {len(group_info_map) if group_info_map else 0} groups")
+            if not group_info_map:
+                logging.warning(f"⚠️ [FALLBACK] group_info_map is empty or None! No group blocks will be created.")
+            for group_id, group_info in group_info_map.items():
+                course_number = str(group_info.get("course_number", "")).strip()
+                if not course_number:
+                    continue
+                
+                # Check if user is a member of this group
+                group_members_result = client.table("group_members").select("user_id").eq("group_id", group_id).eq("user_id", user_id).eq("status", "approved").execute()
+                if not group_members_result.data:
+                    continue  # User is not a member of this group
+                
+                # Get group quota
+                group_quota = 4  # Default
+                try:
+                    group_pref_result = client.table("group_preferences").select("preferred_hours_per_week").eq("group_id", group_id).limit(1).execute()
+                    if group_pref_result.data and group_pref_result.data[0].get("preferred_hours_per_week") is not None:
+                        group_quota = group_pref_result.data[0]["preferred_hours_per_week"]
+                except:
+                    pass
+                
+                # Find available slots for group (2-hour blocks)
+                allocated_group = 0
+                for day in range(7):
+                    if allocated_group >= group_quota:
+                        break
+                    for i in range(len(time_slots) - 1):
+                        if allocated_group >= group_quota:
+                            break
+                        t1, t2 = time_slots[i], time_slots[i+1]
+                        
+                        # Check if both slots are available
+                        if (day, t1) in available_slots and (day, t2) in available_slots:
+                            # Create group blocks
+                            course_name = valid_catalog.get(course_number, group_info.get("course_name", "Group Work"))
+                            
+                            # Add to plan_blocks
+                            for t in [t1, t2]:
+                                plan_blocks.append({
+                                    "plan_id": plan_id,
+                                    "user_id": user_id,
+                                    "course_number": course_number,
+                                    "course_name": course_name,
+                                    "work_type": "group",
+                                    "day_of_week": day,
+                                    "start_time": t,
+                                    "end_time": _minutes_to_time(_time_to_minutes(t) + 60),
+                                    "source": "auto_fallback",
+                                    "group_id": group_id
+                                })
+                                available_slots.remove((day, t))
+                            
+                            # Create group_plan_blocks
+                            try:
+                                group_block_data = {
+                                    "group_id": group_id,
+                                    "week_start": week_start,
+                                    "course_number": course_number,
+                                    "day_of_week": day,
+                                    "start_time": t1,
+                                    "end_time": _minutes_to_time(_time_to_minutes(t2) + 60),
+                                    "created_by": user_id
+                                }
+                                logging.info(f"   💾 [FALLBACK] Inserting group_plan_block: group_id={group_id}, week_start={week_start}, course={course_number}, day={day}, time={t1}")
+                                logging.info(f"   📋 [FALLBACK] group_block_data: {group_block_data}")
+                                insert_result = client.table("group_plan_blocks").insert(group_block_data).execute()
+                                if insert_result.data:
+                                    logging.info(f"   ✅ [FALLBACK] Successfully created group_plan_block: {insert_result.data[0].get('id', 'unknown')}")
+                                else:
+                                    logging.error(f"   ❌ [FALLBACK] group_plan_blocks insert returned no data! group_id={group_id}, week_start={week_start}")
+                                    
+                                    # Also create weekly_plan_blocks for ALL members
+                                    group_members_result = client.table("group_members").select("user_id").eq("group_id", group_id).eq("status", "approved").execute()
+                                    member_ids = [m["user_id"] for m in (group_members_result.data or [])]
+                                    
+                                    for member_id in member_ids:
+                                        try:
+                                            member_plan_result = client.table("weekly_plans").select("id").eq("user_id", member_id).eq("week_start", week_start).limit(1).execute()
+                                            if not member_plan_result.data:
+                                                plan_result = client.table("weekly_plans").insert({
+                                                    "user_id": member_id,
+                                                    "week_start": week_start,
+                                                    "source": "auto"
+                                                }).execute()
+                                                if plan_result.data:
+                                                    member_plan_id = plan_result.data[0]["id"]
+                                                else:
+                                                    continue
+                                            else:
+                                                member_plan_id = member_plan_result.data[0]["id"]
+                                            
+                                            member_block = {
+                                                "plan_id": member_plan_id,
+                                                "user_id": member_id,
+                                                "course_number": course_number,
+                                                "course_name": course_name,
+                                                "work_type": "group",
+                                                "day_of_week": day,
+                                                "start_time": t1,
+                                                "end_time": _minutes_to_time(_time_to_minutes(t1) + 60),
+                                                "is_locked": False,
+                                                "source": "auto"
+                                            }
+                                            client.table("weekly_plan_blocks").insert(member_block).execute()
+                                            
+                                            # Add second hour if needed
+                                            if t2:
+                                                member_block2 = {
+                                                    "plan_id": member_plan_id,
+                                                    "user_id": member_id,
+                                                    "course_number": course_number,
+                                                    "course_name": course_name,
+                                                    "work_type": "group",
+                                                    "day_of_week": day,
+                                                    "start_time": t2,
+                                                    "end_time": _minutes_to_time(_time_to_minutes(t2) + 60),
+                                                    "is_locked": False,
+                                                    "source": "auto"
+                                                }
+                                                client.table("weekly_plan_blocks").insert(member_block2).execute()
+                                        except Exception as member_err:
+                                            logging.error(f"   ❌ [FALLBACK] Error creating weekly_plan_block for member {member_id}: {member_err}")
+                            except Exception as gb_err:
+                                logging.error(f"   ❌ [FALLBACK] Error creating group_plan_block: {gb_err}")
+                            
+                            allocated_group += 2
+                            logging.info(f"   ✅ [FALLBACK] Allocated 2h group block for {course_name} on day {day} at {t1}")
             
             # Sort courses by credits to prioritize
             courses.sort(key=lambda x: x.get("credit_points") or 3, reverse=True)
@@ -3499,9 +4689,21 @@ async def generate_weekly_plan(
             total_blocks = len([b for b in plan_blocks if b['course_number'] == course_number])
             logging.info(f"   OK Total blocks for {course_name}: {total_blocks}")
         
-        logging.info(f"Remaining available slots: {len(available_slots)}")
-
-        logging.info(f"Total plan blocks to insert: {len(plan_blocks)}")
+        logging.info(f"📊 [GENERATE] Remaining available slots: {len(available_slots)}")
+        logging.info(f"📊 [GENERATE] Final plan_blocks count: {len(plan_blocks)}")
+        if plan_blocks:
+            logging.info(f"   📋 Sample block: {plan_blocks[0] if plan_blocks else 'N/A'}")
+        logging.info(f"📊 [GENERATE] Total plan blocks to insert: {len(plan_blocks)}")
+        group_count = len([b for b in plan_blocks if b.get('work_type') == 'group'])
+        personal_count = len([b for b in plan_blocks if b.get('work_type') == 'personal'])
+        logging.info(f"📊 [GENERATE] Breakdown: Group blocks: {group_count}, Personal blocks: {personal_count}")
+        
+        # CRITICAL: Log if we're in fallback mode and blocks are missing
+        if not llm_result.get("success"):
+            if group_count == 0:
+                logging.error(f"❌ [FALLBACK] CRITICAL: No group blocks created in fallback mode!")
+            if personal_count == 0:
+                logging.error(f"❌ [FALLBACK] CRITICAL: No personal blocks created in fallback mode!")
         # #region agent log
         try:
             import json
@@ -3509,6 +4711,13 @@ async def generate_weekly_plan(
                 f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"G","location":"app/main.py:2656","message":"generate_weekly_plan: BEFORE insert blocks","data":{"plan_blocks_count":len(plan_blocks),"plan_id":plan_id,"week_start":week_start,"has_blocks":len(plan_blocks) > 0},"timestamp":int(__import__('time').time()*1000)}) + '\n')
         except: pass
         # #endregion
+        
+        if not plan_blocks:
+            logging.error(f"❌ [GENERATE] CRITICAL: plan_blocks is EMPTY! No blocks to insert. plan_id: {plan_id}, week_start: {week_start}")
+            logging.error(f"   LLM success: {llm_result.get('success') if 'llm_result' in locals() else 'N/A'}")
+            logging.error(f"   LLM group blocks: {len(llm_result.get('group_blocks', [])) if 'llm_result' in locals() and llm_result.get('success') else 0}")
+            logging.error(f"   LLM personal blocks: {len(llm_result.get('blocks', [])) if 'llm_result' in locals() and llm_result.get('success') else 0}")
+        
         if plan_blocks:
             # Verify all blocks have the correct plan_id and required fields
             required_fields = ["plan_id", "user_id", "course_number", "course_name", "work_type", "day_of_week", "start_time", "end_time"]
@@ -3540,23 +4749,40 @@ async def generate_weekly_plan(
             
             # Attempt insert with proper error handling
             inserted_count = 0
+            logging.info(f"🔄 [GENERATE] ========== STARTING INSERT ==========")
+            logging.info(f"🔄 [GENERATE] Attempting to insert {len(blocks_to_insert)} blocks (plan_id: {plan_id}, week_start: {week_start})")
+            logging.info(f"   📋 Using {'admin' if supabase_admin else 'anon'} client for insert")
+            logging.info(f"   📋 Client type: {type(client)}")
+            if blocks_to_insert:
+                logging.info(f"   📋 Sample block structure: {list(blocks_to_insert[0].keys())}")
+                logging.info(f"   📋 Sample block data: {blocks_to_insert[0]}")
+            else:
+                logging.error(f"   ❌ blocks_to_insert is EMPTY! This should not happen if plan_blocks had items.")
+            
             try:
-                logging.info(f"🔄 Attempting to insert {len(blocks_to_insert)} blocks (plan_id: {plan_id})")
+                logging.info(f"🔄 [GENERATE] Calling client.table('weekly_plan_blocks').insert()...")
                 insert_result = client.table("weekly_plan_blocks").insert(blocks_to_insert).execute()
+                logging.info(f"🔄 [GENERATE] Insert call completed. Checking result...")
                 
                 if not insert_result.data:
-                    error_msg = f"❌ INSERT FAILED! Supabase returned no data. plan_id: {plan_id}, blocks_count: {len(blocks_to_insert)}"
+                    error_msg = f"❌ [GENERATE] INSERT FAILED! Supabase returned no data. plan_id: {plan_id}, blocks_count: {len(blocks_to_insert)}"
                     logging.error(error_msg)
                     # Log first block as sample
                     if blocks_to_insert:
                         logging.error(f"   Sample block: {blocks_to_insert[0]}")
+                    # Try to get more info about the error
+                    logging.error(f"   Insert result type: {type(insert_result)}, has data: {hasattr(insert_result, 'data')}")
                     raise Exception(error_msg)
                 
                 inserted_count = len(insert_result.data)
                 if inserted_count != len(blocks_to_insert):
-                    logging.warning(f"⚠️ PARTIAL INSERT! Expected {len(blocks_to_insert)} blocks, got {inserted_count}")
+                    logging.warning(f"⚠️ [GENERATE] PARTIAL INSERT! Expected {len(blocks_to_insert)} blocks, got {inserted_count}")
                 else:
-                    logging.info(f"✅ Successfully inserted {inserted_count} blocks (plan_id: {plan_id})")
+                    logging.info(f"✅ [GENERATE] Successfully inserted {inserted_count} blocks (plan_id: {plan_id}, week_start: {week_start})")
+                    # Verify the inserted blocks have the correct week_start by checking the plan
+                    verify_plan = client.table("weekly_plans").select("week_start").eq("id", plan_id).execute()
+                    if verify_plan.data:
+                        logging.info(f"   ✅ Verified plan {plan_id} has week_start: {verify_plan.data[0].get('week_start')}")
                 
                 # Verify inserted blocks have correct plan_id
                 sample_plan_ids = [b.get("plan_id") for b in insert_result.data[:3]]
@@ -3584,20 +4810,24 @@ async def generate_weekly_plan(
                 # #endregion
                 raise
         else:
+            logging.warning(f"⚠️ [GENERATE] LLM did not return success! llm_result: {llm_result.get('message', 'No message')}")
             # #region agent log
             try:
                 import json
                 with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"G","location":"app/main.py:2668","message":"generate_weekly_plan: NO BLOCKS TO INSERT","data":{"plan_id":plan_id,"week_start":week_start,"plan_blocks_empty":True},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"G","location":"app/main.py:2668","message":"generate_weekly_plan: LLM FAILED or NO BLOCKS","data":{"plan_id":plan_id,"week_start":week_start,"llm_success":llm_result.get("success"),"llm_message":llm_result.get("message")},"timestamp":int(__import__('time').time()*1000)}) + '\n')
             except: pass
             # #endregion
 
         # Fetch blocks from DB after insert to return complete data (including group_id for group blocks)
+        logging.info(f"🔍 [GENERATE] Fetching blocks from DB to verify insert (plan_id: {plan_id}, week_start: {week_start})")
         blocks_result = client.table("weekly_plan_blocks").select("*").eq("plan_id", plan_id).order("day_of_week").order("start_time").execute()
         final_blocks = blocks_result.data or []
+        logging.info(f"📊 [GENERATE] Found {len(final_blocks)} blocks in DB for plan_id {plan_id}")
         
         # Verify blocks were actually saved
         if plan_blocks and len(final_blocks) == 0:
+            logging.error(f"❌ [GENERATE] CRITICAL: plan_blocks had {len(plan_blocks)} blocks but DB has 0! Insert may have failed silently.")
             logging.error(f"❌ CRITICAL: Blocks were inserted but not found in DB! plan_id: {plan_id}, expected_count: {len(plan_blocks)}")
             # Try to fetch all blocks for this user and week to see if they're there
             all_user_blocks = client.table("weekly_plan_blocks").select("*").eq("user_id", user_id).eq("plan_id", plan_id).execute()
@@ -7295,7 +8525,33 @@ async def create_study_group(
             logging.info(f"   Creator's semester: {creator_semester}, year: {creator_year}")
         
         # Validate that each invitee is enrolled in the course for the selected semester
-        course_number = group_data.course_id  # course_id is actually course_number
+        # Convert course_id (might be UUID from UI) to course_number
+        course_id_from_request = group_data.course_id
+        
+        # Check if course_id is UUID (long string with dashes) or course_number (short number)
+        if course_id_from_request and len(course_id_from_request) > 10 and '-' in course_id_from_request:
+            # Looks like UUID, try to find course_number from creator's courses
+            logging.info(f"   🔍 course_id looks like UUID: {course_id_from_request}, trying to find course_number...")
+            creator_courses = client.table("courses").select("course_number").eq("user_id", user_id).eq("id", course_id_from_request).limit(1).execute()
+            if creator_courses.data and creator_courses.data[0].get("course_number"):
+                course_number = creator_courses.data[0]["course_number"]
+                logging.info(f"   ✅ Converted UUID {course_id_from_request} to course_number {course_number}")
+            else:
+                # Fallback: try to find by course_name
+                logging.info(f"   🔍 UUID not found in courses, trying to find by course_name: {group_data.course_name}")
+                creator_courses_by_name = client.table("courses").select("course_number").eq("user_id", user_id).eq("course_name", group_data.course_name).limit(1).execute()
+                if creator_courses_by_name.data and creator_courses_by_name.data[0].get("course_number"):
+                    course_number = creator_courses_by_name.data[0]["course_number"]
+                    logging.info(f"   ✅ Found course_number {course_number} by course_name {group_data.course_name}")
+                else:
+                    # Last resort: use as-is (might be course_number already)
+                    course_number = course_id_from_request
+                    logging.warning(f"   ⚠️ Could not convert {course_id_from_request} to course_number, using as-is")
+        else:
+            # Already looks like course_number (short, no dashes, or numeric)
+            course_number = course_id_from_request
+            logging.info(f"   ✅ Using course_id as course_number: {course_number}")
+        
         eligible_emails = []
         ineligible_emails = []
         
@@ -7384,7 +8640,7 @@ async def create_study_group(
         # NOW create the group (only if all emails are valid and eligible)
         logging.info(f"   ✅ All {len(eligible_emails)} invitees are eligible. Creating group...")
         group_result = client.table("study_groups").insert({
-            "course_id": group_data.course_id,
+            "course_id": course_number,  # Use course_number (not UUID) for consistency
             "course_name": group_data.course_name,
             "group_name": group_data.group_name,
             "description": group_data.description,

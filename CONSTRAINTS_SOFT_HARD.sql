@@ -8,3 +8,6 @@ UPDATE constraints SET is_hard = TRUE WHERE is_hard IS NULL;
 
 
 
+
+
+

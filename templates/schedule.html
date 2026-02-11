@@ -2645,8 +2645,14 @@
                 });
                 if (response.ok) {
                     const data = await response.json();
+                    // #region agent log
+                    fetch('http://127.0.0.1:7242/ingest/d8f8b004-9648-44ca-a8ba-cf19194b68d6',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'schedule.html:2519',message:'loadWeeklyPlan response received',data:{blocks_count:data.blocks ? data.blocks.length : 0,has_plan:!!data.plan,week_start:weekStart},"timestamp":Date.now(),runId:'run1',hypothesisId:'UI'})}).catch(()=>{});
+                    // #endregion
                     weeklyPlanBlocks.length = 0;
                     weeklyPlanBlocks.push(...(data.blocks || []));
+                    // #region agent log
+                    fetch('http://127.0.0.1:7242/ingest/d8f8b004-9648-44ca-a8ba-cf19194b68d6',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'schedule.html:2522',message:'weeklyPlanBlocks updated',data:{blocks_count:weeklyPlanBlocks.length},"timestamp":Date.now(),runId:'run1',hypothesisId:'UI'})}).catch(()=>{});
+                    // #endregion
                     updateWeeklyScheduleDisplay();
                 }
             } catch (error) {
