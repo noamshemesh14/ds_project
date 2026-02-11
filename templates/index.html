@@ -1409,6 +1409,15 @@
                     })
                 });
                 
+                // Check if response is OK
+                if (!response.ok) {
+                    if (response.status === 401 || response.status === 403) {
+                        throw new Error('הטוקן פג תוקף. אנא התחבר מחדש.');
+                    }
+                    const errorData = await response.json().catch(() => ({ detail: 'שגיאת שרת' }));
+                    throw new Error(errorData.detail || `שגיאת שרת: ${response.status}`);
+                }
+                
                 const data = await response.json();
                 
                 removeChatLoading();
@@ -1421,8 +1430,18 @@
                 }
             } catch (error) {
                 removeChatLoading();
-                showChatError(error.message || 'אירעה שגיאה בעת שליחת ההודעה');
+                const errorMsg = error.message || 'אירעה שגיאה בעת שליחת ההודעה';
+                showChatError(errorMsg);
                 console.error('Chat error:', error);
+                
+                // If authentication error, suggest re-login
+                if (errorMsg.includes('פג תוקף') || errorMsg.includes('401') || errorMsg.includes('403')) {
+                    setTimeout(() => {
+                        if (confirm('הטוקן פג תוקף. האם תרצה להתחבר מחדש?')) {
+                            window.location.href = '/login';
+                        }
+                    }, 1000);
+                }
             } finally {
                 // Re-enable input
                 isChatLoading = false;

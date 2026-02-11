@@ -69,10 +69,22 @@ class RAGChatExecutor:
                 use_base_url = True
                 # For llmod.ai, use the model from config (should be RPRTHPB-text-embedding-3-small)
             else:
-                logger.warning("CHAT: ⚠️ EMBEDDING_BASE_URL is set but LLMOD_API_KEY/LLM_API_KEY not found")
-                logger.warning("CHAT: Will use OPENAI_API_KEY without base_url (standard OpenAI)")
-                # Override model to standard OpenAI model if not using llmod
-                embedding_model = "text-embedding-3-small"
+                # If EMBEDDING_BASE_URL points to llmod.ai, try using OPENAI_API_KEY with llmod base_url
+                if "llmod" in EMBEDDING_BASE_URL.lower():
+                    openai_key_temp = os.getenv("OPENAI_API_KEY")
+                    if openai_key_temp:
+                        logger.info(f"CHAT: ✅ EMBEDDING_BASE_URL points to LLMod.ai, using OPENAI_API_KEY with LLMod base_url")
+                        embedding_api_key = openai_key_temp
+                        use_base_url = True
+                    else:
+                        logger.warning("CHAT: ⚠️ EMBEDDING_BASE_URL is set to LLMod.ai but no LLMOD_API_KEY or OPENAI_API_KEY found")
+                        logger.warning("CHAT: Please set LLMOD_API_KEY or OPENAI_API_KEY in .env file")
+                        return
+                else:
+                    logger.warning("CHAT: ⚠️ EMBEDDING_BASE_URL is set but LLMOD_API_KEY/LLM_API_KEY not found")
+                    logger.warning("CHAT: Will use OPENAI_API_KEY without base_url (standard OpenAI)")
+                    # Override model to standard OpenAI model if not using llmod
+                    embedding_model = "text-embedding-3-small"
         
         # Fallback to OPENAI_API_KEY if not using llmod.ai
         if not embedding_api_key:
@@ -284,25 +296,43 @@ class RAGChatExecutor:
         steps = []
 
         try:
-            if not self.embedding_client or not self.pinecone_index:
-                return {
-                    "status": "error",
-                    "error": "RAG system not initialized. Please check OPENAI_API_KEY and PINECONE_API_KEY configuration.",
-                    "response": "I'm sorry, but the RAG system is not available. Please check the system configuration.",
-                    "steps": steps
-                }
-
+            # Check LLM client first - this is required
             if not llm_client or not llm_client.client:
                 logger.error("CHAT: ❌ LLM client not available for generating responses")
                 return {
                     "status": "error",
                     "error": "LLM client not available for generating responses",
-                    "response": "I'm sorry, but I cannot generate a response right now. Please try again later.",
+                    "response": "מצטער, אבל אני לא יכול ליצור תשובה כרגע. אנא נסה שוב מאוחר יותר.",
                     "steps": steps
                 }
 
             self.llm_client = llm_client
             logger.info(f"CHAT: ✅ LLM client initialized (model: {llm_client.model})")
+            
+            # Check if RAG is available - if not, continue with LLM only
+            if not self.embedding_client or not self.pinecone_index:
+                logger.warning("CHAT: ⚠️ RAG system not initialized (embedding or Pinecone not available)")
+                logger.info("CHAT: Continuing with LLM-only mode (no RAG context)")
+                # Continue without RAG - use LLM with user context and web search
+                user_context_str = self._format_user_context(user_context)
+                logger.info("CHAT: 🔍 Attempting web search for query")
+                web_results = self._web_search(query)
+                if web_results:
+                    logger.info(f"CHAT: ✅ Web search found results (length: {len(web_results)} chars)")
+                else:
+                    logger.info("CHAT: ⚠️ Web search returned no results")
+                
+                response_text = await self._generate_response_without_rag(
+                    query, web_results, user_context_str, steps
+                )
+                
+                return {
+                    "status": "success",
+                    "response": response_text,
+                    "context_used": False,  # No RAG context
+                    "web_search_used": bool(web_results),
+                    "steps": steps
+                }
 
             # Step 1: Embed query
             logger.info(f"CHAT: 🔍 Step 1: Embedding query: {query[:100]}...")
@@ -472,6 +502,10 @@ If neither source has the information, say so honestly and suggest what they mig
         try:
             import asyncio
             loop = asyncio.get_event_loop()
+            
+            # gpt-5 models only support temperature=1
+            model_name = self.llm_client.model.lower()
+            temperature = 1.0 if "gpt-5" in model_name else 0.7
 
             response = await loop.run_in_executor(
                 None,
@@ -481,7 +515,7 @@ If neither source has the information, say so honestly and suggest what they mig
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
-                    temperature=0.7
+                    temperature=temperature
                 )
             )
 
@@ -506,10 +540,21 @@ If neither source has the information, say so honestly and suggest what they mig
             return llm_response_text
 
         except Exception as e:
-            logger.error(f"CHAT: ❌ Error generating LLM response: {e}")
+            error_msg = str(e)
+            logger.error(f"CHAT: ❌ Error generating LLM response: {error_msg}")
             import traceback
             logger.error(f"CHAT: Traceback: {traceback.format_exc()}")
-            raise
+            
+            # Check if it's an authentication error
+            if "401" in error_msg or "invalid_api_key" in error_msg or "Incorrect API key" in error_msg or "AuthenticationError" in str(type(e)):
+                logger.error("CHAT: ❌ API key authentication failed for LLM")
+                return (
+                    "מצטער, אבל יש בעיה עם מפתח ה-API. "
+                    "אנא בדוק את הגדרות ה-OPENAI_API_KEY או LLMOD_API_KEY בקובץ .env. "
+                    "אם הבעיה נמשכת, אנא פנה למנהל המערכת."
+                )
+            else:
+                return "מצטער, אבל נתקלתי בשגיאה בעת יצירת התשובה. אנא נסה שוב."
 
     async def _generate_response_without_rag(
         self,
@@ -555,6 +600,10 @@ Please answer the user's question using the web search results and user context.
         try:
             import asyncio
             loop = asyncio.get_event_loop()
+            
+            # gpt-5 models only support temperature=1
+            model_name = self.llm_client.model.lower()
+            temperature = 1.0 if "gpt-5" in model_name else 0.7
 
             response = await loop.run_in_executor(
                 None,
@@ -564,7 +613,7 @@ Please answer the user's question using the web search results and user context.
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
-                    temperature=0.7
+                    temperature=temperature
                 )
             )
 
@@ -588,10 +637,21 @@ Please answer the user's question using the web search results and user context.
             return llm_response_text
 
         except Exception as e:
-            logger.error(f"CHAT: ❌ Error generating response: {e}")
+            error_msg = str(e)
+            logger.error(f"CHAT: ❌ Error generating response: {error_msg}")
             import traceback
             logger.error(f"CHAT: Traceback: {traceback.format_exc()}")
-            return "מצטער, אבל נתקלתי בשגיאה בעת יצירת התשובה. אנא נסה שוב."
+            
+            # Check if it's an authentication error
+            if "401" in error_msg or "invalid_api_key" in error_msg or "Incorrect API key" in error_msg or "AuthenticationError" in str(type(e)):
+                logger.error("CHAT: ❌ API key authentication failed for LLM")
+                return (
+                    "מצטער, אבל יש בעיה עם מפתח ה-API. "
+                    "אנא בדוק את הגדרות ה-OPENAI_API_KEY או LLMOD_API_KEY בקובץ .env. "
+                    "אם הבעיה נמשכת, אנא פנה למנהל המערכת."
+                )
+            else:
+                return "מצטער, אבל נתקלתי בשגיאה בעת יצירת התשובה. אנא נסה שוב."
 
     async def _generate_web_based_response(
         self,
@@ -631,6 +691,10 @@ Mention that this information comes from online sources since it wasn't found in
         try:
             import asyncio
             loop = asyncio.get_event_loop()
+            
+            # gpt-5 models only support temperature=1
+            model_name = self.llm_client.model.lower()
+            temperature = 1.0 if "gpt-5" in model_name else 0.7
 
             response = await loop.run_in_executor(
                 None,
@@ -640,7 +704,7 @@ Mention that this information comes from online sources since it wasn't found in
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
-                    temperature=0.7
+                    temperature=temperature
                 )
             )
 
@@ -663,10 +727,21 @@ Mention that this information comes from online sources since it wasn't found in
             return llm_response_text
 
         except Exception as e:
-            logger.error(f"CHAT: ❌ Error generating web-based LLM response: {e}")
+            error_msg = str(e)
+            logger.error(f"CHAT: ❌ Error generating web-based LLM response: {error_msg}")
             import traceback
             logger.error(f"CHAT: Traceback: {traceback.format_exc()}")
-            raise
+            
+            # Check if it's an authentication error
+            if "401" in error_msg or "invalid_api_key" in error_msg or "Incorrect API key" in error_msg or "AuthenticationError" in str(type(e)):
+                logger.error("CHAT: ❌ API key authentication failed for LLM")
+                return (
+                    "מצטער, אבל יש בעיה עם מפתח ה-API. "
+                    "אנא בדוק את הגדרות ה-OPENAI_API_KEY או LLMOD_API_KEY בקובץ .env. "
+                    "אם הבעיה נמשכת, אנא פנה למנהל המערכת."
+                )
+            else:
+                return "מצטער, אבל נתקלתי בשגיאה בעת יצירת התשובה. אנא נסה שוב."
 
     def get_step_log(
         self,

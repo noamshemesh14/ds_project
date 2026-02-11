@@ -63,6 +63,19 @@ class LLMClient:
         if not llmod_api_key:
             llmod_api_key = os.getenv("LLM_API_KEY")
 
+        # Check if EMBEDDING_BASE_URL is set to llmod.ai - if so, we should use LLMod.ai
+        embedding_base_url = os.getenv("EMBEDDING_BASE_URL")
+        use_llmod_base = False
+        if embedding_base_url and "llmod" in embedding_base_url.lower():
+            use_llmod_base = True
+            logger.info(f"   EMBEDDING_BASE_URL points to LLMod.ai: {embedding_base_url}")
+            # If LLMOD_API_KEY is not set but OPENAI_API_KEY is, use OPENAI_API_KEY with LLMod base_url
+            if not llmod_api_key:
+                openai_key_temp = os.getenv("OPENAI_API_KEY")
+                if openai_key_temp:
+                    logger.info("   LLMOD_API_KEY not found, but OPENAI_API_KEY found - will use it with LLMod.ai base_url")
+                    llmod_api_key = openai_key_temp
+
         if llmod_api_key:
             logger.info(f"   Found LLMod API key (length: {len(llmod_api_key)}, starts with: {llmod_api_key[:10]}...)")
             if llmod_api_key == "your_llmod_api_key_here":
@@ -72,7 +85,12 @@ class LLMClient:
         else:
             logger.warning("   ⚠️ No LLMod API key found (checked LLMOD_API_KEY and LLM_API_KEY)")
 
-        llmod_base_url = os.getenv("LLMOD_BASE_URL") or os.getenv("LLM_BASE_URL") or "https://api.llmod.ai/v1"
+        llmod_base_url = os.getenv("LLMOD_BASE_URL") or os.getenv("LLM_BASE_URL")
+        if not llmod_base_url and use_llmod_base:
+            # If EMBEDDING_BASE_URL points to llmod.ai, use it as base_url
+            llmod_base_url = embedding_base_url
+        if not llmod_base_url:
+            llmod_base_url = "https://api.llmod.ai/v1"
 
         if llmod_base_url and not llmod_base_url.endswith("/v1"):
             if llmod_base_url.endswith("/"):
