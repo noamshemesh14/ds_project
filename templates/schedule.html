@@ -264,6 +264,42 @@
             background: #9b59b6 !important;  /* Purple for group work */
         }
         
+        /* Semester schedule blocks - same look as weekly (colored blocks spanning hours) */
+        .schedule-cell.has-semester-item {
+            background: white;
+        }
+        .semester-item-badge {
+            color: white;
+            padding: 0.5rem;
+            border-radius: 10px;
+            font-size: 0.85em;
+            line-height: 1.4;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: absolute;
+            left: 5%;
+            right: 5%;
+            top: 5px;
+            bottom: 5px;
+            pointer-events: none;
+            box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+            white-space: normal;
+            word-wrap: break-word;
+            text-align: center;
+            z-index: 5;
+        }
+        .semester-item-badge.lecture {
+            background: #4a9eff;
+        }
+        .semester-item-badge.tutorial {
+            background: #9b59b6;
+        }
+        .semester-item-badge.lab { background: #27ae60; }
+        .semester-item-badge.seminar { background: #e67e22; }
+        .semester-item-badge.other { background: #7f8c8d; }
+        
         /* Highlight for change request blocks */
         .highlight-change-request {
             animation: pulse-highlight 1.5s ease-in-out infinite;
@@ -1465,8 +1501,99 @@
             updateScheduleDisplay();
         }
         
+        // Rebuild semester table with rowSpan so blocks span all their hours (like weekly colored blocks)
+        function rebuildSemesterTableBody() {
+            const tbody = document.getElementById('schedule-body');
+            if (!tbody) return;
+            const typeLabels = { 'lecture': 'הרצאה', 'tutorial': 'תרגול', 'lab': 'מעבדה', 'seminar': 'סמינר', 'other': 'אחר' };
+            const skip = {};
+            tbody.innerHTML = '';
+            for (let rowIndex = 0; rowIndex < timeSlots.length; rowIndex++) {
+                const time = timeSlots[rowIndex];
+                const row = document.createElement('tr');
+                const timeCell = document.createElement('td');
+                timeCell.className = 'time-slot';
+                timeCell.textContent = time;
+                row.appendChild(timeCell);
+                for (let day = 0; day < 7; day++) {
+                    if (skip[rowIndex] && skip[rowIndex][day]) continue;
+                    let daysArray;
+                    const constraint = constraints.find(c => {
+                        daysArray = Array.isArray(c.days) ? c.days : (typeof c.days === 'string' ? (() => { try { return JSON.parse(c.days); } catch { return []; } })() : []);
+                        return daysArray.includes(day) && isTimeInRange(time, c.start_time, c.end_time);
+                    });
+                    if (constraint) {
+                        const slotIndex = timeSlots.indexOf(time);
+                        const prevTime = slotIndex > 0 ? timeSlots[slotIndex - 1] : null;
+                        const startsHere = !prevTime || !isTimeInRange(prevTime, constraint.start_time, constraint.end_time);
+                        let numHours = 1;
+                        if (startsHere) {
+                            for (let i = slotIndex + 1; i < timeSlots.length && isTimeInRange(timeSlots[i], constraint.start_time, constraint.end_time); i++) numHours++;
+                        }
+                        const cell = document.createElement('td');
+                        cell.className = 'schedule-cell has-constraint';
+                        if (startsHere && numHours > 1) cell.rowSpan = numHours;
+                        if (startsHere) {
+                            const badge = document.createElement('span');
+                            badge.className = 'constraint-badge';
+                            badge.textContent = constraint.title;
+                            cell.appendChild(badge);
+                        }
+                        cell.onclick = () => openConstraintModal(constraint.id);
+                        row.appendChild(cell);
+                        for (let r = 1; r < numHours && rowIndex + r < timeSlots.length; r++) { if (!skip[rowIndex + r]) skip[rowIndex + r] = {}; skip[rowIndex + r][day] = true; }
+                        continue;
+                    }
+                    const semesterItem = semesterScheduleItems.find(item => {
+                        daysArray = Array.isArray(item.days) ? item.days : (typeof item.days === 'string' ? (() => { try { return JSON.parse(item.days); } catch { return []; } })() : []);
+                        return daysArray.includes(day) && isTimeInRange(time, item.start_time, item.end_time);
+                    });
+                    if (semesterItem) {
+                        const slotIndex = timeSlots.indexOf(time);
+                        const prevTime = slotIndex > 0 ? timeSlots[slotIndex - 1] : null;
+                        const startsHere = !prevTime || !isTimeInRange(prevTime, semesterItem.start_time, semesterItem.end_time);
+                        let numHours = 1;
+                        if (startsHere) {
+                            const itemStartParts = semesterItem.start_time.split(':').map(Number);
+                            const itemEndParts = semesterItem.end_time.split(':').map(Number);
+                            numHours = Math.ceil(((itemEndParts[0] * 60 + (itemEndParts[1] || 0)) - (itemStartParts[0] * 60 + (itemStartParts[1] || 0))) / 60);
+                            numHours = Math.max(1, numHours);
+                        }
+                        const cell = document.createElement('td');
+                        cell.className = 'schedule-cell has-semester-item';
+                        if (startsHere && numHours > 1) cell.rowSpan = numHours;
+                        if (startsHere) {
+                            const badge = document.createElement('span');
+                            const itemType = (semesterItem.type || 'lecture').toLowerCase();
+                            badge.className = 'semester-item-badge ' + itemType;
+                            let displayName = semesterItem.course_name + ' (' + (typeLabels[semesterItem.type] || semesterItem.type) + ')';
+                            if (displayName.length > 35) displayName = displayName.substring(0, 32) + '...';
+                            badge.textContent = displayName;
+                            badge.title = semesterItem.course_name + ' (' + (typeLabels[semesterItem.type] || semesterItem.type) + ', ' + semesterItem.start_time + '-' + semesterItem.end_time + (semesterItem.location ? ', ' + semesterItem.location : '') + ')';
+                            cell.appendChild(badge);
+                            cell.onclick = () => openSemesterScheduleModal(semesterItem.id);
+                        }
+                        row.appendChild(cell);
+                        for (let r = 1; r < numHours && rowIndex + r < timeSlots.length; r++) { if (!skip[rowIndex + r]) skip[rowIndex + r] = {}; skip[rowIndex + r][day] = true; }
+                        continue;
+                    }
+                    const cell = document.createElement('td');
+                    cell.className = 'schedule-cell available';
+                    cell.dataset.day = day;
+                    cell.dataset.time = time;
+                    cell.onclick = () => handleCellClick(day, time);
+                    row.appendChild(cell);
+                }
+                tbody.appendChild(row);
+            }
+        }
+        
         // Update schedule display based on permanent constraints and courses
         function updateScheduleDisplay() {
+            if (semesterScheduleItems.length > 0 || constraints.length > 0) {
+                rebuildSemesterTableBody();
+                return;
+            }
             document.querySelectorAll('#schedule-body .schedule-cell').forEach(cell => {
                 cell.className = 'schedule-cell';
                 cell.innerHTML = '';
