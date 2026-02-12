@@ -653,11 +653,12 @@ class BlockMover:
         new_day: int,
         new_start_time: str
     ) -> bool:
-        """Extract user preferences from prompt and update schedule_change_notes"""
+        """Extract user preferences from prompt and update schedule_change_notes and study_preferences_summary"""
         try:
-            # Get current notes
-            profile = client.table("user_profiles").select("schedule_change_notes").eq("id", user_id).limit(1).execute()
+            # Get current notes and preferences
+            profile = client.table("user_profiles").select("schedule_change_notes, study_preferences_raw").eq("id", user_id).limit(1).execute()
             current_notes = profile.data[0].get("schedule_change_notes", []) if profile.data else []
+            current_prefs = profile.data[0].get("study_preferences_raw", "") if profile.data else ""
             
             if not isinstance(current_notes, list):
                 current_notes = []
@@ -672,12 +673,44 @@ class BlockMover:
             }
             current_notes.append(new_note)
             
-            # Save notes
+            # Save notes first (for LLM to analyze)
             client.table("user_profiles").update({
                 "schedule_change_notes": current_notes
             }).eq("id", user_id).execute()
             
             logger.info(f"✅ Updated schedule_change_notes for user {user_id}")
+            
+            # ALWAYS call LLM to summarize preferences - this is what we use for scheduling
+            # The summary is saved to study_preferences_summary and used when generating schedules
+            try:
+                # Import the LLM summarization function
+                from app.main import _summarize_user_preferences_with_llm
+                
+                logger.info(f"🔄 [BLOCK_MOVER] Calling LLM for classification - course: {block.get('course_number')}, explanation: {user_prompt[:100] if user_prompt else 'none'}")
+                summary = await _summarize_user_preferences_with_llm(current_prefs, current_notes)
+                
+                if summary:
+                    # ALWAYS save the LLM summary to study_preferences_summary
+                    # This is what we use when generating schedules (not the raw notes)
+                    update_result = client.table("user_profiles").update({
+                        "study_preferences_summary": summary
+                    }).eq("id", user_id).execute()
+                    
+                    if update_result.data:
+                        logger.info(f"💾 [BLOCK_MOVER] ✅ Successfully saved study_preferences_summary to database")
+                        logger.info(f"   - update_type: {summary.get('update_type', 'unknown')}")
+                        logger.info(f"   - summary_keys: {list(summary.keys())}")
+                    else:
+                        logger.warning(f"⚠️ [BLOCK_MOVER] Update returned no data - update may have failed")
+                else:
+                    logger.warning(f"⚠️ [BLOCK_MOVER] LLM summary returned None - preferences not updated")
+                    
+            except ImportError as import_err:
+                logger.warning(f"⚠️ [BLOCK_MOVER] Could not import _summarize_user_preferences_with_llm: {import_err}")
+            except Exception as llm_err:
+                logger.error(f"❌ [BLOCK_MOVER] Failed to update LLM summary: {llm_err}", exc_info=True)
+                # Even if LLM fails, we keep the notes for future summarization
+            
             return True
             
         except Exception as e:
