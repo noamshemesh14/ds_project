@@ -3456,9 +3456,21 @@ async def get_semester_schedule_items(
                 except:
                     days = []
             
+            # Get course_number for this course_name to enrich the response
+            course_number = ""
+            try:
+                courses_res = client.table("courses").select("course_number, course_name").eq("user_id", user_id).execute()
+                for c in (courses_res.data or []):
+                    if (c.get("course_name") or "").strip() == (item.get("course_name") or "").strip():
+                        course_number = c.get("course_number") or ""
+                        break
+            except Exception as course_err:
+                logging.warning(f"Could not load course_number for semester item: {course_err}")
+            
             items.append({
                 "id": item.get("id"),
                 "course_name": item.get("course_name"),
+                "course_number": course_number,  # Add course_number for consistency
                 "type": item.get("type"),
                 "days": days,
                 "start_time": item.get("start_time"),
@@ -3767,6 +3779,9 @@ async def get_weekly_plan(
                     blocks = all_blocks
                 else:
                     logging.warning(f"   ❌ Alternative method also found 0 blocks. Blocks may not exist or RLS is blocking.")
+                    # Initialize blocks as empty list if no blocks found
+                    if blocks is None:
+                        blocks = []
             
             # #region agent log
             try:
@@ -3803,10 +3818,15 @@ async def get_weekly_plan(
                 else:
                     logging.warning(f"⚠️ [GET_WEEKLY_PLAN] Fallback method found blocks but none matched plan_ids {plan_ids_for_week}")
         
+        # CRITICAL: Initialize blocks list if it doesn't exist (for cases where no plan exists yet)
+        if blocks is None:
+            blocks = []
+        
         # Add blocks from semester_schedule_items (same as מערכת סמסטרית) so weekly view shows profile course hours
         # CRITICAL: Always add semester blocks, even if there's no weekly plan - they are hard constraints
+        # NOTE: Semester blocks are added AFTER all other blocks to ensure they appear in the weekly view
         try:
-            sem_res = client.table("semester_schedule_items").select("id, course_name, type, days, start_time, end_time").eq("user_id", user_id).execute()
+            sem_res = client.table("semester_schedule_items").select("id, course_name, type, days, start_time, end_time, location").eq("user_id", user_id).execute()
             courses_res = client.table("courses").select("course_number, course_name").eq("user_id", user_id).execute()
             course_name_to_number = {}
             for c in (courses_res.data or []):
@@ -3853,7 +3873,9 @@ async def get_weekly_plan(
                             "start_time": start_t,
                             "end_time": end_t,
                             "source": "semester",
-                            "type": item.get("type", "")  # Include type (lecture/tutorial) for display
+                            "type": item.get("type", ""),  # Include type (lecture/tutorial) for display
+                            "location": item.get("location", ""),  # Include location if available
+                            "semester_item_id": item.get("id")  # Include original semester_schedule_items id for reference
                         }
                         blocks.append(virtual_block)
                         semester_blocks_added += 1
@@ -3869,14 +3891,31 @@ async def get_weekly_plan(
             logging.error(f"❌ [GET_WEEKLY_PLAN] Could not add semester items to weekly plan: {sem_err}", exc_info=True)
         
         # Remove duplicates (in case same block was found both ways)
+        # CRITICAL: Use a composite key for semester blocks since they may have the same id pattern
+        # For semester blocks, use (day_of_week, start_time, course_number, work_type) as unique key
         seen_ids = set()
+        seen_semester_keys = set()  # Track semester blocks separately
         unique_blocks = []
         for b in blocks:
             block_id = b.get("id")
-            if block_id and block_id not in seen_ids:
+            work_type = b.get("work_type", "")
+            
+            # For semester blocks, use composite key to avoid false duplicates
+            if work_type == "semester":
+                semester_key = (b.get("day_of_week"), b.get("start_time"), b.get("course_number"), work_type)
+                if semester_key not in seen_semester_keys:
+                    seen_semester_keys.add(semester_key)
+                    unique_blocks.append(b)
+            elif block_id and block_id not in seen_ids:
                 seen_ids.add(block_id)
                 unique_blocks.append(b)
+            elif not block_id:
+                # Blocks without id should still be included (shouldn't happen, but safety)
+                unique_blocks.append(b)
+        
         blocks = unique_blocks
+        semester_count_after = len([b for b in blocks if b.get("work_type") == "semester"])
+        logging.info(f"📊 [GET_WEEKLY_PLAN] After deduplication: {len(blocks)} unique blocks (semester blocks: {semester_count_after})")
         
         # If no blocks found via plan_ids, check directly by user_id (fallback)
         if not blocks:
@@ -4020,11 +4059,16 @@ async def get_weekly_plan(
                     plans_check = client.table("weekly_plans").select("id, week_start").in_("id", all_plan_ids).execute()
                     logging.warning(f"   These blocks belong to plans: {[(p.get('id'), p.get('week_start')) for p in (plans_check.data or [])]}")
         
+        # Log semester blocks count
+        semester_blocks_count = len([b for b in blocks if b.get("work_type") == "semester"])
+        if semester_blocks_count > 0:
+            logging.info(f"   📚 Returning {semester_blocks_count} semester blocks for week {week_start}")
+        
         # #region agent log
         try:
             import json
             with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps({"runId":"run1","hypothesisId":"UI","location":"app/main.py:3070","message":"get_weekly_plan RETURNING","data":{"blocks_count":len(blocks),"week_start":week_start,"user_id":user_id,"has_plan":plan is not None,"plan_id":plan.get("id") if plan else None,"group_blocks":len([b for b in blocks if b.get("work_type") == "group"]),"personal_blocks":len([b for b in blocks if b.get("work_type") == "personal"])},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                f.write(json.dumps({"runId":"run1","hypothesisId":"UI","location":"app/main.py:3070","message":"get_weekly_plan RETURNING","data":{"blocks_count":len(blocks),"week_start":week_start,"user_id":user_id,"has_plan":plan is not None,"plan_id":plan.get("id") if plan else None,"group_blocks":len([b for b in blocks if b.get("work_type") == "group"]),"personal_blocks":len([b for b in blocks if b.get("work_type") == "personal"]),"semester_blocks":semester_blocks_count},"timestamp":int(__import__('time').time()*1000)}) + '\n')
         except: pass
         # #endregion
         
