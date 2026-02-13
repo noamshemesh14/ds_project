@@ -1475,6 +1475,224 @@ def _extract_semester_season(semester_str: str):
     return semester_str
 
 
+async def _plan_group_blocks_with_llm(
+    group_id: str,
+    course_number,
+    course_name: str,
+    group_quota: int,
+    common_free_slots,
+    group_preferences_raw: str = "",
+    group_preferences_summary: Optional[dict] = None,
+) -> dict:
+    """
+    Use LLM to choose optimal time slots for GROUP study blocks only.
+
+    Input slots (common_free_slots) are already guaranteed to be free for ALL group members
+    and to respect all hard constraints and semester schedule items.
+
+    Returns:
+        {
+          "success": bool,
+          "group_blocks": [
+            {"day_index": int, "start_time": "HH:MM"}
+          ],
+          "message": str
+        }
+    """
+    if group_preferences_summary is None:
+        group_preferences_summary = {}
+
+    # If OpenAI/LLM client not available, signal failure so caller can fall back
+    if not HAS_OPENAI:
+        logging.error("❌ [LLM][GROUP] OpenAI library not installed! Install with: pip install openai")
+        return {"success": False, "group_blocks": [], "message": "OpenAI library not installed"}
+
+    try:
+        # Try multiple possible API key names
+        openai_api_key = (
+            os.getenv("LLM_API_KEY")
+            or os.getenv("LLMOD_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+        )
+
+        if not openai_api_key:
+            logging.error("❌ [LLM][GROUP] No API key found in environment variables!")
+            logging.error("   Checked: LLM_API_KEY, LLMOD_API_KEY, OPENAI_API_KEY")
+            return {
+                "success": False,
+                "group_blocks": [],
+                "message": "LLM API key missing (check LLM_API_KEY, LLMOD_API_KEY, or OPENAI_API_KEY in .env)",
+            }
+
+        base_url = os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+        if base_url:
+            llm_client = OpenAI(api_key=openai_api_key, base_url=base_url)
+            logging.info(f"[LLM][GROUP] base_url configured: {base_url}")
+        else:
+            llm_client = OpenAI(api_key=openai_api_key)
+
+        day_names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+        available_slots_readable = [
+            {"day": day_names[day], "day_index": day, "time": time}
+            for day, time in common_free_slots
+        ]
+
+        system_prompt = """You are a schedule optimization assistant for GROUP study meetings.
+Your task is to choose the BEST time slots for group study sessions for ONE course and ONE group.
+
+STRICT RULES:
+1. You receive a list of AVAILABLE time slots that are already guaranteed to be free for ALL group members.
+2. Each block is exactly 1 hour long.
+3. You MUST allocate EXACTLY the requested number of hours (group_quota) as separate 1-hour blocks.
+4. All returned blocks MUST be inside the available slots list.
+5. PREFERENCE: When possible, prefer choosing consecutive hours (2-3 hours together) for focused sessions. Only spread blocks out with gaps if consecutive slots are not available or if preferences explicitly indicate breaks.
+6. If preferences indicate breaks, spread blocks out with gaps between them.
+7. Return ONLY valid JSON, no explanations or comments.
+
+OUTPUT FORMAT:
+{
+  "group_blocks": [
+    {
+      "day_index": 0,
+      "start_time": "09:00"
+    }
+  ]
+}
+
+Where:
+- day_index: 0=Sunday, 1=Monday, ..., 6=Saturday
+- start_time: one of the provided time values in HH:MM format from the available slots."""
+
+        # Prepare group preferences JSON (can't use {} in f-string)
+        group_prefs_json = json.dumps(group_preferences_summary or {}, indent=2, ensure_ascii=False)
+        
+        user_prompt = f"""Plan group study time for the following group:
+
+GROUP:
+- group_id: {group_id}
+- course_number: {course_number}
+- course_name: {course_name}
+- required_hours (group_quota): {group_quota}
+
+AVAILABLE TIME SLOTS (already free for ALL members and respecting all constraints):
+{json.dumps(available_slots_readable, indent=2, ensure_ascii=False)}
+
+GROUP PREFERENCES (RAW):
+{group_preferences_raw or "No specific group preferences provided"}
+
+GROUP PREFERENCES (STRUCTURED):
+{group_prefs_json}
+
+TASK:
+- Choose EXACTLY {group_quota} one-hour slots from AVAILABLE TIME SLOTS.
+- PREFERENCE: When possible, prefer grouping hours together (2-3 consecutive hours) for focused sessions. Only spread them out if consecutive slots are not available or if preferences explicitly request breaks/gaps.
+- All chosen slots MUST be within the available slots list.
+
+Return ONLY JSON with the 'group_blocks' array."""
+
+        model = os.getenv("LLM_MODEL") or "gpt-4o-mini"
+        temperature = 0.7
+        if "gpt-5" in model.lower() or (base_url and "llmod.ai" in base_url.lower()):
+            temperature = 1
+
+        logging.info(
+            f"[LLM][GROUP] Calling model={model}, base_url={base_url or 'default'}, "
+            f"group_id={group_id}, quota={group_quota}, slots={len(common_free_slots)}"
+        )
+
+        response = llm_client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=temperature,
+            max_tokens=2000,
+            response_format={"type": "json_object"},
+        )
+
+        content = response.choices[0].message.content
+        finish_reason = response.choices[0].finish_reason
+        logging.info(
+            f"[LLM][GROUP] Response received: len={len(content) if content else 0}, "
+            f"finish_reason={finish_reason}"
+        )
+        if not content or not content.strip():
+            logging.error(f"[LLM][GROUP] Empty content returned (finish_reason={finish_reason})")
+            return {
+                "success": False,
+                "group_blocks": [],
+                "message": f"LLM returned empty content (finish_reason={finish_reason})",
+            }
+
+        try:
+            llm_output = json.loads(content)
+        except json.JSONDecodeError as json_err:
+            logging.error(f"❌ [LLM][GROUP] JSON parse error: {json_err}")
+            logging.error(f"   Content preview: {content[:500] if content else 'EMPTY'}")
+            # Best-effort extraction from markdown/text
+            try:
+                import re as _re
+
+                json_match = _re.search(r"```(?:json)?\s*(\{{.*\}})\s*```", content, _re.DOTALL)
+                if json_match:
+                    llm_output = json.loads(json_match.group(1))
+                else:
+                    json_match = _re.search(r"\{.*\}", content, _re.DOTALL)
+                    if json_match:
+                        llm_output = json.loads(json_match.group(0))
+                    else:
+                        raise json_err
+            except Exception:
+                return {
+                    "success": False,
+                    "group_blocks": [],
+                    "message": f"LLM JSON parse error: {json_err}",
+                }
+
+        group_blocks = llm_output.get("group_blocks", []) or []
+        logging.info(f"[LLM][GROUP] Parsed {len(group_blocks)} proposed group blocks")
+
+        # Basic validation: correct count and slots within common_free_slots
+        common_set = set(common_free_slots)
+        valid_blocks = []
+        for blk in group_blocks:
+            day_index = blk.get("day_index")
+            start_time = blk.get("start_time")
+            if day_index is None or not start_time:
+                continue
+            if (day_index, start_time) not in common_set:
+                logging.warning(
+                    f"[LLM][GROUP] Proposed slot ({day_index}, {start_time}) "
+                    f"is not in common_free_slots, skipping"
+                )
+                continue
+            valid_blocks.append({"day_index": day_index, "start_time": start_time})
+
+        if len(valid_blocks) != group_quota:
+            logging.warning(
+                f"[LLM][GROUP] Expected {group_quota} valid blocks, got {len(valid_blocks)}. "
+                f"Will still use the valid ones."
+            )
+
+        return {
+            "success": True,
+            "group_blocks": valid_blocks,
+            "message": f"Planned {len(valid_blocks)} group blocks via LLM (requested {group_quota})",
+        }
+
+    except Exception as e:
+        logging.error(f"❌ [LLM][GROUP] LLM planning error for group {group_id}: {e}")
+        import traceback as _tb
+
+        logging.error(f"   Traceback: {_tb.format_exc()}")
+        return {
+            "success": False,
+            "group_blocks": [],
+            "message": f"LLM planning error: {str(e)}",
+        }
+
+
 def _ensure_group_blocks_for_week(client, user_id: str, week_start: str, available_slots):
     """
     Create group_plan_blocks once per group per week and post an update to the group.
@@ -1789,7 +2007,7 @@ WORKFLOW - YOU MUST FOLLOW THIS ORDER:
 2. THEN: Place personal study blocks for all courses (use user preferences)
 
 STRICT RULES:
-1. Each block is exactly 1 hour, but you should create MULTIPLE consecutive blocks for the same course when it aligns with user preferences (e.g., if they prefer concentrated study)
+1. Each block is exactly 1 hour. PREFERENCE: When possible, prefer creating consecutive blocks (2-3 hours together) for the same course rather than scattered single-hour blocks. This improves focus and reduces context switching. Only use single-hour scattered blocks if consecutive slots are not available or if the user explicitly prefers breaks/gaps between sessions.
 2. You must allocate the EXACT number of group hours required for each course with a group
 3. You must allocate the EXACT number of personal hours required for each course
 4. Group blocks and personal blocks CANNOT overlap - if you place a group block, remove that slot from available slots for personal blocks
@@ -1800,9 +2018,10 @@ CRITICAL - PREFERENCES ARE THE TOP PRIORITY:
 - User preferences may be in Hebrew or English - understand and follow them exactly
 - Group preferences may be in Hebrew or English - understand and follow them exactly
 - First INTERPRET what the user/group wants, then APPLY it to the schedule
+- PREFERENCE: When possible, prefer creating consecutive blocks (2-3 hours together) for the same course rather than scattered single-hour blocks
 - Common preferences:
-  * Wants breaks/gaps between study sessions = DO NOT place consecutive hours for the same course
-  * Wants concentrated/focused study = place multiple hours together
+  * Wants breaks/gaps between study sessions = DO NOT place consecutive hours for the same course (ONLY if explicitly requested)
+  * Wants concentrated/focused study = place multiple hours together (preferred when possible)
   * Wants even distribution = spread across ALL available days, not just a few
   * Prefers morning = use early time slots
   * Prefers evening = use late time slots
@@ -1834,7 +2053,7 @@ OUTPUT FORMAT:
 STRICT RULES:
 1. You MUST NOT modify or move any blocks in the skeleton (group meetings or fixed blocks)
 2. You can ONLY place new personal study blocks in the available slots
-3. Each block is exactly 1 hour, but you should create MULTIPLE consecutive blocks for the same course when it aligns with user preferences (e.g., if they prefer concentrated study)
+3. Each block is exactly 1 hour. PREFERENCE: When possible, prefer creating consecutive blocks (2-3 hours together) for the same course rather than scattered single-hour blocks. Only use single-hour scattered blocks if consecutive slots are not available or if the user explicitly prefers breaks/gaps between sessions.
 4. You must allocate the EXACT number of personal hours required for each course
 5. Apply user preferences intelligently - if preferences indicate concentrated study, group blocks together; if they indicate breaks, spread them out
 6. Return ONLY valid JSON, no explanations
@@ -1842,6 +2061,8 @@ STRICT RULES:
 CRITICAL - USER PREFERENCES ARE THE TOP PRIORITY:
 - The user's preferences may be in Hebrew or English - understand and follow them exactly
 - First INTERPRET what the user wants, then APPLY it to the schedule
+- PREFERENCE: When possible, prefer creating consecutive blocks (2-3 hours together) for the same course rather than scattered single-hour blocks
+- Only use single-hour scattered blocks if consecutive slots are not available or if the user explicitly requests breaks/gaps between sessions
 - Use your judgment to create an optimal schedule that respects the user's preferences
 - Consider the context: some blocks are already placed, work around them intelligently
 
@@ -1890,14 +2111,16 @@ TASK - FOLLOW THIS ORDER:
 
 CRITICAL - BLOCK PLACEMENT LOGIC:
 - Read and understand ALL PREFERENCES (user and group, may be in Hebrew or any language)
-- Apply preferences strictly when placing blocks - if user prefers concentrated study, group blocks together; if they prefer breaks, spread them out
+- PREFERENCE: When possible, prefer grouping blocks together (2-3 consecutive hours) for the same course rather than scattered single-hour blocks. Only spread them out if consecutive slots are not available or if preferences explicitly request breaks/gaps.
+- Apply preferences strictly when placing blocks - if user prefers concentrated study, group blocks together (preferred when possible); if they explicitly prefer breaks, spread them out
 - Use your judgment to create an optimal schedule based on the user's preferences and the existing blocks
 - Consider the context: group blocks are already placed, work around them intelligently
 - Make intelligent decisions about block length and distribution based on the preferences provided
 
 CRITICAL: 
 - First, read and understand ALL PREFERENCES (user and group, may be in Hebrew or any language)
-- Then apply those preferences strictly when placing blocks
+- PREFERENCE: When possible, prefer creating consecutive blocks (2-3 hours together) for the same course rather than scattered single-hour blocks
+- Then apply those preferences strictly when placing blocks - only use scattered blocks if consecutive slots are not available or if preferences explicitly request breaks
 - Use your judgment to create an optimal schedule based on the user's preferences and the existing blocks
 - Consider the context: group blocks are already placed, work around them intelligently
 
@@ -1925,14 +2148,16 @@ Place the required personal study blocks for each course in the available slots.
 
 CRITICAL - BLOCK PLACEMENT LOGIC:
 - Read and understand the USER PREFERENCES above (may be in Hebrew or any language)
-- Apply preferences strictly when placing blocks - if user prefers concentrated study, group blocks together; if they prefer breaks, spread them out
+- PREFERENCE: When possible, prefer grouping blocks together (2-3 consecutive hours) for the same course rather than scattered single-hour blocks. Only spread them out if consecutive slots are not available or if preferences explicitly request breaks/gaps.
+- Apply preferences strictly when placing blocks - if user prefers concentrated study, group blocks together (preferred when possible); if they explicitly prefer breaks, spread them out
 - Use your judgment to create an optimal schedule based on the user's preferences and the existing blocks
 - Consider the context: some blocks are already placed (skeleton blocks), work around them intelligently
 - Make intelligent decisions about block length and distribution based on the preferences provided
 
 CRITICAL: 
 - First, read and understand the USER PREFERENCES above (may be in Hebrew or any language)
-- Then apply those preferences strictly when placing blocks
+- PREFERENCE: When possible, prefer creating consecutive blocks (2-3 hours together) for the same course rather than scattered single-hour blocks
+- Then apply those preferences strictly when placing blocks - only use scattered blocks if consecutive slots are not available or if preferences explicitly request breaks
 - Use your judgment to create an optimal schedule based on the user's preferences and the existing blocks
 - Consider the context: some blocks are already placed (skeleton blocks), work around them intelligently
 
@@ -2716,110 +2941,254 @@ async def _run_weekly_auto_for_all_users(week_start_override: Optional[str] = No
                 logging.info(f"👥 [GLOBAL AGENT] Skipping group {course_name} - only {len(member_ids)} active member(s) in this course. Groups must have at least 2 members.")
                 continue
             
-            # Quota calculation for group: use group_preferences if available
-            # This is updated when all members approve a change request
+            # Quota calculation for group: use course_time_preferences.group_hours_per_week from ALL members
+            # Each member specifies how many hours they want for group study (התפלגות הזמן)
+            # We'll use the AVERAGE of all members' preferences
             group_quota = 4  # Default to 4h for group (half of 3*3=9)
+            member_group_hours = []
+            for member_id in member_ids:
+                try:
+                    member_pref_result = client.table("course_time_preferences").select("group_hours_per_week").eq("user_id", member_id).eq("course_number", course_number).limit(1).execute()
+                    if member_pref_result.data and member_pref_result.data[0].get("group_hours_per_week") is not None:
+                        member_hours = member_pref_result.data[0]["group_hours_per_week"]
+                        member_group_hours.append(member_hours)
+                        logging.info(f"   Member {member_id} course_time_preferences: group_hours_per_week={member_hours}")
+                except Exception as member_pref_err:
+                    logging.warning(f"Could not load course_time_preferences for member {member_id}: {member_pref_err}")
+            
+            # If we have member preferences, use their average; otherwise fall back to group_preferences
+            if member_group_hours:
+                group_quota = round(sum(member_group_hours) / len(member_group_hours))
+                logging.info(f"✅ [GLOBAL AGENT] Using AVERAGE of members' group_hours_per_week: {group_quota}h (from {len(member_group_hours)} members: {member_group_hours})")
+            else:
+                # Fallback to group_preferences.preferred_hours_per_week
+                try:
+                    group_pref_result = client.table("group_preferences").select("preferred_hours_per_week").eq("group_id", group_id).limit(1).execute()
+                    if group_pref_result.data and group_pref_result.data[0].get("preferred_hours_per_week") is not None:
+                        group_quota = group_pref_result.data[0]["preferred_hours_per_week"]
+                        logging.info(f"⚠️ [GLOBAL AGENT] No member preferences found, using group_preferences: {group_quota}h per week")
+                except Exception as gp_err:
+                    logging.warning(f"Could not load group_preferences: {gp_err}")
+                    logging.info(f"⚠️ [GLOBAL AGENT] Using default group_quota: {group_quota}h")
+            
+            # 4. Global Group Synchronization with LLM (same as generate_weekly_plan)
+            # Check if group blocks already exist for this group and week
+            existing_gb = client.table("group_plan_blocks").select("*").eq("group_id", group_id).eq("week_start", week_start).execute()
+            if existing_gb.data and len(existing_gb.data) > 0:
+                logging.info(f"   ✅ [GLOBAL AGENT] Group blocks already exist for group {group_id}, using existing blocks")
+                # Ensure all members have weekly_plan_blocks for these existing group blocks
+                for member_id in member_ids:
+                    try:
+                        member_plan_result = client.table("weekly_plans").select("id").eq("user_id", member_id).eq("week_start", week_start).limit(1).execute()
+                        if not member_plan_result.data:
+                            plan_result = client.table("weekly_plans").insert({
+                                "user_id": member_id,
+                                "week_start": week_start,
+                                "source": "auto"
+                            }).execute()
+                            if plan_result.data:
+                                member_plan_id = plan_result.data[0]["id"]
+                            else:
+                                continue
+                        else:
+                            member_plan_id = member_plan_result.data[0]["id"]
+                        
+                        # Check if this member already has these group blocks
+                        existing_member_blocks = client.table("weekly_plan_blocks").select("id").eq("plan_id", member_plan_id).eq("work_type", "group").eq("course_number", course_number).execute()
+                        existing_slots = {(b.get("day_of_week"), b.get("start_time")) for b in (existing_member_blocks.data or [])}
+                        
+                        # Create weekly_plan_blocks for this member (only if they don't exist)
+                        member_blocks = []
+                        for block in existing_gb.data:
+                            slot_key = (block["day_of_week"], block["start_time"])
+                            if slot_key not in existing_slots:
+                                member_blocks.append({
+                                    "plan_id": member_plan_id,
+                                    "user_id": member_id,
+                                    "course_number": course_number,
+                                    "course_name": course_name,
+                                    "work_type": "group",
+                                    "day_of_week": block["day_of_week"],
+                                    "start_time": block["start_time"],
+                                    "end_time": block["end_time"],
+                                    "is_locked": False,
+                                    "source": "auto"
+                                })
+                        
+                        if member_blocks:
+                            client.table("weekly_plan_blocks").insert(member_blocks).execute()
+                            logging.info(f"   ✅ [GLOBAL AGENT] Created {len(member_blocks)} weekly_plan_blocks for member {member_id} (from existing group_plan_blocks)")
+                    except Exception as member_err:
+                        logging.error(f"   ❌ [GLOBAL AGENT] Error creating blocks for member {member_id}: {member_err}", exc_info=True)
+                continue
+            
+            # Calculate common free slots for ALL members
+            all_members_blocked = set()
+            for member_id in member_ids:
+                if member_id in user_blocked_slots:
+                    all_members_blocked.update(user_blocked_slots[member_id])
+            
+            # Find common free slots (available for ALL members)
+            common_free_slots = [(day, time) for day in range(7) for time in time_slots 
+                                if (day, time) not in all_members_blocked]
+            
+            if not common_free_slots:
+                logging.warning(f"   ⚠️ [GLOBAL AGENT] No common free slots found for group {group_id} with {len(member_ids)} members, skipping group blocks")
+                continue
+            
+            # CRITICAL: Ensure group_quota is at least 1 if group exists (even if no preferences)
+            # This ensures all groups get blocks if they exist
+            if group_quota <= 0:
+                logging.warning(f"   ⚠️ [GLOBAL AGENT] group_quota is {group_quota} for group {group_id}, setting to default 2h")
+                group_quota = 2  # Default minimum for any group
+            
+            # Load group preferences for LLM
+            group_preferences_raw = ""
+            group_preferences_summary = {}
             try:
-                group_pref_result = client.table("group_preferences").select("preferred_hours_per_week").eq("group_id", group_id).limit(1).execute()
-                if group_pref_result.data and group_pref_result.data[0].get("preferred_hours_per_week") is not None:
-                    group_quota = group_pref_result.data[0]["preferred_hours_per_week"]
-                    logging.info(f"Using group_preferences for group {group_id}: {group_quota}h per week")
+                group_pref_result = client.table("group_preferences").select("preferences_raw, preferences_summary").eq("group_id", group_id).limit(1).execute()
+                if group_pref_result.data:
+                    group_preferences_raw = group_pref_result.data[0].get("preferences_raw", "")
+                    group_preferences_summary = group_pref_result.data[0].get("preferences_summary", {})
             except Exception as gp_err:
-                logging.warning(f"Could not load group_preferences: {gp_err}")
+                logging.warning(f"Could not load group_preferences for LLM: {gp_err}")
             
-            # 4. Global Group Synchronization
-            allocated_count = 0
-            daily_ranges = {} # Track ranges for combined message
+            # Use LLM to plan group blocks (same as generate_weekly_plan)
+            created_group_blocks = []
+            llm_group_result = await _plan_group_blocks_with_llm(
+                group_id=str(group_id),
+                course_number=course_number,
+                course_name=course_name,
+                group_quota=group_quota,
+                common_free_slots=common_free_slots,
+                group_preferences_raw=group_preferences_raw,
+                group_preferences_summary=group_preferences_summary,
+            )
             
-            for day in range(7):
-                if allocated_count >= group_quota: break
-                
-                # Look for a 2-hour block
-                for i in range(len(time_slots) - 1):
-                    if allocated_count >= group_quota: break
-                    t1, t2 = time_slots[i], time_slots[i+1]
-                    
-                    # Check all members
-                    all_free = True
+            if llm_group_result.get("success") and llm_group_result.get("group_blocks"):
+                logging.info(
+                    f"   ✅ [GLOBAL AGENT][LLM] Planned {len(llm_group_result.get('group_blocks', []))} "
+                    f"group blocks for group {group_id}"
+                )
+                for blk in llm_group_result.get("group_blocks", []):
+                    day = blk.get("day_index")
+                    t = blk.get("start_time")
+                    if day is None or not t:
+                        continue
+                    if (day, t) not in common_free_slots:
+                        logging.warning(
+                            f"   ⚠️ [GLOBAL AGENT][LLM] Slot ({day}, {t}) not in common_free_slots, skipping"
+                        )
+                        continue
+                    created_group_blocks.append({
+                        "group_id": group_id,
+                        "week_start": week_start,
+                        "course_number": course_number,
+                        "day_of_week": day,
+                        "start_time": t,
+                        "end_time": _minutes_to_time(_time_to_minutes(t) + 60),
+                        "created_by": member_ids[0]
+                    })
+                    # Mark as blocked for all members
                     for mid in member_ids:
                         if mid in user_blocked_slots:
-                            if (day, t1) in user_blocked_slots[mid] or (day, t2) in user_blocked_slots[mid]:
-                                all_free = False
-                                break
+                            user_blocked_slots[mid].add((day, t))
+            else:
+                # Fallback: deterministic 2-hour blocks from common_free_slots
+                logging.warning(
+                    f"   ⚠️ [GLOBAL AGENT][LLM] LLM planning failed for group {group_id} "
+                    f"or returned no blocks. Falling back to deterministic allocation."
+                )
+                allocated_hours = 0
+                for day in range(7):
+                    if allocated_hours >= group_quota:
+                        break
+                    for i in range(len(time_slots) - 1):
+                        if allocated_hours >= group_quota:
+                            break
+                        t1, t2 = time_slots[i], time_slots[i+1]
+                        if (day, t1) in common_free_slots and (day, t2) in common_free_slots:
+                            # Found 2-hour block that all members are free
+                            for t in [t1, t2]:
+                                created_group_blocks.append({
+                                    "group_id": group_id,
+                                    "week_start": week_start,
+                                    "course_number": course_number,
+                                    "day_of_week": day,
+                                    "start_time": t,
+                                    "end_time": _minutes_to_time(_time_to_minutes(t) + 60),
+                                    "created_by": member_ids[0]
+                                })
+                                # Mark as blocked for all members
+                                for mid in member_ids:
+                                    if mid in user_blocked_slots:
+                                        user_blocked_slots[mid].add((day, t))
+                                allocated_hours += 1
+            
+            # Track daily ranges for message (only if we created new blocks)
+            daily_ranges = {}
+            
+            if created_group_blocks:
+                # Insert group_plan_blocks
+                insert_result = client.table("group_plan_blocks").insert(created_group_blocks).execute()
+                if insert_result.data:
+                    logging.info(f"   ✅ [GLOBAL AGENT] Created {len(created_group_blocks)} synchronized group_plan_blocks for group {group_id}")
                     
-                    if all_free:
-                        # Found a 2h block!
-                        new_blocks = []
-                        end_t = _minutes_to_time(_time_to_minutes(t2) + 60)
-                        
-                        for t in [t1, t2]:
-                            new_blocks.append({
-                                "group_id": group_id,
-                                "week_start": week_start,
-                                "course_number": course_number,
-                                "day_of_week": day,
-                                "start_time": t,
-                                "end_time": _minutes_to_time(_time_to_minutes(t) + 60),
-                                "created_by": member_ids[0]
-                            })
-                            for mid in member_ids:
-                                if mid in user_blocked_slots:
-                                    user_blocked_slots[mid].add((day, t))
-                        
-                        # Insert group_plan_blocks
-                        client.table("group_plan_blocks").insert(new_blocks).execute()
-                        logging.info(f"✅ [GLOBAL AGENT] Created {len(new_blocks)} group_plan_blocks for group {group_id}")
-                        
-                        # CRITICAL: Also create weekly_plan_blocks for ALL members of the group
-                        # This ensures the blocks appear in each user's weekly plan
-                        for member_id in member_ids:
-                            try:
-                                # Get or create plan for this member
-                                member_plan_result = client.table("weekly_plans").select("id").eq("user_id", member_id).eq("week_start", week_start).limit(1).execute()
-                                if not member_plan_result.data:
-                                    # Create new plan if it doesn't exist
-                                    plan_result = client.table("weekly_plans").insert({
-                                        "user_id": member_id,
-                                        "week_start": week_start,
-                                        "source": "auto"
-                                    }).execute()
-                                    if plan_result.data:
-                                        plan_id = plan_result.data[0]["id"]
-                                    else:
-                                        logging.warning(f"⚠️ [GLOBAL AGENT] Failed to create weekly_plan for member {member_id}, skipping blocks")
-                                        continue
+                    # CRITICAL: Create weekly_plan_blocks for ALL members of the group
+                    # This ensures the blocks appear in each user's weekly plan
+                    for member_id in member_ids:
+                        try:
+                            # Get or create plan for this member
+                            member_plan_result = client.table("weekly_plans").select("id").eq("user_id", member_id).eq("week_start", week_start).limit(1).execute()
+                            if not member_plan_result.data:
+                                plan_result = client.table("weekly_plans").insert({
+                                    "user_id": member_id,
+                                    "week_start": week_start,
+                                    "source": "auto"
+                                }).execute()
+                                if plan_result.data:
+                                    member_plan_id = plan_result.data[0]["id"]
                                 else:
-                                    plan_id = member_plan_result.data[0]["id"]
+                                    logging.warning(f"⚠️ [GLOBAL AGENT] Failed to create weekly_plan for member {member_id}, skipping blocks")
+                                    continue
+                            else:
+                                member_plan_id = member_plan_result.data[0]["id"]
+                            
+                            # Create weekly_plan_blocks for this member
+                            member_blocks = []
+                            for block in created_group_blocks:
+                                member_blocks.append({
+                                    "plan_id": member_plan_id,
+                                    "user_id": member_id,
+                                    "course_number": course_number,
+                                    "course_name": course_name,
+                                    "work_type": "group",
+                                    "day_of_week": block["day_of_week"],
+                                    "start_time": block["start_time"],
+                                    "end_time": block["end_time"],
+                                    "is_locked": False,
+                                    "source": "auto"
+                                })
                                 
-                                # Create weekly_plan_blocks for this member (one for each hour in the 2-hour block)
-                                member_blocks = []
-                                for block in new_blocks:
-                                    member_blocks.append({
-                                        "plan_id": plan_id,
-                                        "user_id": member_id,
-                                        "course_number": course_number,
-                                        "course_name": course_name,
-                                        "work_type": "group",
-                                        "day_of_week": block["day_of_week"],
-                                        "start_time": block["start_time"],
-                                        "end_time": block["end_time"],
-                                        "is_locked": False,
-                                        "source": "auto"
-                                    })
-                                
-                                if member_blocks:
-                                    client.table("weekly_plan_blocks").insert(member_blocks).execute()
-                                    logging.info(f"✅ [GLOBAL AGENT] Created {len(member_blocks)} weekly_plan_blocks for member {member_id} (group {group_id})")
-                            except Exception as member_block_err:
-                                logging.error(f"❌ [GLOBAL AGENT] Error creating weekly_plan_blocks for member {member_id}: {member_block_err}", exc_info=True)
-                        
-                        allocated_count += 2
-                        
-                        if day not in daily_ranges: daily_ranges[day] = []
-                        daily_ranges[day].append(f"{t1}-{end_t}")
-                        logging.info(f"👥 [GLOBAL AGENT] Scheduled 2h group for {course_name} on day {day} at {t1}")
+                                # Track for message (only once per unique slot)
+                                day = block["day_of_week"]
+                                if day not in daily_ranges:
+                                    daily_ranges[day] = []
+                                slot_str = f"{block['start_time']}-{block['end_time']}"
+                                if slot_str not in daily_ranges[day]:
+                                    daily_ranges[day].append(slot_str)
+                            
+                            if member_blocks:
+                                client.table("weekly_plan_blocks").insert(member_blocks).execute()
+                                logging.info(f"✅ [GLOBAL AGENT] Created {len(member_blocks)} weekly_plan_blocks for member {member_id} (group {group_id})")
+                        except Exception as member_block_err:
+                            logging.error(f"❌ [GLOBAL AGENT] Error creating weekly_plan_blocks for member {member_id}: {member_block_err}", exc_info=True)
+                else:
+                    logging.error(f"   ❌ [GLOBAL AGENT] Failed to insert group_plan_blocks for group {group_id}")
+            else:
+                logging.warning(f"   ⚠️ [GLOBAL AGENT] Could not create group blocks for group {group_id} - no suitable slots found")
 
-            # Post ONE consolidated update if any blocks were scheduled
+            # Post ONE consolidated update if any NEW blocks were scheduled
             if daily_ranges:
                 try:
                     day_names = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
@@ -3358,104 +3727,46 @@ async def get_weekly_plan(
         plan = plans_for_week.data[0] if plans_for_week.data else None
         
         # Fetch blocks for ALL plans of this week
+        # CRITICAL: Query directly by plan_ids - this is the simplest and most reliable method
         blocks = []
         if plan_ids_for_week:
             # Try with admin client first (to bypass RLS), then fallback to regular client
             blocks_client = supabase_admin if supabase_admin else client
             
-            # PRIMARY METHOD: Query directly by user_id (like constraints do!), then filter by plan_id
-            # This is more reliable than querying by plan_id directly
-            logging.info(f"📋 [GET_WEEKLY_PLAN] Querying blocks directly by user_id (like constraints method)...")
+            logging.info(f"📋 [GET_WEEKLY_PLAN] Querying blocks directly by plan_ids: {plan_ids_for_week}")
             logging.info(f"   Using {'admin' if blocks_client == supabase_admin else 'regular'} client")
-            logging.info(f"   Query: weekly_plan_blocks where user_id={user_id}")
+            
+            # PRIMARY METHOD: Query directly by plan_ids AND user_id - this gets ALL blocks for this user's plans
             try:
-                all_user_blocks_direct = blocks_client.table("weekly_plan_blocks").select("*").eq("user_id", user_id).order("day_of_week").order("start_time").execute()
-                all_user_blocks_list = all_user_blocks_direct.data or []
-                logging.info(f"   ✅ Found {len(all_user_blocks_list)} total blocks for user {user_id}")
-                # Log sample of plan_ids in blocks
-                if all_user_blocks_list:
-                    sample_plan_ids = list(set([b.get("plan_id") for b in all_user_blocks_list[:10]]))
-                    logging.info(f"   Sample plan_ids in blocks: {sample_plan_ids}")
-            except Exception as e:
-                logging.error(f"   ❌ Error querying blocks: {e}")
-                all_user_blocks_list = []
-            
-            # Get all plans to map plan_id -> week_start
-            # CRITICAL: Query ALL plans for this user (not just by week_start) to build complete map
-            all_plans_map = {}
-            all_plans_result = blocks_client.table("weekly_plans").select("id, week_start").eq("user_id", user_id).execute()
-            for p in (all_plans_result.data or []):
-                all_plans_map[p["id"]] = p["week_start"]
-            
-            logging.info(f"   Plans map: {all_plans_map}")
-            logging.info(f"   Requested week_start: {week_start}")
-            logging.info(f"   Plan IDs for week: {plan_ids_for_week}")
-            
-            # CRITICAL: Check if plan_ids_for_week are in all_plans_map
-            missing_plans = [pid for pid in plan_ids_for_week if pid not in all_plans_map]
-            if missing_plans:
-                logging.warning(f"   ⚠️ Plan IDs not found in all_plans_map: {missing_plans}")
-                logging.warning(f"   This means the plans query didn't find them. Trying direct query...")
-                # Try to get these plans directly
-                for pid in missing_plans:
-                    try:
-                        direct_plan = blocks_client.table("weekly_plans").select("id, week_start").eq("id", pid).execute()
-                        if direct_plan.data:
-                            p = direct_plan.data[0]
-                            all_plans_map[p["id"]] = p["week_start"]
-                            logging.warning(f"   ✅ Found plan {pid} via direct query: week_start={p.get('week_start')}")
-                    except Exception as e:
-                        logging.error(f"   ❌ Error querying plan {pid} directly: {e}")
-            
-            # Filter blocks that belong to plans with the requested week_start
-            blocks = [b for b in all_user_blocks_list if all_plans_map.get(b.get("plan_id")) == week_start]
-            logging.info(f"   After filtering by week_start={week_start}: {len(blocks)} blocks")
-            
-            # Debug: Check if blocks exist for the plan_ids we found
-            if not blocks and plan_ids_for_week:
-                logging.warning(f"   ⚠️ No blocks found after filtering. Checking blocks for each plan_id...")
-                for pid in plan_ids_for_week:
-                    plan_week = all_plans_map.get(pid)
-                    blocks_for_plan = [b for b in all_user_blocks_list if b.get("plan_id") == pid]
-                    logging.warning(f"   Plan {pid}: week_start={plan_week}, blocks_count={len(blocks_for_plan)}")
-                    if plan_week != week_start:
-                        logging.warning(f"   ⚠️ Plan {pid} has week_start={plan_week} but we're looking for {week_start}!")
-                    elif blocks_for_plan:
-                        logging.warning(f"   ✅ Found {len(blocks_for_plan)} blocks for plan {pid}, but they didn't match week_start filter!")
-                        # If blocks exist but weren't filtered, add them manually
-                        blocks.extend(blocks_for_plan)
-                        logging.warning(f"   ✅ Manually added {len(blocks_for_plan)} blocks to result")
-            
-            # If that didn't work, try the original plan_id method as fallback
-            if not blocks:
-                logging.warning(f"⚠️ [GET_WEEKLY_PLAN] Direct user_id query found 0 blocks, trying plan_id method as fallback...")
-                blocks_result = blocks_client.table("weekly_plan_blocks").select("*").in_("plan_id", plan_ids_for_week).order("day_of_week").order("start_time").execute()
+                blocks_result = blocks_client.table("weekly_plan_blocks").select("*").in_("plan_id", plan_ids_for_week).eq("user_id", user_id).order("day_of_week").order("start_time").execute()
                 blocks = blocks_result.data or []
-                logging.info(f"📋 [GET_WEEKLY_PLAN] Found {len(blocks)} blocks via plan_ids: {plan_ids_for_week} (using {'admin' if supabase_admin else 'regular'} client)")
+                logging.info(f"✅ [GET_WEEKLY_PLAN] Found {len(blocks)} blocks via plan_ids + user_id query (using {'admin' if supabase_admin else 'regular'} client)")
+            except Exception as e:
+                logging.error(f"❌ [GET_WEEKLY_PLAN] Error querying blocks by plan_ids + user_id: {e}")
+                blocks = []
+            
+            # If query returned empty but we have plan_ids, try alternative query method (query each plan_id individually)
+            if not blocks and plan_ids_for_week:
+                logging.warning(f"⚠️ [GET_WEEKLY_PLAN] Query returned 0 blocks but plan_ids exist: {plan_ids_for_week}")
+                logging.warning(f"   Trying alternative query method: querying each plan_id individually with user_id...")
+                all_blocks = []
+                for pid in plan_ids_for_week:
+                    try:
+                        individual_query = blocks_client.table("weekly_plan_blocks").select("*").eq("plan_id", pid).eq("user_id", user_id).order("day_of_week").order("start_time").execute()
+                        individual_blocks = individual_query.data or []
+                        if individual_blocks:
+                            logging.info(f"   ✅ Plan {pid}: Found {len(individual_blocks)} blocks via individual query (user_id={user_id})")
+                            all_blocks.extend(individual_blocks)
+                        else:
+                            logging.warning(f"   ⚠️ Plan {pid}: 0 blocks found via individual query (user_id={user_id})")
+                    except Exception as e:
+                        logging.error(f"   ❌ Error querying plan {pid}: {e}")
                 
-                # If query returned empty but we have plan_ids, try alternative query method
-                if not blocks and plan_ids_for_week:
-                    logging.warning(f"⚠️ [GET_WEEKLY_PLAN] Query returned 0 blocks but plan_ids exist: {plan_ids_for_week}")
-                    logging.warning(f"   Trying alternative query method: querying each plan_id individually...")
-                    # Try querying each plan_id individually (in case .in_() has issues)
-                    all_blocks = []
-                    for pid in plan_ids_for_week:
-                        try:
-                            individual_query = blocks_client.table("weekly_plan_blocks").select("*").eq("plan_id", pid).order("day_of_week").order("start_time").execute()
-                            individual_blocks = individual_query.data or []
-                            if individual_blocks:
-                                logging.warning(f"   ✅ Plan {pid}: Found {len(individual_blocks)} blocks via individual query")
-                                all_blocks.extend(individual_blocks)
-                            else:
-                                logging.warning(f"   ⚠️ Plan {pid}: 0 blocks found via individual query")
-                        except Exception as e:
-                            logging.error(f"   ❌ Error querying plan {pid}: {e}")
-                    
-                    if all_blocks:
-                        logging.warning(f"   ✅ Alternative method found {len(all_blocks)} total blocks! Using these instead.")
-                        blocks = all_blocks
-                    else:
-                        logging.warning(f"   ❌ Alternative method also found 0 blocks. Blocks may not exist or RLS is blocking.")
+                if all_blocks:
+                    logging.info(f"   ✅ Alternative method found {len(all_blocks)} total blocks! Using these instead.")
+                    blocks = all_blocks
+                else:
+                    logging.warning(f"   ❌ Alternative method also found 0 blocks. Blocks may not exist or RLS is blocking.")
             
             # #region agent log
             try:
@@ -3469,32 +3780,31 @@ async def get_weekly_plan(
         else:
             logging.warning(f"⚠️ [GET_WEEKLY_PLAN] No plan_ids found for user {user_id} and week {week_start}")
         
-        # ALSO check for blocks directly by user_id (in case blocks exist but plan is missing or wrong)
-        # This is a fallback to ensure we don't miss any blocks
-        direct_blocks_result = client.table("weekly_plan_blocks").select("*").eq("user_id", user_id).order("day_of_week").order("start_time").execute()
-        all_user_blocks = direct_blocks_result.data or []
-        
-        # Filter to only blocks that belong to plans with the correct week_start
-        if all_user_blocks:
-            all_plans_map = {}
-            all_plans_result = client.table("weekly_plans").select("id, week_start").eq("user_id", user_id).execute()
-            for p in (all_plans_result.data or []):
-                all_plans_map[p["id"]] = p["week_start"]
+        # FALLBACK: Also check for blocks directly by user_id (only if primary query found no blocks)
+        # This is a safety fallback to ensure we don't miss any blocks if plan_ids query failed
+        if not blocks and plan_ids_for_week:
+            logging.warning(f"⚠️ [GET_WEEKLY_PLAN] Primary query found 0 blocks, trying fallback: query by user_id and filter by plan_ids...")
+            direct_blocks_result = client.table("weekly_plan_blocks").select("*").eq("user_id", user_id).order("day_of_week").order("start_time").execute()
+            all_user_blocks = direct_blocks_result.data or []
             
-            direct_blocks_for_week = []
-            for b in all_user_blocks:
-                block_plan_id = b.get("plan_id")
-                if block_plan_id and all_plans_map.get(block_plan_id) == week_start:
-                    # Check if this block is already in blocks (to avoid duplicates)
-                    if not any(existing.get("id") == b.get("id") for existing in blocks):
+            if all_user_blocks:
+                logging.info(f"   Found {len(all_user_blocks)} total blocks for user, filtering by plan_ids...")
+                # Filter to only blocks that belong to plans with the requested week_start
+                direct_blocks_for_week = []
+                for b in all_user_blocks:
+                    block_plan_id = b.get("plan_id")
+                    if block_plan_id and block_plan_id in plan_ids_for_week:
                         direct_blocks_for_week.append(b)
-                        logging.info(f"🔍 [GET_WEEKLY_PLAN] Found additional block via direct query: {b.get('course_name')} ({b.get('work_type')}), day={b.get('day_of_week')}, time={b.get('start_time')}, plan_id={block_plan_id}")
-            
-            if direct_blocks_for_week:
-                blocks.extend(direct_blocks_for_week)
-                logging.info(f"✅ [GET_WEEKLY_PLAN] Added {len(direct_blocks_for_week)} additional blocks found via direct query")
+                        logging.info(f"   ✅ Found block: {b.get('course_name')} ({b.get('work_type')}), day={b.get('day_of_week')}, time={b.get('start_time')}, plan_id={block_plan_id}")
+                
+                if direct_blocks_for_week:
+                    blocks = direct_blocks_for_week
+                    logging.info(f"✅ [GET_WEEKLY_PLAN] Fallback method found {len(blocks)} blocks")
+                else:
+                    logging.warning(f"⚠️ [GET_WEEKLY_PLAN] Fallback method found blocks but none matched plan_ids {plan_ids_for_week}")
         
         # Add blocks from semester_schedule_items (same as מערכת סמסטרית) so weekly view shows profile course hours
+        # CRITICAL: Always add semester blocks, even if there's no weekly plan - they are hard constraints
         try:
             sem_res = client.table("semester_schedule_items").select("id, course_name, type, days, start_time, end_time").eq("user_id", user_id).execute()
             courses_res = client.table("courses").select("course_number, course_name").eq("user_id", user_id).execute()
@@ -3503,6 +3813,8 @@ async def get_weekly_plan(
                 name = (c.get("course_name") or "").strip()
                 if name:
                     course_name_to_number[name] = c.get("course_number") or ""
+            
+            semester_blocks_added = 0
             for item in (sem_res.data or []):
                 days_raw = item.get("days")
                 if isinstance(days_raw, str):
@@ -3514,32 +3826,47 @@ async def get_weekly_plan(
                     days_list = list(days_raw) if days_raw else []
                 if not days_list:
                     continue
-                day_int = int(days_list[0]) if days_list else None
-                if day_int is None or day_int < 0 or day_int > 6:
-                    continue
+                
                 start_t = (item.get("start_time") or "").strip()
                 end_t = (item.get("end_time") or "").strip()
                 if not start_t or not end_t:
                     continue
                 course_name = (item.get("course_name") or "").strip()
                 course_number = course_name_to_number.get(course_name, "")
-                virtual_block = {
-                    "id": f"semester-{item.get('id')}",
-                    "plan_id": plan_ids_for_week[0] if plan_ids_for_week else None,
-                    "user_id": user_id,
-                    "course_number": str(course_number) if course_number else "",
-                    "course_name": course_name,
-                    "work_type": "group",
-                    "day_of_week": day_int,
-                    "start_time": start_t,
-                    "end_time": end_t,
-                    "source": "semester"
-                }
-                blocks.append(virtual_block)
-            if sem_res.data:
-                logging.info(f"📋 [GET_WEEKLY_PLAN] Added {len(sem_res.data)} blocks from semester_schedule_items (profile courses)")
+                
+                # CRITICAL: Create a block for EACH day in days_list, not just the first one!
+                # This ensures all semester schedule items are displayed correctly
+                for day_value in days_list:
+                    try:
+                        day_int = int(day_value) if day_value is not None else None
+                        if day_int is None or day_int < 0 or day_int > 6:
+                            continue
+                        
+                        virtual_block = {
+                            "id": f"semester-{item.get('id')}-day-{day_int}",
+                            "plan_id": plan_ids_for_week[0] if plan_ids_for_week else None,
+                            "user_id": user_id,
+                            "course_number": str(course_number) if course_number else "",
+                            "course_name": course_name,
+                            "work_type": "semester",  # Changed from "group" to "semester" to distinguish from study groups
+                            "day_of_week": day_int,
+                            "start_time": start_t,
+                            "end_time": end_t,
+                            "source": "semester",
+                            "type": item.get("type", "")  # Include type (lecture/tutorial) for display
+                        }
+                        blocks.append(virtual_block)
+                        semester_blocks_added += 1
+                    except (ValueError, TypeError) as e:
+                        logging.warning(f"   ⚠️ Error parsing day_value {day_value} for semester item {item.get('id')}: {e}")
+                        continue
+            
+            if semester_blocks_added > 0:
+                logging.info(f"📋 [GET_WEEKLY_PLAN] Added {semester_blocks_added} semester blocks from {len(sem_res.data or [])} semester_schedule_items")
+            elif sem_res.data:
+                logging.warning(f"⚠️ [GET_WEEKLY_PLAN] Found {len(sem_res.data)} semester_schedule_items but added 0 blocks (check days/start_time/end_time)")
         except Exception as sem_err:
-            logging.warning(f"   Could not add semester items to weekly plan: {sem_err}")
+            logging.error(f"❌ [GET_WEEKLY_PLAN] Could not add semester items to weekly plan: {sem_err}", exc_info=True)
         
         # Remove duplicates (in case same block was found both ways)
         seen_ids = set()
@@ -3557,9 +3884,11 @@ async def get_weekly_plan(
             # Check if there are any blocks for this user and week (regardless of plan_id)
             all_user_blocks = client.table("weekly_plan_blocks").select("*").eq("user_id", user_id).execute()
             # Filter by week_start by checking if blocks belong to plans with this week_start
-            all_plans = client.table("weekly_plans").select("id, week_start").eq("user_id", user_id).execute()
-            plan_week_map = {p["id"]: p["week_start"] for p in (all_plans.data or [])}
-            blocks_for_week = [b for b in (all_user_blocks.data or []) if plan_week_map.get(b.get("plan_id")) == week_start]
+            # CRITICAL: Use plan_ids_for_week directly instead of comparing week_start strings
+            # This avoids issues with date format/type mismatches
+            all_plans = client.table("weekly_plans").select("id, week_start").eq("user_id", user_id).eq("week_start", week_start).execute()
+            plan_ids_for_week_fallback = [p["id"] for p in (all_plans.data or [])]
+            blocks_for_week = [b for b in (all_user_blocks.data or []) if b.get("plan_id") in plan_ids_for_week_fallback]
             if blocks_for_week:
                 logging.warning(f"⚠️ Found {len(blocks_for_week)} blocks for week {week_start} but no plan - using these blocks anyway")
                 blocks = blocks_for_week
@@ -3567,8 +3896,17 @@ async def get_weekly_plan(
                 if not plan:
                     plan = {"id": None, "user_id": user_id, "week_start": week_start, "source": "orphaned_blocks"}
         
-        # For group blocks, add group_id by looking up group_plan_blocks (batch query for performance)
-        group_blocks = [b for b in blocks if b.get("work_type") == "group"]
+        # For group STUDY blocks, add group_id by looking up group_plan_blocks (batch query for performance)
+        # IMPORTANT:
+        # - We only want to match "real" group study sessions (from weekly_plan_blocks / planner),
+        #   NOT the semester_schedule_items that we inject as virtual blocks with source="semester"
+        #   and work_type="group" just for display.
+        # - Those semester blocks often have half-hour times (e.g., 09:30, 11:30) and should NOT be
+        #   bound to study_groups / group_plan_blocks.
+        group_blocks = [
+            b for b in blocks
+            if b.get("work_type") == "group" and b.get("source") != "semester"
+        ]
         # #region agent log
         try:
             with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
@@ -3660,11 +3998,16 @@ async def get_weekly_plan(
         if blocks:
             group_count = len([b for b in blocks if b.get("work_type") == "group"])
             personal_count = len([b for b in blocks if b.get("work_type") == "personal"])
-            logging.info(f"   - Group blocks: {group_count}, Personal blocks: {personal_count}")
-            # Log sample blocks
-            sample_blocks = blocks[:5]
-            for b in sample_blocks:
-                logging.info(f"   - Sample block: {b.get('course_name')} ({b.get('work_type')}), day={b.get('day_of_week')}, time={b.get('start_time')}, plan_id={b.get('plan_id')}")
+            semester_count = len([b for b in blocks if b.get("work_type") == "semester"])
+            other_count = len([b for b in blocks if b.get("work_type") not in ["group", "personal", "semester"]])
+            logging.info(f"   - Group blocks: {group_count}, Personal blocks: {personal_count}, Semester blocks: {semester_count}, Other: {other_count}")
+            logging.info(f"   - Total breakdown: {group_count + personal_count + semester_count + other_count} blocks")
+            # Log ALL blocks (not just sample) for debugging
+            logging.info(f"   📋 ALL {len(blocks)} blocks:")
+            for i, b in enumerate(blocks, 1):
+                work_type = b.get('work_type', 'unknown')
+                source = b.get('source', 'unknown')
+                logging.info(f"      {i}. {b.get('course_name', 'N/A')} ({work_type}, source={source}), day={b.get('day_of_week')}, time={b.get('start_time')}")
         else:
             logging.warning(f"⚠️ [GET_WEEKLY_PLAN] No blocks found for user {user_id}, week {week_start}")
             # Double-check: query directly from Supabase
@@ -4102,38 +4445,16 @@ async def generate_weekly_plan(
                 # CRITICAL: Do NOT check for orphaned blocks if no plans exist - this could delete blocks from other weeks!
                 # Only clean up if we actually found plans to delete
             
-            # Step 5: Clean up ALL group_plan_blocks for this week (not just user's groups)
-            # CRITICAL: This must happen BEFORE creating new plans to avoid conflicts
-            # We delete ALL group_plan_blocks for the week to ensure clean slate for synchronized group planning
-            try:
-                logging.info(f"   🗑️ Deleting ALL group_plan_blocks for week_start={week_start} (ensuring clean slate for synchronized planning)")
-                group_blocks_deleted = cleanup_client.table("group_plan_blocks").delete().eq("week_start", week_start).execute()
-                deleted_count = len(group_blocks_deleted.data) if group_blocks_deleted.data else 0
-                logging.info(f"   ✅ Deleted {deleted_count} group_plan_blocks for week {week_start} (response had data: {group_blocks_deleted.data is not None})")
-                
-                # Also delete weekly_plan_blocks that are group blocks for this week
-                # Get all plans for this week to find group blocks
-                all_plans_week = cleanup_client.table("weekly_plans").select("id").eq("week_start", week_start).execute()
-                all_plan_ids_week = [p["id"] for p in (all_plans_week.data or [])]
-                if all_plan_ids_week:
-                    group_blocks_in_weekly = cleanup_client.table("weekly_plan_blocks").delete().in_("plan_id", all_plan_ids_week).eq("work_type", "group").execute()
-                    deleted_weekly_group = len(group_blocks_in_weekly.data) if group_blocks_in_weekly.data else 0
-                    logging.info(f"   ✅ Deleted {deleted_weekly_group} group weekly_plan_blocks for week {week_start}")
-                
-                # Verify deletion
-                verify_group_blocks = cleanup_client.table("group_plan_blocks").select("id").eq("week_start", week_start).execute()
-                if verify_group_blocks.data and len(verify_group_blocks.data) > 0:
-                    logging.warning(f"   ⚠️ WARNING: {len(verify_group_blocks.data)} group_plan_blocks still exist after deletion! Force deleting...")
-                    for block in verify_group_blocks.data:
-                        try:
-                            cleanup_client.table("group_plan_blocks").delete().eq("id", block["id"]).execute()
-                        except:
-                            pass
-                    logging.info(f"   ✅ Force deleted remaining group_plan_blocks")
-                else:
-                    logging.info(f"   ✅ Verified: No group_plan_blocks found after deletion")
-            except Exception as group_del_err:
-                logging.error(f"   ❌ Error deleting group_plan_blocks: {group_del_err}", exc_info=True)
+            # Step 5: DO NOT delete group_plan_blocks here!
+            # CRITICAL: group_plan_blocks are created and managed by the global agent (_run_weekly_auto_for_all_users)
+            # They should NOT be deleted by individual user planning, as they are shared across all group members
+            # If we delete them here, we break synchronization between group members
+            # The global agent handles cleanup of group_plan_blocks at the beginning of the weekly planning cycle
+            logging.info(f"   ℹ️ [GENERATE] Skipping group_plan_blocks cleanup - these are managed by global agent and should not be deleted here")
+            # NOTE: We also do NOT delete group weekly_plan_blocks here because:
+            # 1. They are created by the global agent for all members
+            # 2. They will be cleaned up as part of the user's plan cleanup above (if the plan is deleted)
+            # 3. If the plan is not deleted, we preserve the group blocks and restore them to the new plan
             
             logging.info(f"✅ [GENERATE] Cleanup complete for user {user_id}, week {week_start}")
         except Exception as cleanup_err:
@@ -4261,7 +4582,8 @@ async def generate_weekly_plan(
 
         # STEP 1: Create synchronized group blocks for ALL groups BEFORE personal blocks
         # This ensures all group members have the same group blocks at the same time
-        logging.info(f"🔄 [GENERATE] STEP 1: Creating synchronized group blocks for all user's groups")
+        # and uses LLM (with a safe fallback) to choose the best common slots.
+        logging.info(f"🔄 [GENERATE] STEP 1: Creating synchronized group blocks for all user's groups (LLM + fallback)")
         synchronized_group_blocks = []  # Will store group_plan_blocks created
         if user_group_ids:
             for group_id in user_group_ids:
@@ -4282,6 +4604,57 @@ async def generate_weekly_plan(
                             time = block["start_time"]
                             if (day, time) in available_slots:
                                 available_slots.remove((day, time))
+                        
+                        # CRITICAL: Also create weekly_plan_blocks for ALL members if they don't exist yet
+                        # This ensures all members see the same group blocks even if they didn't run planning
+                        group_members_result = client.table("group_members").select("user_id").eq("group_id", group_id).eq("status", "approved").execute()
+                        member_ids = [m["user_id"] for m in (group_members_result.data or [])]
+                        
+                        for member_id in member_ids:
+                            try:
+                                # Get or create plan for this member
+                                member_plan_result = client.table("weekly_plans").select("id").eq("user_id", member_id).eq("week_start", week_start).limit(1).execute()
+                                if not member_plan_result.data:
+                                    plan_result = client.table("weekly_plans").insert({
+                                        "user_id": member_id,
+                                        "week_start": week_start,
+                                        "source": "auto"
+                                    }).execute()
+                                    if plan_result.data:
+                                        member_plan_id = plan_result.data[0]["id"]
+                                    else:
+                                        continue
+                                else:
+                                    member_plan_id = member_plan_result.data[0]["id"]
+                                
+                                # Check if this member already has these group blocks
+                                existing_member_blocks = client.table("weekly_plan_blocks").select("id").eq("plan_id", member_plan_id).eq("work_type", "group").eq("course_number", course_number).execute()
+                                existing_slots = {(b.get("day_of_week"), b.get("start_time")) for b in (existing_member_blocks.data or [])}
+                                
+                                # Create weekly_plan_blocks for this member (only if they don't exist)
+                                member_blocks = []
+                                for block in existing_gb.data:
+                                    slot_key = (block["day_of_week"], block["start_time"])
+                                    if slot_key not in existing_slots:
+                                        member_blocks.append({
+                                            "plan_id": member_plan_id,
+                                            "user_id": member_id,
+                                            "course_number": course_number,
+                                            "course_name": course_name,
+                                            "work_type": "group",
+                                            "day_of_week": block["day_of_week"],
+                                            "start_time": block["start_time"],
+                                            "end_time": block["end_time"],
+                                            "is_locked": False,
+                                            "source": "auto"
+                                        })
+                                
+                                if member_blocks:
+                                    client.table("weekly_plan_blocks").insert(member_blocks).execute()
+                                    logging.info(f"   ✅ Created {len(member_blocks)} weekly_plan_blocks for member {member_id} (from existing group_plan_blocks)")
+                            except Exception as member_err:
+                                logging.error(f"   ❌ Error creating blocks for member {member_id}: {member_err}", exc_info=True)
+                        
                         continue
                     
                     # Get all approved members of this group
@@ -4341,34 +4714,107 @@ async def generate_weekly_plan(
                         logging.warning(f"   ⚠️ No common free slots found for group {group_id} with {len(member_ids)} members, skipping group blocks")
                         continue
                     
-                    # Get group quota
-                    group_quota = group_info.get("preferred_hours", 4)
+                    # Get group quota from course_time_preferences.group_hours_per_week (התפלגות הזמן)
+                    # Each member specifies how many hours they want for group study
+                    # We'll use the AVERAGE of all members' preferences
+                    group_quota = 4  # Default
+                    member_group_hours = []
+                    for member_id in member_ids:
+                        try:
+                            member_pref_result = client.table("course_time_preferences").select("group_hours_per_week").eq("user_id", member_id).eq("course_number", course_number).limit(1).execute()
+                            if member_pref_result.data and member_pref_result.data[0].get("group_hours_per_week") is not None:
+                                member_hours = member_pref_result.data[0]["group_hours_per_week"]
+                                member_group_hours.append(member_hours)
+                                logging.info(f"   Member {member_id} course_time_preferences: group_hours_per_week={member_hours}")
+                        except Exception as member_pref_err:
+                            logging.warning(f"Could not load course_time_preferences for member {member_id}: {member_pref_err}")
                     
-                    # Create group blocks (2-hour blocks)
+                    # If we have member preferences, use their average; otherwise fall back to group_info
+                    if member_group_hours:
+                        group_quota = round(sum(member_group_hours) / len(member_group_hours))
+                        logging.info(f"✅ [GENERATE] Using AVERAGE of members' group_hours_per_week: {group_quota}h (from {len(member_group_hours)} members: {member_group_hours})")
+                    else:
+                        # Fallback to group_info.preferred_hours (from group_preferences)
+                        group_quota = group_info.get("preferred_hours", 4)
+                        logging.info(f"⚠️ [GENERATE] No member preferences found, using group_info.preferred_hours: {group_quota}h")
+                    
+                    # CRITICAL: Ensure group_quota is at least 1 if group exists (even if no preferences)
+                    # This ensures all groups get blocks if they exist
+                    if group_quota <= 0:
+                        logging.warning(f"   ⚠️ [GENERATE] group_quota is {group_quota} for group {group_id}, setting to default 2h")
+                        group_quota = 2  # Default minimum for any group
+
+                    # First, try to plan group blocks with LLM using common_free_slots and group preferences
+                    group_preferences_raw = group_info.get("preferences_raw", "")
+                    group_preferences_summary = group_info.get("preferences_summary", {})
                     created_group_blocks = []
-                    allocated_hours = 0
-                    for day in range(7):
-                        if allocated_hours >= group_quota:
-                            break
-                        for i in range(len(time_slots) - 1):
+
+                    llm_group_result = await _plan_group_blocks_with_llm(
+                        group_id=str(group_id),
+                        course_number=course_number,
+                        course_name=course_name or valid_catalog.get(str(course_number).strip(), ""),
+                        group_quota=group_quota,
+                        common_free_slots=common_free_slots,
+                        group_preferences_raw=group_preferences_raw,
+                        group_preferences_summary=group_preferences_summary,
+                    )
+
+                    if llm_group_result.get("success") and llm_group_result.get("group_blocks"):
+                        logging.info(
+                            f"   ✅ [LLM][GROUP] Planned {len(llm_group_result.get('group_blocks', []))} "
+                            f"group blocks for group {group_id}"
+                        )
+                        for blk in llm_group_result.get("group_blocks", []):
+                            day = blk.get("day_index")
+                            t = blk.get("start_time")
+                            if day is None or not t:
+                                continue
+                            if (day, t) not in common_free_slots:
+                                # Should not happen due to validation in helper, but double-check
+                                logging.warning(
+                                    f"   ⚠️ [LLM][GROUP] Slot ({day}, {t}) not in common_free_slots, skipping"
+                                )
+                                continue
+                            created_group_blocks.append({
+                                "group_id": group_id,
+                                "week_start": week_start,
+                                "course_number": course_number,
+                                "day_of_week": day,
+                                "start_time": t,
+                                "end_time": _minutes_to_time(_time_to_minutes(t) + 60),
+                                "created_by": user_id
+                            })
+                            if (day, t) in available_slots:
+                                available_slots.remove((day, t))
+                    else:
+                        # Fallback: deterministic 2-hour blocks from common_free_slots
+                        logging.warning(
+                            f"   ⚠️ [LLM][GROUP] LLM planning failed for group {group_id} "
+                            f"or returned no blocks. Falling back to deterministic allocation."
+                        )
+                        allocated_hours = 0
+                        for day in range(7):
                             if allocated_hours >= group_quota:
                                 break
-                            t1, t2 = time_slots[i], time_slots[i+1]
-                            if (day, t1) in common_free_slots and (day, t2) in common_free_slots:
-                                # Found 2-hour block that all members are free
-                                for t in [t1, t2]:
-                                    created_group_blocks.append({
-                                        "group_id": group_id,
-                                        "week_start": week_start,
-                                        "course_number": course_number,
-                                        "day_of_week": day,
-                                        "start_time": t,
-                                        "end_time": _minutes_to_time(_time_to_minutes(t) + 60),
-                                        "created_by": user_id
-                                    })
-                                    if (day, t) in available_slots:
-                                        available_slots.remove((day, t))
-                                    allocated_hours += 1
+                            for i in range(len(time_slots) - 1):
+                                if allocated_hours >= group_quota:
+                                    break
+                                t1, t2 = time_slots[i], time_slots[i+1]
+                                if (day, t1) in common_free_slots and (day, t2) in common_free_slots:
+                                    # Found 2-hour block that all members are free
+                                    for t in [t1, t2]:
+                                        created_group_blocks.append({
+                                            "group_id": group_id,
+                                            "week_start": week_start,
+                                            "course_number": course_number,
+                                            "day_of_week": day,
+                                            "start_time": t,
+                                            "end_time": _minutes_to_time(_time_to_minutes(t) + 60),
+                                            "created_by": user_id
+                                        })
+                                        if (day, t) in available_slots:
+                                            available_slots.remove((day, t))
+                                        allocated_hours += 1
                     
                     if created_group_blocks:
                         # Insert group_plan_blocks
@@ -4451,9 +4897,16 @@ async def generate_weekly_plan(
         verify_cleanup = cleanup_client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).execute()
         if verify_cleanup.data:
             logging.warning(f"⚠️ [GENERATE] WARNING: Found {len(verify_cleanup.data)} plan(s) still existing after cleanup! Attempting force delete...")
-            # Force delete any remaining plans
+            # CRITICAL: Before deleting, check if there are existing group blocks in weekly_plan_blocks
+            # These need to be preserved and added to the new plan
+            existing_group_blocks_in_weekly = []
             for plan in verify_cleanup.data:
                 try:
+                    # Check for existing group blocks before deleting
+                    existing_gb_check = cleanup_client.table("weekly_plan_blocks").select("*").eq("plan_id", plan["id"]).eq("work_type", "group").execute()
+                    if existing_gb_check.data:
+                        logging.info(f"   📋 Found {len(existing_gb_check.data)} existing group blocks in plan {plan['id']} - will preserve them")
+                        existing_group_blocks_in_weekly.extend(existing_gb_check.data)
                     # Delete blocks first
                     cleanup_client.table("weekly_plan_blocks").delete().eq("plan_id", plan["id"]).execute()
                     # Then delete plan
@@ -4466,6 +4919,29 @@ async def generate_weekly_plan(
         
         plan_id = client.table("weekly_plans").insert({"user_id": user_id, "week_start": week_start, "source": "auto"}).execute().data[0]["id"]
         logging.info(f"✅ [GENERATE] Created new plan_id: {plan_id} for user {user_id}, week {week_start}")
+        
+        # CRITICAL: If we found existing group blocks, add them to the new plan
+        # This ensures group blocks are preserved even after cleanup
+        if existing_group_blocks_in_weekly:
+            logging.info(f"🔄 [GENERATE] Restoring {len(existing_group_blocks_in_weekly)} existing group blocks to new plan")
+            restored_blocks = []
+            for gb in existing_group_blocks_in_weekly:
+                # NOTE: group_id is not a column in weekly_plan_blocks, so we don't include it
+                restored_blocks.append({
+                    "plan_id": plan_id,
+                    "user_id": user_id,
+                    "course_number": gb.get("course_number"),
+                    "course_name": gb.get("course_name"),
+                    "work_type": "group",
+                    "day_of_week": gb.get("day_of_week"),
+                    "start_time": gb.get("start_time"),
+                    "end_time": gb.get("end_time"),
+                    "is_locked": gb.get("is_locked", False),
+                    "source": gb.get("source", "auto")
+                })
+            if restored_blocks:
+                client.table("weekly_plan_blocks").insert(restored_blocks).execute()
+                logging.info(f"✅ [GENERATE] Restored {len(restored_blocks)} group blocks to new plan")
         # #region agent log
         try:
             import json
@@ -4474,6 +4950,31 @@ async def generate_weekly_plan(
         except: pass
         # #endregion
 
+        # CRITICAL: Check if there are existing group blocks in weekly_plan_blocks for this user
+        # NOTE: After cleanup, these blocks may have been deleted, so we check group_plan_blocks instead
+        # The group_plan_blocks are the source of truth - they are created by the global agent and shared by all members
+        existing_group_blocks = []
+        user_groups_check = client.table("group_members").select("group_id").eq("user_id", user_id).eq("status", "approved").execute()
+        user_group_ids_check = [g["group_id"] for g in (user_groups_check.data or [])]
+        if user_group_ids_check:
+            # Check group_plan_blocks (source of truth) instead of weekly_plan_blocks (may have been deleted)
+            group_plan_blocks_check = client.table("group_plan_blocks").select("*").in_("group_id", user_group_ids_check).eq("week_start", week_start).execute()
+            if group_plan_blocks_check.data:
+                logging.info(f"🔍 [GENERATE] Found {len(group_plan_blocks_check.data)} group_plan_blocks for user {user_id}'s groups")
+                # Also check if they exist in weekly_plan_blocks (they may have been preserved)
+                existing_weekly_check = client.table("weekly_plan_blocks").select("*").eq("user_id", user_id).eq("work_type", "group").execute()
+                existing_weekly_slots = {(b.get("day_of_week"), b.get("start_time"), b.get("course_number")) for b in (existing_weekly_check.data or [])}
+                
+                # For each group_plan_block, check if it exists in weekly_plan_blocks
+                for gpb in group_plan_blocks_check.data:
+                    key = (gpb.get("day_of_week"), gpb.get("start_time"), gpb.get("course_number"))
+                    if key not in existing_weekly_slots:
+                        # This group block doesn't exist in weekly_plan_blocks - we'll need to create it
+                        logging.info(f"   📋 Group block missing from weekly_plan_blocks: {gpb.get('course_number')}, day={gpb.get('day_of_week')}, time={gpb.get('start_time')}")
+                    else:
+                        # This group block already exists in weekly_plan_blocks
+                        logging.info(f"   ✅ Group block already in weekly_plan_blocks: {gpb.get('course_number')}, day={gpb.get('day_of_week')}, time={gpb.get('start_time')}")
+        
         # Add synchronized group blocks to plan_blocks for this user
         plan_blocks = []
         for gb in synchronized_group_blocks:
@@ -4492,6 +4993,11 @@ async def generate_weekly_plan(
                     "source": "auto",
                     "group_id": gb["group_id"]
                 })
+        
+        # NOTE: We don't need to restore existing_group_blocks here because:
+        # 1. If group_plan_blocks exist, they are already in synchronized_group_blocks and added to plan_blocks above
+        # 2. If they don't exist in weekly_plan_blocks, they will be created by the code below (lines 5095-5113)
+        # 3. The code below checks group_plan_blocks and creates weekly_plan_blocks if they're missing
         
         logging.info(f"📊 [GENERATE] Added {len(plan_blocks)} synchronized group blocks to plan_blocks")
         # #region agent log
@@ -4535,9 +5041,88 @@ async def generate_weekly_plan(
         else:
             logging.warning(f"   ⚠️ No user preferences found - LLM will use default behavior")
         
+        # CRITICAL: Before creating personal blocks, ensure all group blocks are in plan_blocks
+        # Check if there are any group_plan_blocks for this user's groups that don't have weekly_plan_blocks yet
+        if user_group_ids:
+            for group_id in user_group_ids:
+                try:
+                    # Check if group_plan_blocks exist for this group and week
+                    group_plan_check = client.table("group_plan_blocks").select("*").eq("group_id", group_id).eq("week_start", week_start).execute()
+                    if group_plan_check.data:
+                        # Check if these blocks are already in plan_blocks
+                        for gpb in group_plan_check.data:
+                            course_num = gpb.get("course_number")
+                            already_in_plan = any(
+                                b.get("course_number") == course_num and
+                                b.get("day_of_week") == gpb.get("day_of_week") and
+                                b.get("start_time") == gpb.get("start_time") and
+                                b.get("work_type") == "group"
+                                for b in plan_blocks
+                            )
+                            if not already_in_plan:
+                                # This group block is missing from plan_blocks - add it
+                                group_info = group_info_map.get(group_id, {})
+                                # NOTE: group_id is not a column in weekly_plan_blocks, so we don't include it in the DB insert
+                                # But we keep it in plan_blocks for reference (it will be removed before final insert)
+                                new_group_block = {
+                                    "plan_id": plan_id,
+                                    "user_id": user_id,
+                                    "course_number": course_num,
+                                    "course_name": group_info.get("course_name") or valid_catalog.get(str(course_num).strip(), ""),
+                                    "work_type": "group",
+                                    "day_of_week": gpb.get("day_of_week"),
+                                    "start_time": gpb.get("start_time"),
+                                    "end_time": gpb.get("end_time"),
+                                    "source": "auto",
+                                    "group_id": group_id  # Keep for plan_blocks reference, will be removed before final insert
+                                }
+                                plan_blocks.append(new_group_block)
+                                # CRITICAL: Also insert this block to DB immediately to ensure synchronization
+                                # Remove group_id before inserting (it's not a column in weekly_plan_blocks)
+                                try:
+                                    db_block = {k: v for k, v in new_group_block.items() if k != "group_id"}
+                                    client.table("weekly_plan_blocks").insert([db_block]).execute()
+                                    logging.info(f"   ✅ Added and inserted missing group block: {course_num}, day={gpb.get('day_of_week')}, time={gpb.get('start_time')}")
+                                except Exception as insert_err:
+                                    logging.error(f"   ❌ Failed to insert group block to DB: {insert_err}")
+                                    logging.info(f"   ⚠️ Block added to plan_blocks but not inserted to DB - will be inserted later with other blocks")
+                except Exception as group_check_err:
+                    logging.error(f"   ❌ Error checking group blocks for group {group_id}: {group_check_err}")
+        
         # STEP 2: Use LLM to create ONLY personal blocks (group blocks already synchronized above)
         # Pass existing synchronized group blocks as skeleton_blocks so LLM knows they exist
         logging.info(f"🔄 [GENERATE] STEP 2: Creating personal blocks with LLM (group blocks already synchronized)")
+        # Update skeleton_blocks to include all group blocks from plan_blocks
+        skeleton_blocks = [b for b in plan_blocks if b.get("work_type") == "group"]
+        logging.info(f"📊 [GENERATE] Updated skeleton_blocks: {len(skeleton_blocks)} group blocks")
+        
+        # CRITICAL: Remove ALL group blocks from available_slots before creating personal blocks
+        # This prevents personal blocks from overlapping with group blocks
+        group_blocks_slots = set()
+        for gb in skeleton_blocks:
+            day = gb.get("day_of_week")
+            start_time = gb.get("start_time")
+            if day is not None and start_time:
+                group_blocks_slots.add((day, start_time))
+        
+        # Also check plan_blocks for any group blocks that might not be in skeleton_blocks
+        for block in plan_blocks:
+            if block.get("work_type") == "group":
+                day = block.get("day_of_week")
+                start_time = block.get("start_time")
+                if day is not None and start_time:
+                    group_blocks_slots.add((day, start_time))
+        
+        # Remove all group block slots from available_slots
+        removed_count = 0
+        for slot in group_blocks_slots:
+            if slot in available_slots:
+                available_slots.remove(slot)
+                removed_count += 1
+        
+        logging.info(f"🗑️ [GENERATE] Removed {removed_count} group block slots from available_slots (total group blocks: {len(group_blocks_slots)})")
+        logging.info(f"📊 [GENERATE] Available slots after removing group blocks: {len(available_slots)}")
+        
         llm_result = await _refine_schedule_with_llm(
             skeleton_blocks=skeleton_blocks,  # Pass existing synchronized group blocks
             available_slots=available_slots[:],  # Available slots after group blocks removed
@@ -4594,8 +5179,17 @@ async def generate_weekly_plan(
                 course_number = llm_block.get("course_number")
                 course_name = course_name_map.get(str(course_number).strip()) or llm_block.get("course_name")
                 
-                # Validate slot is actually available
-                if (day_index, start_time) in available_slots:
+                # CRITICAL: Check if this slot conflicts with any existing blocks (group or personal)
+                slot_conflict = False
+                for existing_block in plan_blocks:
+                    if (existing_block.get("day_of_week") == day_index and 
+                        existing_block.get("start_time") == start_time):
+                        slot_conflict = True
+                        logging.warning(f"⚠️ [GENERATE] LLM proposed personal slot ({day_index}, {start_time}) conflicts with existing {existing_block.get('work_type')} block: {existing_block.get('course_name')} - skipping")
+                        break
+                
+                # Validate slot is actually available and doesn't conflict
+                if not slot_conflict and (day_index, start_time) in available_slots:
                     plan_blocks.append({
                         "plan_id": plan_id,
                         "user_id": user_id,
@@ -4609,8 +5203,8 @@ async def generate_weekly_plan(
                     })
                     available_slots.remove((day_index, start_time))
                     applied_llm_blocks += 1
-                else:
-                    logging.warning(f"LLM proposed invalid personal slot ({day_index}, {start_time}), skipping")
+                elif not slot_conflict:
+                    logging.warning(f"⚠️ [GENERATE] LLM proposed invalid personal slot ({day_index}, {start_time}) - not in available_slots, skipping")
             
             logging.info(f"✅ [GENERATE] Applied {applied_llm_blocks} LLM-refined personal blocks")
             logging.info(f"📊 [GENERATE] plan_blocks count after personal blocks: {len(plan_blocks)}")
@@ -4624,9 +5218,14 @@ async def generate_weekly_plan(
                 course_name = valid_catalog.get(str(course_number).strip(), course.get("course_name"))
                 credits = course.get("credit_points") or 3
                 total_quota = credits * 3
+                # CRITICAL: Count group hours from plan_blocks (which includes all group blocks)
                 group_hours = len([b for b in plan_blocks if b['course_number'] == course_number and b['work_type'] == 'group'])
                 existing_personal = len([b for b in plan_blocks if b['course_number'] == course_number and b['work_type'] == 'personal'])
                 remaining_personal = max(0, total_quota - group_hours - existing_personal)
+                
+                # CRITICAL: Log if we found group blocks for this course
+                if group_hours > 0:
+                    logging.info(f"   📊 Course {course_name} ({course_number}): {group_hours} group hours, {existing_personal} personal hours, {remaining_personal} remaining")
 
                 if remaining_personal == 0:
                     continue
@@ -4692,20 +5291,31 @@ async def generate_weekly_plan(
                     for d, t in best_block:
                         if allocated_personal >= remaining_personal:
                             break
-                        plan_blocks.append({
-                            "plan_id": plan_id,
-                            "user_id": user_id,
-                            "course_number": course_number,
-                            "course_name": course_name,
-                            "work_type": "personal",
-                            "day_of_week": d,
-                            "start_time": t,
-                            "end_time": _minutes_to_time(_time_to_minutes(t) + 60),
-                            "source": "auto_fallback"
-                        })
-                        if (d, t) in available_slots:
-                            available_slots.remove((d, t))
-                        allocated_personal += 1
+                        
+                        # CRITICAL: Check if this slot conflicts with any existing blocks
+                        slot_conflict = False
+                        for existing_block in plan_blocks:
+                            if (existing_block.get("day_of_week") == d and 
+                                existing_block.get("start_time") == t):
+                                slot_conflict = True
+                                logging.warning(f"⚠️ [FALLBACK] Slot ({d}, {t}) for {course_name} conflicts with existing {existing_block.get('work_type')} block: {existing_block.get('course_name')} - skipping")
+                                break
+                        
+                        if not slot_conflict:
+                            plan_blocks.append({
+                                "plan_id": plan_id,
+                                "user_id": user_id,
+                                "course_number": course_number,
+                                "course_name": course_name,
+                                "work_type": "personal",
+                                "day_of_week": d,
+                                "start_time": t,
+                                "end_time": _minutes_to_time(_time_to_minutes(t) + 60),
+                                "source": "auto_fallback"
+                            })
+                            if (d, t) in available_slots:
+                                available_slots.remove((d, t))
+                            allocated_personal += 1
                 logging.info(f"Filled {allocated_personal} personal blocks for {course_name} (grouped in {best_block_length if best_block else 1}-hour blocks)")
         else:
             # FALLBACK: Use deterministic placement if LLM fails
@@ -5060,12 +5670,8 @@ async def auto_weekly_plan(
         if not client:
             raise HTTPException(status_code=500, detail="Supabase client not configured")
 
-        # Build an initial availability grid (used only for group time)
-        time_slots = _build_time_slots()
-        available_slots = [(day, time) for day in range(7) for time in time_slots]
-        _ensure_group_blocks_for_week(client, user_id, week_start, available_slots)
-
-        # Generate the rest of the weekly plan (personal + remaining group slots)
+        # Generate the weekly plan (group + personal blocks).
+        # Group blocks are now fully handled inside generate_weekly_plan using LLM + fallback.
         return await generate_weekly_plan(week_start, current_user)
     except HTTPException:
         raise
@@ -5767,10 +6373,14 @@ async def move_schedule_block(
                         logging.warning(f"⚠️ [MOVE BLOCK] LLM summary returned None - preferences not updated")
                         logging.warning(f"   - This means the LLM call failed or returned empty content")
                         logging.warning(f"   - Check previous logs for LLM CLASSIFICATION errors")
+                        logging.warning(f"   - Notes were saved and will be analyzed in next planning cycle")
+                        # Notes are already saved above, so they will be analyzed in the next planning cycle
+                        # But we mark preferences_updated as False since no immediate update occurred
                             
                 except Exception as sum_err:
-                    logging.error(f"❌ Failed to update LLM summary: {sum_err}", exc_info=True)
+                    logging.error(f"❌ [MOVE BLOCK] Failed to call LLM for preferences update: {sum_err}", exc_info=True)
                     # Even if LLM fails, we keep the notes for future summarization
+                    # Notes were already saved above, so they will be analyzed in the next planning cycle
                 
             except Exception as pref_err:
                 logging.error(f"Failed to update preferences: {pref_err}")
