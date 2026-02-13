@@ -341,45 +341,6 @@
             opacity: 0.9;
         }
         
-        /* Tabs */
-        .advisor-tabs {
-            display: flex;
-            gap: 1rem;
-            margin-bottom: 2rem;
-            border-bottom: 2px solid #e0e0e0;
-        }
-        
-        .tab {
-            padding: 1rem 2rem;
-            background: none;
-            border: none;
-            border-bottom: 3px solid transparent;
-            font-size: 1.1em;
-            cursor: pointer;
-            color: #666;
-            transition: all 0.3s;
-        }
-        
-        .tab.active {
-            color: #667eea;
-            border-bottom-color: #667eea;
-            font-weight: bold;
-        }
-        
-        .tab-content {
-            display: none;
-            animation: fadeIn 0.3s;
-        }
-        
-        .tab-content.active {
-            display: block;
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
         /* Floating Chat Widget */
         .chat-widget {
             position: fixed;
@@ -976,7 +937,6 @@
         <div class="navbar-content">
             <div class="logo">🎓 יועץ אקדמי חכם</div>
             <ul class="nav-links">
-                <li><a href="/">יועץ אקדמי</a></li>
                 <li><a href="/profile">פרופיל</a></li>
                 <li><a href="/schedule">בניית מערכת</a></li>
                 <li><a href="/my-courses">📚 הקורסים שלי</a></li>
@@ -1021,123 +981,6 @@
                 </div>
             </div>
         </section>
-        
-        <!-- Academic Advisor Section -->
-        <section class="section">
-            <div class="section-header">
-                <div class="section-icon">🎯</div>
-                <div>
-                    <h2 class="section-title">יועץ אקדמי</h2>
-                    <p class="section-subtitle">תכנון שבועי, הגשות, ציונים והתקדמות</p>
-                </div>
-            </div>
-            
-            <div class="advisor-tabs">
-                <button class="tab active" onclick="switchTab('schedule')">לו"ז שבועי</button>
-                <button class="tab" onclick="switchTab('assignments')">הגשות</button>
-                <button class="tab" onclick="switchTab('grades')">ציונים</button>
-                <button class="tab" onclick="switchTab('progress')">התקדמות</button>
-            </div>
-            
-            <!-- Weekly Schedule Tab -->
-            <div id="schedule" class="tab-content active">
-                <div class="week-navigation">
-                    <button class="week-nav-btn" onclick="changeWeek(-1)">← שבוע קודם</button>
-                    <div class="week-title" id="weekTitle">שבוע נוכחי: 13-19 בינואר 2025</div>
-                    <button class="week-nav-btn" onclick="changeWeek(1)">שבוע הבא →</button>
-                </div>
-                
-                <div class="week-grid">
-                    <div class="day-column">
-                        <div class="day-header">ראשון</div>
-                        <div class="time-block constraint">אימון<br><small>18:00-20:00</small></div>
-                    </div>
-                    <div class="day-column">
-                        <div class="day-header">שני</div>
-                        <div class="time-block class">הרצאה - מבני נתונים<br><small>09:00-11:00</small></div>
-                        <div class="time-block constraint">עבודה<br><small>16:00-20:00</small></div>
-                    </div>
-                    <div class="day-column">
-                        <div class="day-header">שלישי</div>
-                        <div class="time-block class">תרגול - אלגברה<br><small>08:00-10:00</small></div>
-                        <div class="time-block study">למידה - מבני נתונים<br><small>14:00-16:00</small></div>
-                    </div>
-                    <div class="day-column">
-                        <div class="day-header">רביעי</div>
-                        <div class="time-block constraint">אימון<br><small>18:00-20:00</small></div>
-                    </div>
-                    <div class="day-column">
-                        <div class="day-header">חמישי</div>
-                        <div class="time-block class">מעבדה - מבני נתונים<br><small>10:00-13:00</small></div>
-                        <div class="time-block constraint">עבודה<br><small>16:00-20:00</small></div>
-                    </div>
-                    <div class="day-column">
-                        <div class="day-header">שישי</div>
-                        <div class="time-block study">למידה - אלגברה<br><small>09:00-12:00</small></div>
-                    </div>
-                    <div class="day-column">
-                        <div class="day-header">שבת</div>
-                        <div class="time-block">יום חופשי</div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Assignments Tab -->
-            <div id="assignments" class="tab-content">
-                <div class="assignments-list">
-                    <div class="assignment-item urgent">
-                        <div class="assignment-info">
-                            <h4>מטלת בית - מבני נתונים</h4>
-                            <div class="assignment-meta">קורס: מבני נתונים ואלגוריתמים | 4 נקודות זכות</div>
-                        </div>
-                        <div class="assignment-date">דדליין: 15.1.2025</div>
-                    </div>
-                    <div class="assignment-item">
-                        <div class="assignment-info">
-                            <h4>בחינה - אלגברה</h4>
-                            <div class="assignment-meta">קורס: אלגברה ליניארית | 5 נקודות זכות</div>
-                        </div>
-                        <div class="assignment-date">תאריך: 20.1.2025</div>
-                    </div>
-                    <div class="assignment-item">
-                        <div class="assignment-info">
-                            <h4>פרויקט - הנדסת תוכנה</h4>
-                            <div class="assignment-meta">קורס: הנדסת תוכנה | 3.5 נקודות זכות</div>
-                        </div>
-                        <div class="assignment-date">דדליין: 25.1.2025</div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Grades Tab -->
-            <div id="grades" class="tab-content">
-                <div class="grades-grid">
-                    <div class="grade-card">
-                        <div class="grade-label">ממוצע מצטבר</div>
-                        <div class="grade-value">85.5</div>
-                    </div>
-                    <div class="grade-card">
-                        <div class="grade-label">ממוצע סמסטר נוכחי</div>
-                        <div class="grade-value">87.2</div>
-                    </div>
-                    <div class="grade-card">
-                        <div class="grade-label">נקודות זכות</div>
-                        <div class="grade-value">120</div>
-                    </div>
-                    <div class="grade-card">
-                        <div class="grade-label">אחוזי הצלחה</div>
-                        <div class="grade-value">95%</div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Progress Tab -->
-            <div id="progress" class="tab-content">
-                <p style="text-align: center; color: #666; padding: 3rem;">
-                    כאן תוצג התקדמות בקורסים, זמן למידה, מטרות ועוד...
-                </p>
-            </div>
-        </section>
     </div>
     
     <!-- Floating Chat Widget -->
@@ -1161,8 +1004,6 @@
     </div>
     
     <script>
-        let currentWeek = 0; // 0 = current week, 1 = next week, -1 = previous week
-        
         function toggleChat() {
             const popup = document.getElementById('chatPopup');
             if (popup) {
@@ -1194,37 +1035,6 @@
             });
         }
         
-        function switchTab(tabName) {
-            // Hide all tabs
-            document.querySelectorAll('.tab-content').forEach(tab => {
-                tab.classList.remove('active');
-            });
-            document.querySelectorAll('.tab').forEach(tab => {
-                tab.classList.remove('active');
-            });
-            
-            // Show selected tab
-            document.getElementById(tabName).classList.add('active');
-            event.target.classList.add('active');
-        }
-        
-        function changeWeek(delta) {
-            currentWeek += delta;
-            updateWeekTitle();
-            // Here you would load the week's data from backend
-        }
-        
-        function updateWeekTitle() {
-            const titles = {
-                '-1': 'שבוע קודם: 6-12 בינואר 2025',
-                '0': 'שבוע נוכחי: 13-19 בינואר 2025',
-                '1': 'שבוע הבא: 20-26 בינואר 2025'
-            };
-            document.getElementById('weekTitle').textContent = titles[currentWeek] || titles['0'];
-        }
-        
-        updateWeekTitle();
-        
         // Check authentication status
         checkAuthStatus();
         
@@ -1237,9 +1047,8 @@
             const loginBtn = document.getElementById('loginBtn');
             
             if (token) {
-                // User is logged in
-                const userEmail = localStorage.getItem('user_email') || 'משתמש';
-                loginBtn.textContent = `👤 ${userEmail}`;
+                // User is logged in - show התנתק on all pages
+                loginBtn.textContent = '🚪 התנתק';
                 loginBtn.onclick = function() {
                     if (confirm('האם אתה בטוח שברצונך להתנתק?')) {
                         logout();

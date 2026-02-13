@@ -168,6 +168,12 @@ class BlockMover:
                 if original_day is not None:
                     query = query.eq("day_of_week", original_day)
                 
+                # Add work_type filter if provided (helps distinguish between personal and group blocks)
+                work_type = kwargs.get("work_type")
+                if work_type:
+                    query = query.eq("work_type", work_type)
+                    logger.info(f"🔍 Filtering by work_type: {work_type}")
+                
                 if course_number:
                     query = query.eq("course_number", course_number)
                     logger.info(f"🔍 Searching by course_number: {course_number}")
@@ -186,6 +192,9 @@ class BlockMover:
                         fuzzy_query = fuzzy_query.eq("start_time", original_start_time)
                     if original_day is not None:
                         fuzzy_query = fuzzy_query.eq("day_of_week", original_day)
+                    # Also filter by work_type in fuzzy search if provided
+                    if work_type:
+                        fuzzy_query = fuzzy_query.eq("work_type", work_type)
                     all_blocks = fuzzy_query.execute()
                     day_info = f"day {original_day}" if original_day is not None else "any day"
                     time_info = f"at {original_start_time}" if original_start_time is not None else "at any time"
@@ -369,10 +378,10 @@ class BlockMover:
                 original_time_str = f"{day_names[original_day]} {original_start}" if original_day is not None else "new block"
                 proposed_time_str = f"{day_names[new_day]} {new_start_time}"
                 
-                title = f"בקשת שינוי מפגש: {group_name}"
-                message = f"{requester_name} מבקש לשנות מפגש מ-{original_time_str} ל-{proposed_time_str}. נדרש אישור מכל החברים."
+                title = f"Meeting change request: {group_name}"
+                message = f"{requester_name} requested to change meeting from {original_time_str} to {proposed_time_str}. Approval from all members required."
                 if reason:
-                    message += f" סיבה: {reason}"
+                    message += f" Reason: {reason}"
                 
                 # Send notifications to all members
                 for member_id in member_ids:
@@ -644,11 +653,12 @@ class BlockMover:
         new_day: int,
         new_start_time: str
     ) -> bool:
-        """Extract user preferences from prompt and update schedule_change_notes"""
+        """Extract user preferences from prompt and update schedule_change_notes and study_preferences_summary"""
         try:
-            # Get current notes
-            profile = client.table("user_profiles").select("schedule_change_notes").eq("id", user_id).limit(1).execute()
+            # Get current notes and preferences
+            profile = client.table("user_profiles").select("schedule_change_notes, study_preferences_raw").eq("id", user_id).limit(1).execute()
             current_notes = profile.data[0].get("schedule_change_notes", []) if profile.data else []
+            current_prefs = profile.data[0].get("study_preferences_raw", "") if profile.data else ""
             
             if not isinstance(current_notes, list):
                 current_notes = []
@@ -663,12 +673,44 @@ class BlockMover:
             }
             current_notes.append(new_note)
             
-            # Save notes
+            # Save notes first (for LLM to analyze)
             client.table("user_profiles").update({
                 "schedule_change_notes": current_notes
             }).eq("id", user_id).execute()
             
             logger.info(f"✅ Updated schedule_change_notes for user {user_id}")
+            
+            # ALWAYS call LLM to summarize preferences - this is what we use for scheduling
+            # The summary is saved to study_preferences_summary and used when generating schedules
+            try:
+                # Import the LLM summarization function
+                from app.main import _summarize_user_preferences_with_llm
+                
+                logger.info(f"🔄 [BLOCK_MOVER] Calling LLM for classification - course: {block.get('course_number')}, explanation: {user_prompt[:100] if user_prompt else 'none'}")
+                summary = await _summarize_user_preferences_with_llm(current_prefs, current_notes)
+                
+                if summary:
+                    # ALWAYS save the LLM summary to study_preferences_summary
+                    # This is what we use when generating schedules (not the raw notes)
+                    update_result = client.table("user_profiles").update({
+                        "study_preferences_summary": summary
+                    }).eq("id", user_id).execute()
+                    
+                    if update_result.data:
+                        logger.info(f"💾 [BLOCK_MOVER] ✅ Successfully saved study_preferences_summary to database")
+                        logger.info(f"   - update_type: {summary.get('update_type', 'unknown')}")
+                        logger.info(f"   - summary_keys: {list(summary.keys())}")
+                    else:
+                        logger.warning(f"⚠️ [BLOCK_MOVER] Update returned no data - update may have failed")
+                else:
+                    logger.warning(f"⚠️ [BLOCK_MOVER] LLM summary returned None - preferences not updated")
+                    
+            except ImportError as import_err:
+                logger.warning(f"⚠️ [BLOCK_MOVER] Could not import _summarize_user_preferences_with_llm: {import_err}")
+            except Exception as llm_err:
+                logger.error(f"❌ [BLOCK_MOVER] Failed to update LLM summary: {llm_err}", exc_info=True)
+                # Even if LLM fails, we keep the notes for future summarization
+            
             return True
             
         except Exception as e:

@@ -75,6 +75,55 @@
             transform: translateY(-2px);
         }
         
+        /* Notifications Widget (unified nav) */
+        .notifications-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: white;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            width: 350px;
+            max-height: 500px;
+            overflow-y: auto;
+            z-index: 1000;
+            margin-top: 0.5rem;
+            direction: rtl;
+        }
+        .notifications-header {
+            padding: 1rem;
+            border-bottom: 2px solid #f0f0f0;
+            font-weight: bold;
+            background: #f8f9fa;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .btn-clear-notifications {
+            background: #ff9800;
+            color: white;
+            border: none;
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85em;
+        }
+        .btn-clear-notifications:hover { background: #f57c00; }
+        .notifications-list { max-height: 400px; overflow-y: auto; }
+        .notification-item {
+            padding: 1rem;
+            border-bottom: 1px solid #f0f0f0;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .notification-item:hover { background: #f8f9fa; }
+        .notification-item.unread { background: #e3f2fd; font-weight: bold; }
+        .notification-item.loading { text-align: center; color: #999; cursor: default; }
+        .notification-title { font-weight: bold; margin-bottom: 0.25rem; }
+        .notification-message { color: #666; font-size: 0.9em; }
+        .notification-time { color: #999; font-size: 0.8em; margin-top: 0.25rem; }
+        
         .container {
             max-width: 1200px;
             margin: 0 auto;
@@ -873,10 +922,21 @@
         <div class="navbar-content">
             <div class="logo">🎓 יועץ אקדמי חכם</div>
             <ul class="nav-links">
-                <li><a href="/">יועץ אקדמי</a></li>
-                <li><a href="/profile">פרופיל</a></li>
+                <li><a href="/profile" style="color: #667eea; font-weight: bold;">פרופיל</a></li>
                 <li><a href="/schedule">בניית מערכת</a></li>
                 <li><a href="/my-courses">📚 הקורסים שלי</a></li>
+                <li id="notificationsWidget" style="position: relative;">
+                    <button class="chat-btn" onclick="toggleNotifications()" id="notificationsBtn">🔔 התראות <span id="notificationBadge" style="display: none; background: #f44336; color: white; border-radius: 50%; padding: 0.2rem 0.5rem; font-size: 0.8em; margin-right: 0.5rem;">0</span></button>
+                    <div id="notificationsDropdown" class="notifications-dropdown" style="display: none;">
+                        <div class="notifications-header">
+                            <span>התראות</span>
+                            <button class="btn-clear-notifications" onclick="clearNotifications()" title="נקה התראות נקראות">🧹 נקה נקראות</button>
+                        </div>
+                        <div id="notificationsList" class="notifications-list">
+                            <div class="notification-item loading">טוען התראות...</div>
+                        </div>
+                    </div>
+                </li>
                 <li id="authButton">
                     <button class="chat-btn" id="loginBtn" onclick="window.location.href='/login'">🔐 התחבר</button>
                 </li>
@@ -943,49 +1003,10 @@
             </div>
             
             <div id="resultSection" class="result-section" style="display: none;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-                    <h2>📊 תוצאות ניתוח</h2>
-                    <button class="submit-button" onclick="showUploadSection()" style="background: #4caf50; font-size: 0.9em; padding: 0.5rem 1rem;">📄 העלה גליון מעודכן</button>
-                </div>
-                <div id="studentInfoCard"></div>
+                <h2 style="margin-bottom: 1rem;">📋 הקורסים שלך</h2>
                 <div id="coursesList"></div>
-                <div id="statsSummary" class="stats-summary"></div>
                 <button class="submit-button" onclick="saveToDatabase()" style="margin-top: 20px;">💾 שמור במאגר (עם דריסה אם קיים)</button>
             </div>
-        </section>
-        
-        <!-- Study Preferences Section -->
-        <section class="section" id="preferencesSection">
-            <div class="section-header">
-                <span style="font-size: 2em;">📝</span>
-                <h1>העדפות לימוד אישיות</h1>
-            </div>
-            <div style="background: #f8f9ff; padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem; border-right: 4px solid #667eea;">
-                <p style="font-size: 1.1em; line-height: 1.8; color: #555;">
-                    ספר לנו על הרגלי הלימוד שלך כדי שנוכל לבנות לך מערכת לימודים אופטימלית! 🎯<br>
-                    <strong>למשל:</strong> אני אוהב ללמוד בבוקר, מעדיף מפגשים ארוכים של 2-3 שעות, צריך הפסקות כל שעה, לא אוהב ללמוד בימי שישי.
-                </p>
-            </div>
-            
-            <div style="margin-bottom: 2rem;">
-                <label style="display: block; font-size: 1.1em; font-weight: bold; margin-bottom: 0.5rem; color: #333;">
-                    🕐 מתי אתה לומד הכי טוב? מה הסגנון שלך?
-                </label>
-                <textarea 
-                    id="studyPreferencesText" 
-                    placeholder="לדוגמה: אני לומד הכי טוב בבוקר בין 8:00-12:00. אני מעדיף לימוד בבלוקים ארוכים של 2-3 שעות עם הפסקה של 15 דקות כל שעה. אני לא אוהב ללמוד בימי שישי. עבור קורס 'מבוא למדעי המחשב' אני מעדיף בוקר מוקדם כי זה דורש ריכוז."
-                    style="width: 100%; min-height: 200px; padding: 1rem; border: 2px solid #ddd; border-radius: 12px; font-size: 1em; resize: vertical; font-family: inherit; direction: rtl;"
-                ></textarea>
-            </div>
-            
-            <div id="preferencesStatus" style="display: none; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;"></div>
-            
-            <button 
-                class="submit-button" 
-                onclick="saveStudyPreferences()" 
-                style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); font-size: 1.1em;">
-                💾 שמור העדפות
-            </button>
         </section>
     </div>
     
@@ -1232,9 +1253,7 @@
         const errorMessage = document.getElementById('errorMessage');
         const successMessage = document.getElementById('successMessage');
         const resultSection = document.getElementById('resultSection');
-        const studentInfoCard = document.getElementById('studentInfoCard');
         const coursesList = document.getElementById('coursesList');
-        const statsSummary = document.getElementById('statsSummary');
         
         // File input change handler
         fileInput.addEventListener('change', function(e) {
@@ -1306,41 +1325,7 @@
         }
         
         function displayResult(data) {
-            // Display student info
-            const studentInfo = data.student_info;
-            studentInfoCard.innerHTML = `
-                <div class="student-info-card">
-                    <h3>👤 פרטי סטודנט</h3>
-                    <div class="info-grid">
-                        <div class="info-item">
-                            <span class="info-label">שם:</span>
-                            <span class="info-value info-value-text">${studentInfo.name || 'לא זוהה'}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">תעודת זהות:</span>
-                            <span class="info-value info-value-number">${studentInfo.id_number || 'לא זוהה'}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">פקולטה:</span>
-                            <span class="info-value info-value-text">${studentInfo.faculty || 'לא זוהה'}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">מסלול לימודים:</span>
-                            <span class="info-value info-value-text">${studentInfo.study_track || 'לא זוהה'}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">ממוצע מצטבר:</span>
-                            <span class="info-value info-value-number">${studentInfo.cumulative_average ? studentInfo.cumulative_average.toFixed(2) : 'לא זוהה'}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">אחוזי הצלחה:</span>
-                            <span class="info-value info-value-number">${studentInfo.success_rate ? studentInfo.success_rate.toFixed(1) + '%' : 'לא זוהה'}</span>
-                        </div>
-                    </div>
-                </div>
-            `;
-            
-            // Display courses
+            // Display courses only (no student info card)
             const courses = data.courses || [];
             if (courses.length > 0) {
                 coursesList.innerHTML = `
@@ -1363,9 +1348,6 @@
                     </div>
                 `;
             }
-            
-            // Don't display calculated statistics - use only data from header
-            statsSummary.innerHTML = '';
             
             resultSection.style.display = 'block';
         }
@@ -1433,6 +1415,18 @@
                         ${course.retake_count > 0 ? `
                             <div class="course-detail">
                                 <span class="course-detail-label">מועד ב (${course.retake_count})</span>
+                            </div>
+                        ` : ''}
+                        ${(course.lecture_day || course.lecture_time) ? `
+                            <div class="course-detail">
+                                <span class="course-detail-label">הרצאה:</span>
+                                <span class="course-detail-value">${course.lecture_day || '-'} ${course.lecture_time || ''}</span>
+                            </div>
+                        ` : ''}
+                        ${(course.tutorial_day || course.tutorial_time) ? `
+                            <div class="course-detail">
+                                <span class="course-detail-label">תרגול:</span>
+                                <span class="course-detail-value">${course.tutorial_day || '-'} ${course.tutorial_time || ''}</span>
                             </div>
                         ` : ''}
                     </div>
@@ -1526,6 +1520,40 @@
                             <input type="number" id="editYear" min="2000" max="2100">
                         </div>
                         <div class="form-group">
+                            <label>יום הרצאה:</label>
+                            <select id="editLectureDay">
+                                <option value="">לא נבחר</option>
+                                <option value="ראשון">ראשון</option>
+                                <option value="שני">שני</option>
+                                <option value="שלישי">שלישי</option>
+                                <option value="רביעי">רביעי</option>
+                                <option value="חמישי">חמישי</option>
+                                <option value="שישי">שישי</option>
+                                <option value="שבת">שבת</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>שעות הרצאה:</label>
+                            <input type="text" id="editLectureTime" placeholder="14:30-17:30">
+                        </div>
+                        <div class="form-group">
+                            <label>יום תרגול:</label>
+                            <select id="editTutorialDay">
+                                <option value="">לא נבחר</option>
+                                <option value="ראשון">ראשון</option>
+                                <option value="שני">שני</option>
+                                <option value="שלישי">שלישי</option>
+                                <option value="רביעי">רביעי</option>
+                                <option value="חמישי">חמישי</option>
+                                <option value="שישי">שישי</option>
+                                <option value="שבת">שבת</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>שעות תרגול:</label>
+                            <input type="text" id="editTutorialTime" placeholder="17:30-19:30">
+                        </div>
+                        <div class="form-group">
                             <label>הערות:</label>
                             <textarea id="editNotes" rows="3"></textarea>
                         </div>
@@ -1556,6 +1584,10 @@
                     document.getElementById('editLetterGrade').value = course.letter_grade || '';
                     document.getElementById('editSemester').value = course.semester || '';
                     document.getElementById('editYear').value = course.year || '';
+                    document.getElementById('editLectureDay').value = course.lecture_day || '';
+                    document.getElementById('editLectureTime').value = course.lecture_time || '';
+                    document.getElementById('editTutorialDay').value = course.tutorial_day || '';
+                    document.getElementById('editTutorialTime').value = course.tutorial_time || '';
                     document.getElementById('editNotes').value = course.notes || '';
                     document.getElementById('editIsPassed').checked = course.is_passed || false;
                     document.getElementById('editRetakeCount').value = course.retake_count || 0;
@@ -1629,6 +1661,10 @@
                 letter_grade: document.getElementById('editLetterGrade').value.trim() || null,
                 semester: document.getElementById('editSemester').value || null,
                 year: document.getElementById('editYear').value ? parseInt(document.getElementById('editYear').value) : null,
+                lecture_day: document.getElementById('editLectureDay').value || null,
+                lecture_time: document.getElementById('editLectureTime').value.trim() || null,
+                tutorial_day: document.getElementById('editTutorialDay').value || null,
+                tutorial_time: document.getElementById('editTutorialTime').value.trim() || null,
                 notes: document.getElementById('editNotes').value.trim() || null,
                 is_passed: document.getElementById('editIsPassed').checked,
                 retake_count: document.getElementById('editRetakeCount').value ? parseInt(document.getElementById('editRetakeCount').value) : 0
@@ -1756,14 +1792,25 @@
                     return;
                 }
                 
-                console.log('📤 Sending save request to /api/save-user');
+                // Current week Sunday (same as בניית מערכת) so weekly plan updates for the right week
+                function getWeekStartForSave() {
+                    const now = new Date();
+                    const day = now.getDay();
+                    const diff = now.getDate() - day;
+                    const sunday = new Date(now);
+                    sunday.setDate(diff);
+                    const y = sunday.getFullYear(), m = String(sunday.getMonth() + 1).padStart(2, '0'), d = String(sunday.getDate()).padStart(2, '0');
+                    return `${y}-${m}-${d}`;
+                }
+                const weekStartParam = getWeekStartForSave();
+                console.log('📤 Sending save request to /api/save-user', { week_start: weekStartParam });
                 console.log('📦 User data:', {
                     name: userData.name,
                     id_number: userData.id_number,
                     courses_count: userData.courses?.length || 0
                 });
                 
-                const response = await fetch('/api/save-user', {
+                const response = await fetch(`/api/save-user?week_start=${encodeURIComponent(weekStartParam)}`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1867,9 +1914,8 @@
             const loginBtn = document.getElementById('loginBtn');
             
             if (token && loginBtn) {
-                // User is logged in
-                const userEmail = localStorage.getItem('user_email') || 'משתמש';
-                loginBtn.textContent = `👤 ${userEmail}`;
+                // User is logged in - show התנתק on all pages
+                loginBtn.textContent = '🚪 התנתק';
                 loginBtn.onclick = function() {
                     if (confirm('האם אתה בטוח שברצונך להתנתק?')) {
                         logout();
@@ -1944,11 +1990,10 @@
                 
                 console.log('📦 Full response data:', data);
                 
-                if (data.metadata && data.metadata.has_data && data.student_info) {
-                    console.log('✅ User data loaded:', data.metadata.courses_count, 'courses');
-                    // Convert to parsedData format
+                if ((data.metadata && data.metadata.has_data) || (data.courses && data.courses.length > 0)) {
+                    console.log('✅ User data loaded:', (data.courses || []).length, 'courses');
                     parsedData = {
-                        student_info: data.student_info,
+                        student_info: data.student_info || {},
                         courses: data.courses || []
                     };
                     
@@ -1988,93 +2033,85 @@
             }
         }
         
-        // Study Preferences Functions
-        async function saveStudyPreferences() {
-            const token = localStorage.getItem('auth_token');
-            if (!token) {
-                alert('❌ יש להתחבר כדי לשמור העדפות');
-                return;
-            }
-            
-            const preferencesText = document.getElementById('studyPreferencesText').value.trim();
-            const statusDiv = document.getElementById('preferencesStatus');
-            
-            if (!preferencesText) {
-                statusDiv.style.display = 'block';
-                statusDiv.style.background = '#fff3cd';
-                statusDiv.style.color = '#856404';
-                statusDiv.textContent = '⚠️ אנא כתוב את העדפות הלימוד שלך';
-                return;
-            }
-            
-            try {
-                statusDiv.style.display = 'block';
-                statusDiv.style.background = '#cfe2ff';
-                statusDiv.style.color = '#084298';
-                statusDiv.textContent = '⏳ שומר העדפות...';
-                
-                const response = await fetch('/api/user/preferences', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
-                    },
-                    body: JSON.stringify({
-                        study_preferences_raw: preferencesText
-                    })
-                });
-                
-                if (response.ok) {
-                    statusDiv.style.background = '#d1e7dd';
-                    statusDiv.style.color = '#0f5132';
-                    statusDiv.textContent = '✅ העדפות נשמרו בהצלחה! המערכת תשתמש בהן ליצירת לוח זמנים אופטימלי עבורך.';
-                } else {
-                    const error = await response.json();
-                    throw new Error(error.detail || 'שגיאה בשמירת העדפות');
-                }
-            } catch (error) {
-                console.error('Error saving preferences:', error);
-                statusDiv.style.background = '#f8d7da';
-                statusDiv.style.color = '#842029';
-                statusDiv.textContent = '❌ שגיאה בשמירת העדפות: ' + error.message;
-            }
-        }
-        
-        async function loadStudyPreferences() {
-            const token = localStorage.getItem('auth_token');
-            if (!token) return;
-            
-            try {
-                const response = await fetch('/api/user/preferences', {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
-                });
-                
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data.study_preferences_raw) {
-                        document.getElementById('studyPreferencesText').value = data.study_preferences_raw;
-                    }
-                }
-            } catch (error) {
-                console.error('Error loading preferences:', error);
-            }
-        }
-        
         // Run on page load - wait for DOM to be ready
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', function() {
                 checkAuthStatus();
                 loadUserData();
-                loadStudyPreferences();
+                if (localStorage.getItem('auth_token')) { loadNotifications(); }
             });
         } else {
-            // DOM is already loaded
             checkAuthStatus();
             loadUserData();
-            loadStudyPreferences();
+            if (localStorage.getItem('auth_token')) { loadNotifications(); }
         }
+    </script>
+    <script>
+        // Notifications (unified nav - same as index/schedule/my_courses)
+        let notifications = [];
+        async function loadNotifications() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            try {
+                const response = await fetch('/api/notifications', { headers: { 'Authorization': 'Bearer ' + token } });
+                if (response.ok) {
+                    const data = await response.json();
+                    notifications = data.notifications || [];
+                    updateNotificationsUI();
+                }
+            } catch (e) { console.error('Error loading notifications:', e); }
+        }
+        function updateNotificationsUI() {
+            const badge = document.getElementById('notificationBadge');
+            const unreadCount = notifications.filter(n => !n.read).length;
+            if (badge) {
+                if (unreadCount > 0) { badge.textContent = unreadCount; badge.style.display = 'inline-block'; }
+                else { badge.style.display = 'none'; }
+            }
+            const list = document.getElementById('notificationsList');
+            if (list) {
+                if (notifications.length === 0) list.innerHTML = '<div class="notification-item loading">אין התראות</div>';
+                else list.innerHTML = notifications.map(notif => {
+                    const time = new Date(notif.created_at).toLocaleString('he-IL');
+                    return '<div class="notification-item ' + (!notif.read ? 'unread' : '') + '"><div onclick="handleNotificationClick(\'' + notif.id + '\', \'' + (notif.type || '') + '\', \'' + (notif.link || '') + '\')" style="cursor:pointer;"><div class="notification-title">' + (notif.title || '') + '</div><div class="notification-message">' + (notif.message || '') + '</div><div class="notification-time">' + time + '</div></div><button onclick="event.stopPropagation(); if(confirm(\'מחק התראה?\')) deleteNotification(\'' + notif.id + '\')" style="background:#f44336;color:white;border:none;padding:0.3rem 0.6rem;border-radius:4px;cursor:pointer;font-size:0.8em;margin-top:0.5rem;">×</button></div>';
+                }).join('');
+            }
+        }
+        function toggleNotifications() {
+            const dropdown = document.getElementById('notificationsDropdown');
+            if (dropdown) {
+                if (dropdown.style.display === 'none') { dropdown.style.display = 'block'; loadNotifications(); }
+                else dropdown.style.display = 'none';
+            }
+        }
+        async function handleNotificationClick(notificationId, type, link) {
+            const token = localStorage.getItem('auth_token');
+            if (link) window.location.href = link;
+            if (!token) return;
+            try {
+                await fetch('/api/notifications/' + notificationId + '/read', { method: 'POST', headers: { 'Authorization': 'Bearer ' + token } });
+                await loadNotifications();
+            } catch (e) { console.error(e); }
+        }
+        async function deleteNotification(notificationId) {
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            try {
+                const r = await fetch('/api/notifications/' + notificationId, { method: 'DELETE', headers: { 'Authorization': 'Bearer ' + token } });
+                if (r.ok) await loadNotifications();
+            } catch (e) { console.error(e); }
+        }
+        async function clearNotifications() {
+            if (!confirm('האם למחוק את כל ההתראות הנקראות?')) return;
+            const token = localStorage.getItem('auth_token');
+            if (!token) { alert('אנא התחבר'); return; }
+            try {
+                const r = await fetch('/api/notifications?read_only=true', { method: 'DELETE', headers: { 'Authorization': 'Bearer ' + token } });
+                if (r.ok) { alert('✅ נמחקו'); await loadNotifications(); }
+                else alert('שגיאה');
+            } catch (e) { alert('שגיאה'); }
+        }
+        if (localStorage.getItem('auth_token')) setInterval(loadNotifications, 60000);
     </script>
 </body>
 </html>

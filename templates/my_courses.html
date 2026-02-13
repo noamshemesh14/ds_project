@@ -1018,7 +1018,6 @@
         <div class="navbar-content">
             <div class="logo">🎓 יועץ אקדמי חכם</div>
             <ul class="nav-links">
-                <li><a href="/">יועץ אקדמי</a></li>
                 <li><a href="/profile">פרופיל</a></li>
                 <li><a href="/schedule">בניית מערכת</a></li>
                 <li><a href="/my-courses" style="color: #667eea; font-weight: bold;">📚 הקורסים שלי</a></li>
@@ -1140,29 +1139,23 @@
             }
         } else {
             console.log('🔍 [DEBUG] Token found - updating button');
-            const userEmail = localStorage.getItem('user_email') || 'משתמש';
-            console.log('🔍 [DEBUG] User email:', userEmail);
             if (loginBtn) {
-                loginBtn.textContent = `👤 ${userEmail}`;
+                loginBtn.textContent = '🚪 התנתק';
                 loginBtn.onclick = () => {
                     if (confirm('האם אתה בטוח שברצונך להתנתק?')) {
-                        console.log('🔍 [DEBUG] User clicked logout - removing token');
                         localStorage.removeItem('auth_token');
                         localStorage.removeItem('user_id');
                         localStorage.removeItem('user_email');
                         window.location.href = '/login';
                     }
                 };
-                console.log('🔍 [DEBUG] Button updated successfully');
-            } else {
-                console.error('🔍 [DEBUG] ERROR: loginBtn not found!');
             }
         }
         
         // Days array
         const days = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
         
-        // Courses are loaded from Supabase only
+        // Courses array - loaded from server
         let courses = [];
         
         // Store groups data
@@ -1193,38 +1186,6 @@
                 }
             } catch (error) {
                 console.error('Error loading notifications:', error);
-            }
-        }
-
-        // Load courses from Supabase (no hardcoded data)
-        async function loadCourses() {
-            const token = localStorage.getItem('auth_token');
-            if (!token) {
-                courses = [];
-                return;
-            }
-
-            try {
-                const response = await fetch('/api/user-data', {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
-                });
-
-                if (response.ok) {
-                    const data = await response.json();
-                    courses = Array.isArray(data.courses) ? data.courses : [];
-                    console.log('✅ Loaded courses from Supabase:', courses.length);
-                } else if (response.status === 401) {
-                    console.log('Not authenticated - skipping courses');
-                    courses = [];
-                } else {
-                    console.error('Error loading courses:', response.status);
-                    courses = [];
-                }
-            } catch (error) {
-                console.error('Error loading courses:', error);
-                courses = [];
             }
         }
         
@@ -1609,9 +1570,21 @@
             
             // Create tabs
             courseTabs.innerHTML = courses.map((course, index) => {
-                const courseId = course.course_number || course.id || index;
+                const courseId = course.id || course.course_number || index;
+                const courseNumber = course.course_number || '';
                 const courseName = course.course_name || course.name || 'קורס ללא שם';
-                const hasGroup = userGroups[courseId] && userGroups[courseId].length > 0;
+                
+                // Try to find groups by multiple methods (same as in tab content)
+                let courseGroups = userGroups[courseId] || [];
+                if (courseGroups.length === 0 && courseNumber) {
+                    courseGroups = userGroups[courseNumber] || [];
+                }
+                if (courseGroups.length === 0 && courseName) {
+                    const normalizedName = courseName.trim().toLowerCase();
+                    courseGroups = userGroups[normalizedName] || [];
+                }
+                
+                const hasGroup = courseGroups.length > 0;
                 return `
                     <div class="course-tab ${index === 0 ? 'active' : ''}" onclick="switchCourseTab(${index})" data-course-index="${index}">
                         ${courseName} ${hasGroup ? '👥' : ''}
@@ -1621,9 +1594,24 @@
             
             // Create tab content
             courseTabContent.innerHTML = courses.map((course, index) => {
-                const courseId = course.course_number || course.id || index;
+                const courseId = course.id || course.course_number || index;
+                const courseNumber = course.course_number || '';
                 const courseName = course.course_name || course.name || 'קורס ללא שם';
-                const courseGroups = userGroups[courseId] || [];
+                
+                // Try to find groups by multiple methods:
+                // 1. By course.id (UUID)
+                // 2. By course_number
+                // 3. By course_name (normalized)
+                let courseGroups = userGroups[courseId] || [];
+                if (courseGroups.length === 0 && courseNumber) {
+                    courseGroups = userGroups[courseNumber] || [];
+                }
+                if (courseGroups.length === 0 && courseName) {
+                    const normalizedName = courseName.trim().toLowerCase();
+                    courseGroups = userGroups[normalizedName] || [];
+                }
+                
+                console.log(`🔍 Course "${courseName}" (id: ${courseId}, number: ${courseNumber}): found ${courseGroups.length} groups`);
                 const courseAssignments = (typeof getCourseAssignments === 'function') ? getCourseAssignments(courseId) || [] : [];
                 
                 // Render assignments HTML
@@ -1787,10 +1775,56 @@
             }
         }
         
+        // Load user courses from server
+        async function loadUserCourses() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                console.log('No token - cannot load courses');
+                courses = [];
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/user-data', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    // Convert courses from API format to display format
+                    courses = (data.courses || []).map(course => ({
+                        id: course.id || course.course_number,
+                        course_name: course.course_name || '',
+                        course_number: course.course_number || '',
+                        credit_points: course.credit_points || 0,
+                        semester: course.semester || null,
+                        year: course.year || null
+                    }));
+                    console.log(`✅ Loaded ${courses.length} courses from server`);
+                } else if (response.status === 401) {
+                    // Token expired or invalid
+                    console.log('Not authenticated - clearing courses');
+                    courses = [];
+                } else {
+                    console.error('Error loading courses:', response.status);
+                    courses = [];
+                }
+            } catch (error) {
+                console.error('Error loading courses:', error);
+                courses = [];
+            }
+        }
+        
         // Load user groups
         async function loadUserGroups() {
             const token = localStorage.getItem('auth_token');
-            if (!token) return;
+            if (!token) {
+                console.log('No token - cannot load groups');
+                userGroups = {};
+                return;
+            }
             
             try {
                 const response = await fetch('/api/groups/my-groups', {
@@ -1801,23 +1835,73 @@
                 
                 if (response.ok) {
                     const data = await response.json();
-                    // Group groups by course_id
+                    // Group groups by multiple keys for better matching:
+                    // 1. course_id (could be UUID or course_number)
+                    // 2. course_number (extracted from course_id if it's a number, or from course_name)
+                    // 3. course_name (for matching by name)
                     userGroups = {};
                     (data.groups || []).forEach(group => {
-                        const courseKey = group.course_id != null ? String(group.course_id).trim() : '';
-                        if (!courseKey) return;
-                        if (!userGroups[courseKey]) {
-                            userGroups[courseKey] = [];
+                        const courseId = group.course_id;
+                        const courseName = group.course_name || '';
+                        
+                        // Try to extract course_number from course_id
+                        // If course_id looks like a number (not UUID), use it as course_number
+                        let courseNumber = null;
+                        if (courseId) {
+                            // Check if course_id is a number (not a UUID)
+                            if (/^\d+$/.test(String(courseId))) {
+                                courseNumber = courseId;
+                            } else {
+                                // It's probably a UUID - try to find course_number from course_name or other fields
+                                // We'll match by course_name instead
+                            }
                         }
-                        userGroups[courseKey].push(group);
+                        
+                        // Index by course_id (could be UUID or course_number)
+                        if (courseId) {
+                            if (!userGroups[courseId]) {
+                                userGroups[courseId] = [];
+                            }
+                            if (!userGroups[courseId].some(g => g.id === group.id)) {
+                                userGroups[courseId].push(group);
+                            }
+                        }
+                        
+                        // Index by course_number if we found one
+                        if (courseNumber && courseNumber !== courseId) {
+                            if (!userGroups[courseNumber]) {
+                                userGroups[courseNumber] = [];
+                            }
+                            if (!userGroups[courseNumber].some(g => g.id === group.id)) {
+                                userGroups[courseNumber].push(group);
+                            }
+                        }
+                        
+                        // Also index by course_name for matching (normalize name for comparison)
+                        if (courseName) {
+                            const normalizedName = courseName.trim().toLowerCase();
+                            if (!userGroups[normalizedName]) {
+                                userGroups[normalizedName] = [];
+                            }
+                            if (!userGroups[normalizedName].some(g => g.id === group.id)) {
+                                userGroups[normalizedName].push(group);
+                            }
+                        }
                     });
+                    console.log(`✅ Loaded ${data.groups?.length || 0} groups, indexed by ${Object.keys(userGroups).length} keys`);
+                    console.log(`📋 Group keys:`, Object.keys(userGroups));
                 } else if (response.status === 401) {
                     // Token expired or invalid - don't redirect automatically, just skip
-                    console.log('Not authenticated - skipping groups');
+                    console.log('Not authenticated - clearing groups');
+                    userGroups = {};
                     return;
+                } else {
+                    console.error('Error loading groups:', response.status);
+                    userGroups = {};
                 }
             } catch (error) {
                 console.error('Error loading groups:', error);
+                userGroups = {};
             }
         }
         
@@ -2044,7 +2128,10 @@
                 
                 alert(message);
                 closeCreateGroupModal();
-                // TODO: Refresh groups list
+                
+                // Refresh groups list and courses display
+                await loadUserGroups();
+                await displayMyCourses();
                 
             } catch (error) {
                 console.error('❌ Error creating group:', error);
@@ -2234,8 +2321,12 @@
         // Initialize - display courses and notifications
         async function initializePage() {
             console.log('🔍 [DEBUG] initializePage() called');
-            console.log('🔍 [DEBUG] courses array length:', courses.length);
             console.log('🔍 [DEBUG] Token at initializePage:', localStorage.getItem('auth_token') ? 'EXISTS' : 'MISSING');
+            
+            // Load courses from server first
+            console.log('🔍 [DEBUG] Loading courses from server...');
+            await loadUserCourses();
+            console.log('🔍 [DEBUG] courses array length after load:', courses.length);
             
             try {
                 // Load assignments
@@ -2247,11 +2338,9 @@
                 console.error('🔍 [DEBUG] Error in initializePage:', e);
             }
             
-            // Load courses then display
-            console.log('🔍 [DEBUG] Loading courses...');
-            await loadCourses();
+            // Display courses and load notifications
             console.log('🔍 [DEBUG] Calling displayMyCourses()...');
-            await displayMyCourses();
+            displayMyCourses();
             console.log('🔍 [DEBUG] Calling loadNotifications()...');
             loadNotifications();
             console.log('🔍 [DEBUG] initializePage() completed');
