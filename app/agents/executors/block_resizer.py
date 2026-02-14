@@ -275,8 +275,8 @@ class BlockResizer:
                         client.table("notifications").insert({
                             "user_id": member_id,
                             "type": "group_change_request",
-                            "title": f"Request to change meeting duration",
-                            "message": f"Request to change meeting duration from {original_duration} hours to {new_duration} hours",
+                            "title": f"Request to change meeting duration: {group_name}",
+                            "message": f"Request to change meeting duration from {original_duration} hours to {new_duration} hours. Approval from all members required.",
                             "link": f"/schedule?change_request={request_id}",
                             "read": False
                         }).execute()
