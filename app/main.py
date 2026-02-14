@@ -3496,7 +3496,42 @@ async def create_semester_schedule_item(
         user_id = current_user.get("id") or current_user.get("sub")
         client = supabase_admin if supabase_admin else supabase
         
+        # Validate start_time < end_time
+        start_minutes = _time_to_minutes(item_data.start_time)
+        end_minutes = _time_to_minutes(item_data.end_time)
+        if start_minutes >= end_minutes:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"שעת התחלה ({item_data.start_time}) חייבת להיות קטנה משעת סיום ({item_data.end_time})"
+            )
+        
+        # Check for overlaps with existing semester schedule items
+        existing_items = client.table("semester_schedule_items").select("id, days, start_time, end_time, course_name, type").eq("user_id", user_id).execute()
         import json
+        new_days = item_data.days if isinstance(item_data.days, list) else (json.loads(item_data.days) if isinstance(item_data.days, str) else [])
+        
+        for existing in (existing_items.data or []):
+            existing_days = existing.get("days", [])
+            if isinstance(existing_days, str):
+                try:
+                    existing_days = json.loads(existing_days)
+                except:
+                    existing_days = []
+            
+            # Check if there's a day overlap
+            if any(day in existing_days for day in new_days):
+                # Check time overlap
+                existing_start = _time_to_minutes(existing.get("start_time", "00:00"))
+                existing_end = _time_to_minutes(existing.get("end_time", "00:00"))
+                
+                if start_minutes < existing_end and end_minutes > existing_start:
+                    existing_course = existing.get("course_name", "קורס")
+                    existing_type = existing.get("type", "")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"בלוק זה חופף לבלוק קיים: {existing_course} ({existing_type}) ב-{existing.get('start_time')}-{existing.get('end_time')}"
+                    )
+        
         days_str = json.dumps(item_data.days) if isinstance(item_data.days, list) else str(item_data.days)
         
         new_item = {
@@ -3556,9 +3591,68 @@ async def update_semester_schedule_item(
         client = supabase_admin if supabase_admin else supabase
         
         # Check if item exists and belongs to user
-        existing = client.table("semester_schedule_items").select("id").eq("id", item_id).eq("user_id", user_id).execute()
+        existing = client.table("semester_schedule_items").select("id, start_time, end_time, days").eq("id", item_id).eq("user_id", user_id).execute()
         if not existing.data:
             raise HTTPException(status_code=404, detail="Semester schedule item not found")
+        
+        # Determine which start_time and end_time to validate
+        current_start = existing.data[0].get("start_time")
+        current_end = existing.data[0].get("end_time")
+        start_time_to_validate = item_data.start_time if item_data.start_time is not None else current_start
+        end_time_to_validate = item_data.end_time if item_data.end_time is not None else current_end
+        
+        # Validate start_time < end_time
+        if start_time_to_validate and end_time_to_validate:
+            start_minutes = _time_to_minutes(start_time_to_validate)
+            end_minutes = _time_to_minutes(end_time_to_validate)
+            if start_minutes >= end_minutes:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"שעת התחלה ({start_time_to_validate}) חייבת להיות קטנה משעת סיום ({end_time_to_validate})"
+                )
+        
+        # Determine which days to validate (use new days if provided, otherwise current)
+        current_days = existing.data[0].get("days", [])
+        if isinstance(current_days, str):
+            try:
+                import json
+                current_days = json.loads(current_days)
+            except:
+                current_days = []
+        
+        days_to_validate = item_data.days if item_data.days is not None else current_days
+        if isinstance(days_to_validate, str):
+            try:
+                import json
+                days_to_validate = json.loads(days_to_validate)
+            except:
+                days_to_validate = []
+        
+        # Check for overlaps with existing semester schedule items (excluding current item)
+        existing_items = client.table("semester_schedule_items").select("id, days, start_time, end_time, course_name, type").eq("user_id", user_id).neq("id", item_id).execute()
+        
+        for existing in (existing_items.data or []):
+            existing_days = existing.get("days", [])
+            if isinstance(existing_days, str):
+                try:
+                    import json
+                    existing_days = json.loads(existing_days)
+                except:
+                    existing_days = []
+            
+            # Check if there's a day overlap
+            if any(day in existing_days for day in days_to_validate):
+                # Check time overlap
+                existing_start = _time_to_minutes(existing.get("start_time", "00:00"))
+                existing_end = _time_to_minutes(existing.get("end_time", "00:00"))
+                
+                if start_minutes < existing_end and end_minutes > existing_start:
+                    existing_course = existing.get("course_name", "קורס")
+                    existing_type = existing.get("type", "")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"בלוק זה חופף לבלוק קיים: {existing_course} ({existing_type}) ב-{existing.get('start_time')}-{existing.get('end_time')}"
+                    )
         
         # Build update data (only include fields that are provided)
         update_data = {}
