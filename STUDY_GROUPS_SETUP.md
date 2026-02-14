@@ -38,9 +38,10 @@ CREATE TABLE IF NOT EXISTS group_members (
 );
 
 -- 1.3. Create group_invitations table
+-- NOTE: group_id is nullable because invitations can be created before the group exists
 CREATE TABLE IF NOT EXISTS group_invitations (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    group_id UUID NOT NULL REFERENCES study_groups(id) ON DELETE CASCADE,
+    group_id UUID REFERENCES study_groups(id) ON DELETE CASCADE,
     inviter_id UUID NOT NULL REFERENCES auth.users(id),
     invitee_email TEXT NOT NULL,
     invitee_user_id UUID REFERENCES auth.users(id),
@@ -48,6 +49,18 @@ CREATE TABLE IF NOT EXISTS group_invitations (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     responded_at TIMESTAMP WITH TIME ZONE,
     expires_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() + INTERVAL '30 days')
+);
+
+-- 1.3.1. Create pending_group_creations table (stores group metadata before group is created)
+CREATE TABLE IF NOT EXISTS pending_group_creations (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    inviter_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    course_id TEXT NOT NULL,
+    course_name TEXT NOT NULL,
+    group_name TEXT NOT NULL,
+    description TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(inviter_id, course_id)  -- One pending group per inviter per course
 );
 
 -- 1.4. Create group_messages table
@@ -257,6 +270,31 @@ CREATE POLICY "Invitees can update their invitations"
     ON group_invitations FOR UPDATE
     USING (invitee_user_id = auth.uid());
 
+-- Allow creating invitations with NULL group_id (before group is created)
+DROP POLICY IF EXISTS "Users can create invitations with NULL group_id" ON group_invitations;
+CREATE POLICY "Users can create invitations with NULL group_id"
+    ON group_invitations FOR INSERT
+    WITH CHECK (inviter_id = auth.uid());
+
+-- Policies for pending_group_creations
+-- Enable RLS (optional - if using service role, RLS can stay disabled)
+-- ALTER TABLE pending_group_creations ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view their own pending group creations" ON pending_group_creations;
+CREATE POLICY "Users can view their own pending group creations"
+    ON pending_group_creations FOR SELECT
+    USING (inviter_id = auth.uid());
+
+DROP POLICY IF EXISTS "Users can create their own pending group creations" ON pending_group_creations;
+CREATE POLICY "Users can create their own pending group creations"
+    ON pending_group_creations FOR INSERT
+    WITH CHECK (inviter_id = auth.uid());
+
+DROP POLICY IF EXISTS "Users can delete their own pending group creations" ON pending_group_creations;
+CREATE POLICY "Users can delete their own pending group creations"
+    ON pending_group_creations FOR DELETE
+    USING (inviter_id = auth.uid());
+
 -- Policies for group_messages
 DROP POLICY IF EXISTS "Group members can view messages" ON group_messages;
 CREATE POLICY "Group members can view messages"
@@ -348,9 +386,21 @@ CREATE TRIGGER on_study_group_created
 - ✅ study_groups
 - ✅ group_members
 - ✅ group_invitations
+- ✅ pending_group_creations (חדש!)
 - ✅ group_messages
 - ✅ group_updates
 - ✅ notifications
+
+## 3.1. Migration עבור נתונים קיימים
+
+אם יש לך הזמנות ישנות עם `group_id = NULL` שנוצרו לפני שהטבלה `pending_group_creations` הייתה קיימת, הרץ את הסקריפט ב-`MIGRATION_pending_group_creations.sql`:
+
+```sql
+-- זה יוצר רשומות ב-pending_group_creations עבור הזמנות ישנות
+-- שים לב: group_name יהיה ברירת מחדל כי אין לנו את השם המקורי
+```
+
+**הערה:** קבוצות שכבר נוצרו (יש להן `group_id` ב-`group_invitations`) לא צריכות migration - הן כבר ב-`study_groups` עם כל המידע.
 
 ## 4. פתרון בעיות
 

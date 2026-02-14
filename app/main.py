@@ -3273,8 +3273,8 @@ async def _run_weekly_auto_for_all_users(week_start_override: Optional[str] = No
                         notif_data = {
                             "user_id": uid,
                             "type": "plan_ready",
-                            "title": "המערכת השבועית שלך מוכנה! 📅",
-                            "message": f"הסוכן סיים לתכנן את המערכת שלך לשבוע הבא ({week_start}). מוזמן להסתכל ולעדכן!",
+                            "title": "Your weekly schedule is ready! 📅",
+                            "message": f"The agent has finished planning your schedule for next week ({week_start}). Feel free to review and update!",
                             "link": f"/schedule?week={week_start}",
                             "read": False
                         }
@@ -5676,8 +5676,8 @@ async def generate_weekly_plan(
                 notif_data = {
                     "user_id": user_id,
                     "type": "plan_ready",
-                    "title": "המערכת השבועית שלך מוכנה! 📅",
-                    "message": f"הסוכן סיים לתכנן את המערכת שלך לשבוע ({week_start}). מוזמן להסתכל ולעדכן!",
+                    "title": "Your weekly schedule is ready! 📅",
+                    "message": f"The agent has finished planning your schedule for week ({week_start}). Feel free to review and update!",
                     "link": f"/schedule?week={week_start}",
                     "read": False
                 }
@@ -7927,11 +7927,11 @@ async def approve_group_change_request(
                     
                     # Create appropriate message based on request type
                     if request_type == "resize":
-                        action_text = f"להאריך מפגש ל-{proposed_duration} שעות"
-                        time_text = f"ביום {day_names[check_day]} {check_start}"
+                        action_text = f"extend meeting to {proposed_duration} hours"
+                        time_text = f"on {day_names[check_day]} {check_start}"
                     else:
-                        action_text = "להזיז מפגש"
-                        time_text = f"ליום {day_names[check_day]} {check_start}"
+                        action_text = "move meeting"
+                        time_text = f"to {day_names[check_day]} {check_start}"
                     
                     client.table("notifications").insert({
                         "user_id": requester_id,
@@ -9258,6 +9258,15 @@ async def create_study_group(
         
         logging.info(f"   After filtering: {len(filtered_emails)} valid emails (removed {len(group_data.invite_emails) - len(filtered_emails)} self-invites)")
         
+        # CRITICAL: Must invite at least one user (other than yourself)
+        if not filtered_emails:
+            error_msg = "You must invite at least one other user to the group. You cannot create a group with only yourself."
+            logging.error(f"   ❌ {error_msg}")
+            raise HTTPException(
+                status_code=400,
+                detail=error_msg
+            )
+        
         # FIRST: Validate all emails before creating the group
         # Check if all emails are registered users
         valid_emails = []
@@ -9320,13 +9329,17 @@ async def create_study_group(
                 detail=error_msg
             )
         
-        # Allow group creation without invitees (user can invite later)
-        # Only reject if user tried to invite themselves and no other valid emails
+        # CRITICAL: Must have at least one valid email (after filtering self-invite)
         if not valid_emails:
             if self_invite_attempted:
-                logging.warning(f"   ⚠️ User tried to invite themselves only - allowing group creation without invitees")
+                error_msg = "You tried to invite yourself only. You must invite at least one other user to the group."
             else:
-                logging.info(f"   ℹ️ No invitees provided - group will be created without initial members")
+                error_msg = "No valid invitees provided. You must invite at least one other user to the group."
+            logging.error(f"   ❌ {error_msg}")
+            raise HTTPException(
+                status_code=400,
+                detail=error_msg
+            )
         
         # Get creator's current semester and year to validate invitees
         creator_profile = client.table("user_profiles").select("current_semester, current_year").eq("id", user_id).execute()
@@ -9436,65 +9449,90 @@ async def create_study_group(
                 detail=error_msg
             )
         
-        # If no eligible emails after validation AND there were invitees, reject
-        # But allow group creation without invitees (user can invite later)
-        if not eligible_emails and valid_emails:
-            error_msg = "None of the invited users are enrolled in this course for the selected semester."
+        # CRITICAL: Must have at least one eligible invitee
+        # A group cannot be created without at least one other member (besides the creator)
+        if not eligible_emails:
+            if valid_emails:
+                error_msg = "None of the invited users are enrolled in this course for the selected semester. You must invite at least one user who is enrolled in this course."
+            else:
+                error_msg = "You must invite at least one other user to the group. You cannot create a group with only yourself."
             logging.error(f"   ❌ {error_msg}")
             raise HTTPException(
                 status_code=400,
                 detail=error_msg
             )
         
-        # If no invitees at all, that's fine - group can be created without members
-        if not valid_emails:
-            logging.info(f"   ℹ️ No invitees provided - group will be created without initial members")
+        # CRITICAL: Check if user already has a group for this course
+        # Check 1: Groups where user is the creator
+        existing_groups_as_creator = client.table("study_groups").select("id, group_name").eq("created_by", user_id).eq("course_id", course_number).execute()
+        if existing_groups_as_creator.data and len(existing_groups_as_creator.data) > 0:
+            existing_group = existing_groups_as_creator.data[0]
+            error_msg = f"You already have a group for this course: {existing_group.get('group_name')}. You can only create one group per course."
+            logging.error(f"   ❌ {error_msg}")
+            raise HTTPException(
+                status_code=400,
+                detail=error_msg
+            )
         
-        # NOW create the group (only if all emails are valid and eligible)
-        logging.info(f"   ✅ All {len(eligible_emails)} invitees are eligible. Creating group...")
-        group_result = client.table("study_groups").insert({
-            "course_id": course_number,  # Use course_number (not UUID) for consistency
-            "course_name": group_data.course_name,
-            "group_name": group_data.group_name,
-            "description": group_data.description,
-            "created_by": user_id
-        }).execute()
+        # Check 2: Groups where user is a member (approved)
+        user_groups = client.table("group_members").select("group_id, status").eq("user_id", user_id).eq("status", "approved").execute()
+        if user_groups.data:
+            group_ids = [gm["group_id"] for gm in user_groups.data]
+            if group_ids:
+                existing_groups_as_member = client.table("study_groups").select("id, group_name").eq("course_id", course_number).in_("id", group_ids).execute()
+                if existing_groups_as_member.data and len(existing_groups_as_member.data) > 0:
+                    existing_group = existing_groups_as_member.data[0]
+                    error_msg = f"You are already a member of a group for this course: {existing_group.get('group_name')}. You can only be in one group per course."
+                    logging.error(f"   ❌ {error_msg}")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=error_msg
+                    )
         
-        if not group_result.data:
-            raise HTTPException(status_code=500, detail="Failed to create group")
+            # Check 3: Pending invitations where user is the inviter (creator) for the same course
+            # Since group_id might be NULL, we need to check invitations with NULL group_id
+            # and match by checking if the inviter has other pending invitations
+            pending_invitations_as_inviter = client.table("group_invitations").select("id, group_id").eq("inviter_id", user_id).eq("status", "pending").execute()
+            if pending_invitations_as_inviter.data:
+                # Check if any of these invitations have NULL group_id (meaning group not created yet)
+                # This indicates there's a pending group creation for this inviter
+                has_null_group_id = any(inv.get("group_id") is None or str(inv.get("group_id", "")).strip().lower() in ["null", "none", ""] for inv in pending_invitations_as_inviter.data)
+                if has_null_group_id:
+                    error_msg = f"You already have a pending group invitation. Please wait for responses or cancel the existing invitation before creating a new group."
+                    logging.error(f"   ❌ {error_msg}")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=error_msg
+                    )
         
-        group = group_result.data[0]
-        group_id = group['id']
+        # CRITICAL: Group should only be created AFTER all invitees accept
+        # We always have at least one eligible invitee (validated above)
+        # The group will be created when all invitees accept (in accept_invitation)
         
-        # Create group_preferences with default values
-        try:
-            client.table("group_preferences").insert({
-                "group_id": group_id,
-                "preferred_hours_per_week": 4,  # Default 4 hours per week
-                "hours_change_history": []
-            }).execute()
-            logging.info(f"✅ Created group_preferences for group {group_id}")
-        except Exception as gp_err:
-            # If preferences already exist, that's okay
-            logging.warning(f"⚠️ Could not create group_preferences (may already exist): {gp_err}")
+        group_id = None
+        group = None
         
-        # Add creator as an approved member of the group
-        try:
-            creator_member_data = {
-                "group_id": group_id,
-                "user_id": user_id,
-                "status": "approved"
-            }
-            client.table("group_members").insert(creator_member_data).execute()
-            logging.info(f"✅ Added creator {user_id} as approved member of group {group_id}")
-        except Exception as creator_member_error:
-            # Check if already exists (might happen if retrying)
-            existing = client.table("group_members").select("*").eq("group_id", group_id).eq("user_id", user_id).execute()
-            if not existing.data:
-                logging.error(f"❌ Failed to add creator as member: {creator_member_error}")
-                # Don't fail the whole operation, but log the error
-            else:
-                logging.info(f"ℹ️ Creator already exists as member")
+        # Group will be created only after all invitees accept
+        logging.info(f"   ✅ All {len(eligible_emails)} invitees are eligible. Group will be created after all accept invitations.")
+        
+        # CRITICAL: Store group creation metadata for later use
+        # This allows us to preserve group_name, course_name, description when creating the group
+        pending_group_creation_id = None
+        if not group_id:  # Only if group not created yet
+            try:
+                pending_creation_result = client.table("pending_group_creations").insert({
+                    "inviter_id": user_id,
+                    "course_id": course_number,
+                    "course_name": group_data.course_name,
+                    "group_name": group_data.group_name,
+                    "description": group_data.description
+                }).execute()
+                if pending_creation_result.data:
+                    pending_group_creation_id = pending_creation_result.data[0]['id']
+                    logging.info(f"✅ Stored pending group creation metadata: {pending_group_creation_id}")
+            except Exception as pending_err:
+                # If table doesn't exist, log warning but continue
+                logging.warning(f"⚠️ Could not store pending group creation (table may not exist): {pending_err}")
         
         # Create invitations for each ELIGIBLE email
         invitations_created = []
@@ -9505,12 +9543,12 @@ async def create_study_group(
             user_check = email_data["user"]
             
             try:
-                # Create invitation (user is already validated and eligible)
+                # Create invitation WITHOUT group_id (will be set when group is created)
                 invitation_data = {
-                    "group_id": group_id,
+                    "group_id": group_id,  # NULL if group not created yet
                     "inviter_id": user_id,
                     "invitee_email": email,
-                    "invitee_user_id": user_check.id,  # Always set if user exists
+                    "invitee_user_id": user_check.id,
                     "status": "pending"
                 }
                 
@@ -9551,12 +9589,19 @@ async def create_study_group(
                 logging.error(f"   Traceback: {traceback.format_exc()}")
                 invitations_failed.append(email)
         
-        result = {
-            "group": group,
-            "invitations_created": invitations_created,
-            "invitations_failed": invitations_failed,
-            "message": f"Group created successfully. {len(invitations_created)} invitations sent."
-        }
+        if group:
+            result = {
+                "group": group,
+                "invitations_created": invitations_created,
+                "invitations_failed": invitations_failed,
+                "message": f"Group created successfully. {len(invitations_created)} invitations sent."
+            }
+        else:
+            result = {
+                "invitations_created": invitations_created,
+                "invitations_failed": invitations_failed,
+                "message": f"Invitations sent. Group will be created after all invitees accept. {len(invitations_created)} invitations sent."
+            }
         
         # Add info if user tried to invite themselves
         if self_invite_attempted:
@@ -9883,6 +9928,10 @@ async def accept_invitation(
         group_id = invitation.get('group_id')
         inviter_id_raw = invitation.get('inviter_id')
         
+        # CRITICAL: If group_id is NULL, the group hasn't been created yet
+        # We need to check if all invitees accepted before creating the group
+        group_id_is_null = group_id is None or str(group_id).strip().lower() in ["null", "none", ""]
+        
         # Normalize inviter_id - handle None, "null", "None", etc.
         # Convert to None if it's any form of null/empty
         inviter_id = None
@@ -9898,16 +9947,22 @@ async def accept_invitation(
         
         logging.info(f"📋 Invitation data: group_id={group_id} (type: {type(group_id)}), user_id={user_id} (type: {type(user_id)}), inviter_id={inviter_id} (type: {type(inviter_id)})")
         
-        # Validate that we have required data
-        if not group_id or group_id is None:
-            logging.error(f"❌ Invalid group_id: {group_id}")
-            raise HTTPException(status_code=400, detail="Invalid invitation: missing or invalid group_id")
-        
-        # Check if group_id is a string "null"
-        group_id_str = str(group_id).strip()
-        if group_id_str.lower() in ["null", "none", ""]:
-            logging.error(f"❌ Invalid group_id (string null): {group_id}")
-            raise HTTPException(status_code=400, detail="Invalid invitation: missing or invalid group_id")
+        # If group_id is NULL, we need to create the group after checking all acceptances
+        if group_id_is_null:
+            logging.info(f"   🔍 Group not created yet (group_id is NULL). Will create after checking all acceptances.")
+            # We'll handle group creation below after checking all acceptances
+            group_id_str = None
+        else:
+            # Validate that we have required data
+            if not group_id or group_id is None:
+                logging.error(f"❌ Invalid group_id: {group_id}")
+                raise HTTPException(status_code=400, detail="Invalid invitation: missing or invalid group_id")
+            
+            # Check if group_id is a string "null"
+            group_id_str = str(group_id).strip()
+            if group_id_str.lower() in ["null", "none", ""]:
+                logging.error(f"❌ Invalid group_id (string null): {group_id}")
+                raise HTTPException(status_code=400, detail="Invalid invitation: missing or invalid group_id")
         
         if not user_id or user_id is None:
             logging.error(f"❌ Invalid user_id: {user_id}")
@@ -9919,19 +9974,143 @@ async def accept_invitation(
             logging.error(f"❌ Invalid user_id (string null): {user_id}")
             raise HTTPException(status_code=400, detail="Invalid user_id")
         
-        # Update invitation status FIRST (before inserting member, so RLS policy can check it)
+        # Update invitation status FIRST
         client.table("group_invitations").update({
             "status": "accepted",
             "responded_at": "now()"
         }).eq("id", invitation_id).execute()
         logging.info(f"✅ Updated invitation status to accepted")
         
-        # Add user to group members - build data carefully, ensure all values are valid UUIDs
-        # First, validate all UUIDs are valid format
+        # CRITICAL: If group_id is NULL, check if all invitees accepted and create group
+        if group_id_is_null:
+            logging.info(f"   🔍 Group not created yet. Checking if all invitees accepted...")
+            
+            # Get invitation info to find all related invitations
+            invitation_info = client.table("group_invitations").select("*").eq("id", invitation_id).execute()
+            if not invitation_info.data:
+                raise HTTPException(status_code=404, detail="Invitation not found")
+            
+            inv_info = invitation_info.data[0]
+            inviter_id_from_inv = inv_info.get("inviter_id")
+            
+            # Find all invitations from the same inviter with NULL group_id (same batch)
+            all_invitations = client.table("group_invitations").select("*").eq("inviter_id", inviter_id_from_inv).is_("group_id", "null").execute()
+            
+            if all_invitations.data:
+                # Check if all are accepted
+                all_accepted = all(inv.get("status") == "accepted" for inv in all_invitations.data)
+                
+                if all_accepted:
+                    # All accepted! Create the group now
+                    logging.info(f"   ✅ All invitees accepted! Creating group...")
+                    
+                    # Get group info from pending_group_creations table
+                    pending_creation = None
+                    try:
+                        pending_result = client.table("pending_group_creations").select("*").eq("inviter_id", inviter_id_from_inv).order("created_at", desc=True).limit(1).execute()
+                        if pending_result.data:
+                            pending_creation = pending_result.data[0]
+                            logging.info(f"   ✅ Found pending group creation metadata")
+                    except Exception as pending_err:
+                        logging.warning(f"   ⚠️ Could not get pending group creation (table may not exist): {pending_err}")
+                    
+                    if pending_creation:
+                        # Use the stored group info
+                        group_name = pending_creation.get("group_name") or "Study Group"
+                        course_id = pending_creation.get("course_id")
+                        course_name = pending_creation.get("course_name") or ""
+                        description = pending_creation.get("description")
+                    else:
+                        # Fallback: Get group info by finding the common course between inviter and all invitees
+                        accepted_invitee_ids = [inv.get("invitee_user_id") for inv in all_invitations.data if inv.get("invitee_user_id")]
+                        
+                        inviter_courses = client.table("courses").select("course_number, course_name").eq("user_id", inviter_id_from_inv).execute()
+                        inviter_course_numbers = {c.get("course_number"): c.get("course_name") for c in (inviter_courses.data or [])}
+                        
+                        common_course = None
+                        common_course_name = None
+                        for course_num, course_name in inviter_course_numbers.items():
+                            all_have_course = True
+                            for invitee_id in accepted_invitee_ids:
+                                invitee_courses = client.table("courses").select("course_number").eq("user_id", invitee_id).eq("course_number", course_num).execute()
+                                if not invitee_courses.data:
+                                    all_have_course = False
+                                    break
+                            if all_have_course:
+                                common_course = course_num
+                                common_course_name = course_name
+                                break
+                        
+                        if not common_course:
+                            raise HTTPException(status_code=400, detail="Could not determine course for group creation. Please contact support.")
+                        
+                        group_name = f"Study Group - {common_course_name or common_course}"
+                        course_id = common_course
+                        course_name = common_course_name or ""
+                        description = None
+                    
+                    if not course_id:
+                        raise HTTPException(status_code=400, detail="Missing course_id for group creation")
+                    
+                    # Create the group
+                    group_result = client.table("study_groups").insert({
+                        "course_id": course_id,
+                        "course_name": course_name,
+                        "group_name": group_name,
+                        "description": description,
+                        "created_by": inviter_id_from_inv
+                    }).execute()
+                    
+                    if not group_result.data:
+                        raise HTTPException(status_code=500, detail="Failed to create group")
+                    
+                    new_group = group_result.data[0]
+                    new_group_id = new_group['id']
+                    group_id_str = new_group_id
+                    
+                    # Create group_preferences
+                    try:
+                        client.table("group_preferences").insert({
+                            "group_id": new_group_id,
+                            "preferred_hours_per_week": 4,
+                            "hours_change_history": []
+                        }).execute()
+                    except Exception as gp_err:
+                        logging.warning(f"⚠️ Could not create group_preferences: {gp_err}")
+                    
+                    # Add creator as approved member
+                    try:
+                        client.table("group_members").insert({
+                            "group_id": new_group_id,
+                            "user_id": inviter_id_from_inv,
+                            "status": "approved"
+                        }).execute()
+                    except Exception as creator_err:
+                        logging.warning(f"⚠️ Could not add creator as member: {creator_err}")
+                    
+                    # Update all invitations with the new group_id
+                    client.table("group_invitations").update({
+                        "group_id": new_group_id
+                    }).eq("inviter_id", inviter_id_from_inv).is_("group_id", "null").execute()
+                    
+                    # Delete the pending_group_creation record (no longer needed)
+                    try:
+                        client.table("pending_group_creations").delete().eq("inviter_id", inviter_id_from_inv).execute()
+                        logging.info(f"   ✅ Deleted pending group creation record")
+                    except Exception as delete_err:
+                        logging.warning(f"   ⚠️ Could not delete pending group creation: {delete_err}")
+                    
+                    logging.info(f"   ✅ Group {new_group_id} created and all invitations updated")
+                else:
+                    # Not all accepted yet - wait
+                    logging.info(f"   ⏳ Not all invitees accepted yet. Waiting for others...")
+                    # Don't add member yet - wait for all to accept
+                    return JSONResponse(content={"success": True, "message": "Invitation accepted. Group will be created when all invitees accept."})
+        
+        # Now add user to group members (group exists or was just created)
         import re
         uuid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
         
-        # Validate group_id and user_id are valid UUIDs (already normalized above)
         if not uuid_pattern.match(group_id_str):
             logging.error(f"❌ Invalid group_id format: {group_id_str}")
             raise HTTPException(status_code=400, detail="Invalid group_id format")
@@ -9940,7 +10119,7 @@ async def accept_invitation(
             logging.error(f"❌ Invalid user_id format: {user_id_str}")
             raise HTTPException(status_code=400, detail="Invalid user_id format")
         
-        # Build member_data - SIMPLIFIED: Only include required fields, skip invited_by entirely if invalid
+        # Build member_data
         member_data = {
             "group_id": group_id_str,
             "user_id": user_id_str,
@@ -9948,28 +10127,19 @@ async def accept_invitation(
         }
         
         # Only add invited_by if we have a valid UUID
-        # Skip entirely if None, empty, or "null" string
         if inviter_id and inviter_id is not None:
             inviter_str = str(inviter_id).strip()
             if inviter_str and inviter_str.lower() not in ["null", "none", ""]:
                 if uuid_pattern.match(inviter_str):
                     member_data["invited_by"] = inviter_str
                     logging.info(f"✅ Added inviter_id: {inviter_str}")
-                else:
-                    logging.warning(f"⚠️ Invalid inviter_id format, skipping invited_by")
-            else:
-                logging.info(f"ℹ️ inviter_id is null/empty, skipping invited_by")
         
-        logging.info(f"📋 Final member_data: {member_data}")
-        logging.info(f"   Keys: {list(member_data.keys())}")
-        
-        # Check if member already exists (using the selected client)
+        # Check if member already exists
         existing = client.table("group_members").select("*").eq("group_id", group_id_str).eq("user_id", user_id_str).execute()
         
         if existing.data and len(existing.data) > 0:
-            # Update existing member - only update status
+            # Update existing member
             logging.info(f"🔄 Updating existing member")
-            logging.info(f"   Existing: {existing.data[0]}")
             update_data = {"status": "approved"}
             try:
                 result = client.table("group_members").update(update_data).eq("group_id", group_id_str).eq("user_id", user_id_str).execute()
@@ -9978,18 +10148,92 @@ async def accept_invitation(
                 logging.error(f"❌ Update error: {update_err}")
                 raise
         else:
-            # Insert new member (using the selected client)
+            # Insert new member
             logging.info(f"➕ Inserting new member")
-            logging.info(f"   Data to insert: {member_data}")
             try:
                 result = client.table("group_members").insert(member_data).execute()
                 logging.info(f"✅ Successfully inserted member: {result.data}")
             except Exception as insert_err:
                 logging.error(f"❌ Insert error: {insert_err}")
-                logging.error(f"   Error type: {type(insert_err)}")
-                if hasattr(insert_err, 'message'):
-                    logging.error(f"   Error message: {insert_err.message}")
                 raise
+            # Group doesn't exist yet - check if all invitees have accepted
+            logging.info(f"   🔍 Group {group_id_str} doesn't exist yet. Checking if all invitees accepted...")
+            
+            # Get all invitations for this group (by inviter_id and course info)
+            # Since group_id is NULL, we need to find invitations by inviter_id and matching course info
+            invitation_info = client.table("group_invitations").select("*").eq("id", invitation_id).execute()
+            if not invitation_info.data:
+                raise HTTPException(status_code=404, detail="Invitation not found")
+            
+            inv_info = invitation_info.data[0]
+            inviter_id_from_inv = inv_info.get("inviter_id")
+            
+            # Find all invitations from the same inviter with same course (group_id is NULL)
+            all_invitations = client.table("group_invitations").select("*").eq("inviter_id", inviter_id_from_inv).is_("group_id", "null").execute()
+            
+            if all_invitations.data:
+                # Check if all are accepted
+                all_accepted = all(inv.get("status") == "accepted" for inv in all_invitations.data)
+                
+                if all_accepted:
+                    # All accepted! Create the group now
+                    logging.info(f"   ✅ All invitees accepted! Creating group...")
+                    
+                    # Get group info from first invitation (they all have the same info)
+                    first_inv = all_invitations.data[0]
+                    group_name = first_inv.get("group_name") or "Study Group"
+                    course_id = first_inv.get("course_id")
+                    course_name = first_inv.get("course_name") or ""
+                    description = first_inv.get("description")
+                    
+                    # Create the group
+                    group_result = client.table("study_groups").insert({
+                        "course_id": course_id,
+                        "course_name": course_name,
+                        "group_name": group_name,
+                        "description": description,
+                        "created_by": inviter_id_from_inv
+                    }).execute()
+                    
+                    if not group_result.data:
+                        raise HTTPException(status_code=500, detail="Failed to create group")
+                    
+                    new_group = group_result.data[0]
+                    new_group_id = new_group['id']
+                    
+                    # Create group_preferences
+                    try:
+                        client.table("group_preferences").insert({
+                            "group_id": new_group_id,
+                            "preferred_hours_per_week": 4,
+                            "hours_change_history": []
+                        }).execute()
+                    except Exception as gp_err:
+                        logging.warning(f"⚠️ Could not create group_preferences: {gp_err}")
+                    
+                    # Add creator as approved member
+                    try:
+                        client.table("group_members").insert({
+                            "group_id": new_group_id,
+                            "user_id": inviter_id_from_inv,
+                            "status": "approved"
+                        }).execute()
+                    except Exception as creator_err:
+                        logging.warning(f"⚠️ Could not add creator as member: {creator_err}")
+                    
+                    # Update all invitations with the new group_id
+                    client.table("group_invitations").update({
+                        "group_id": new_group_id
+                    }).eq("inviter_id", inviter_id_from_inv).is_("group_id", "null").execute()
+                    
+                    # Update group_id for this invitation
+                    group_id_str = new_group_id
+                    logging.info(f"   ✅ Group {new_group_id} created and all invitations updated")
+                else:
+                    # Not all accepted yet - wait
+                    logging.info(f"   ⏳ Not all invitees accepted yet. Waiting for others...")
+            else:
+                logging.warning(f"   ⚠️ Could not find related invitations")
         
         # Mark notification as read and update it to show it was accepted
         try:
