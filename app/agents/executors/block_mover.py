@@ -485,8 +485,8 @@ class BlockMover:
                 raise HTTPException(status_code=400, detail=conflict_message)
             
             # Update all consecutive blocks
-            # Calculate time slots for the new location
-            time_slots = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
+            # Calculate time slots for the new location (extend to 22:00 to support evening hours)
+            time_slots = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00", "22:00"]
             
             # Find the closest time slot to new_start_time
             if new_start_time in time_slots:
@@ -504,10 +504,11 @@ class BlockMover:
                 new_start_time = time_slots[new_start_idx]  # Normalize to time slot
             
             # Update all consecutive blocks
+            updated_count = 0
             for i, block_id_to_move in enumerate(blocks_to_move_ids):
                 if new_start_idx + i < len(time_slots):
                     new_time = time_slots[new_start_idx + i]
-                    new_end = time_slots[new_start_idx + i + 1] if (new_start_idx + i + 1) < len(time_slots) else "21:00"
+                    new_end = time_slots[new_start_idx + i + 1] if (new_start_idx + i + 1) < len(time_slots) else "23:00"
                     
                     update_result = client.table("weekly_plan_blocks").update({
                         "day_of_week": new_day,
@@ -516,8 +517,37 @@ class BlockMover:
                         "source": "manual"
                     }).eq("id", block_id_to_move).execute()
                     
-                    if not update_result.data:
-                        logger.warning(f"⚠️ Failed to update block {block_id_to_move}")
+                    if update_result.data:
+                        updated_count += 1
+                        logger.info(f"✅ Updated block {block_id_to_move} to day {new_day}, {new_time}-{new_end}")
+                    else:
+                        logger.warning(f"⚠️ Failed to update block {block_id_to_move} - block may have been deleted")
+                        # If update failed, try to create a new block instead
+                        try:
+                            # Get block details from the original block
+                            original_block = consecutive_blocks[i] if i < len(consecutive_blocks) else block
+                            new_block_data = {
+                                "plan_id": block["plan_id"],
+                                "user_id": user_id,
+                                "course_number": course_number,
+                                "course_name": course_name,
+                                "work_type": work_type,
+                                "day_of_week": new_day,
+                                "start_time": new_time,
+                                "end_time": new_end,
+                                "source": "manual"
+                            }
+                            insert_result = client.table("weekly_plan_blocks").insert(new_block_data).execute()
+                            if insert_result.data:
+                                updated_count += 1
+                                logger.info(f"✅ Created new block at day {new_day}, {new_time}-{new_end} (original block was deleted)")
+                            else:
+                                logger.error(f"❌ Failed to create new block at day {new_day}, {new_time}-{new_end}")
+                        except Exception as create_err:
+                            logger.error(f"❌ Error creating new block: {create_err}")
+            
+            if updated_count == 0:
+                raise HTTPException(status_code=500, detail="Failed to move any blocks - all updates failed")
             
             logger.info(f"✅ Successfully moved {num_hours_to_move} consecutive block(s) to day {new_day}, {new_start_time}-{new_end_time}")
             

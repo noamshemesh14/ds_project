@@ -1552,14 +1552,30 @@
                         const startsHere = !prevTime || !isTimeInRange(prevTime, constraint.start_time, constraint.end_time);
                         let numHours = 1;
                         if (startsHere) {
-                            for (let i = slotIndex + 1; i < timeSlots.length && isTimeInRange(timeSlots[i], constraint.start_time, constraint.end_time); i++) numHours++;
+                            // Count how many time slots (including current one) are within the constraint's time range
+                            // Start from current slot and count all consecutive slots that are in range
+                            for (let i = slotIndex; i < timeSlots.length && isTimeInRange(timeSlots[i], constraint.start_time, constraint.end_time); i++) {
+                                if (i === slotIndex) {
+                                    // First iteration - already counted as 1, so don't increment
+                                    continue;
+                                }
+                                numHours++;
+                            }
                         }
                         const cell = document.createElement('td');
                         cell.className = 'schedule-cell has-constraint';
                         if (startsHere && numHours > 1) cell.rowSpan = numHours;
                         if (startsHere) {
                             const badge = document.createElement('span');
-                            badge.className = 'constraint-badge';
+                            badge.className = `constraint-badge ${constraint.is_hard === false ? 'soft' : ''}`;
+                            
+                            // Set badge height to span all hours (like semester blocks)
+                            const cellHeight = 80; // matches td height in CSS
+                            const badgeHeight = (cellHeight * numHours) - 10; // -10 for padding
+                            badge.style.height = `${badgeHeight}px`;
+                            badge.style.minHeight = `${badgeHeight}px`;
+                            badge.style.zIndex = '10';
+                            
                             badge.textContent = constraint.title;
                             cell.appendChild(badge);
                         }
@@ -1578,10 +1594,15 @@
                         const startsHere = !prevTime || !isTimeInRange(prevTime, semesterItem.start_time, semesterItem.end_time);
                         let numHours = 1;
                         if (startsHere) {
-                            const itemStartParts = semesterItem.start_time.split(':').map(Number);
-                            const itemEndParts = semesterItem.end_time.split(':').map(Number);
-                            numHours = Math.ceil(((itemEndParts[0] * 60 + (itemEndParts[1] || 0)) - (itemStartParts[0] * 60 + (itemStartParts[1] || 0))) / 60);
-                            numHours = Math.max(1, numHours);
+                            // Count how many time slots (including current one) are within the semester item's time range
+                            // Start from current slot and count all consecutive slots that are in range
+                            for (let i = slotIndex; i < timeSlots.length && isTimeInRange(timeSlots[i], semesterItem.start_time, semesterItem.end_time); i++) {
+                                if (i === slotIndex) {
+                                    // First iteration - already counted as 1, so don't increment
+                                    continue;
+                                }
+                                numHours++;
+                            }
                         }
                         const cell = document.createElement('td');
                         cell.className = 'schedule-cell has-semester-item';
@@ -1590,6 +1611,14 @@
                             const badge = document.createElement('span');
                             const itemType = (semesterItem.type || 'lecture').toLowerCase();
                             badge.className = 'semester-item-badge ' + itemType;
+                            
+                            // Set badge height to span all hours (like in weekly view)
+                            const cellHeight = 80; // matches td height in CSS
+                            const badgeHeight = (cellHeight * numHours) - 10; // -10 for padding
+                            badge.style.height = `${badgeHeight}px`;
+                            badge.style.minHeight = `${badgeHeight}px`;
+                            badge.style.zIndex = '10';
+                            
                             let displayName = semesterItem.course_name + ' (' + (typeLabels[semesterItem.type] || semesterItem.type) + ')';
                             if (displayName.length > 35) displayName = displayName.substring(0, 32) + '...';
                             badge.textContent = displayName;
