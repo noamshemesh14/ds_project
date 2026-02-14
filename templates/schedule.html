@@ -1960,8 +1960,18 @@
                         }
                     });
                     
-                    const prevIn = prevBlock && prevBlock.course_number === planBlock.course_number && prevBlock.work_type === planBlock.work_type;
-                    const nextIn = nextBlock && nextBlock.course_number === planBlock.course_number && nextBlock.work_type === planBlock.work_type;
+                    // For semester blocks, check if prevBlock/nextBlock is the SAME block (same start_time/end_time)
+                    // For other blocks, check if they have the same course_number and work_type
+                    let prevIn, nextIn;
+                    if (planBlock.work_type === 'semester' && planBlock.start_time && planBlock.end_time) {
+                        // For semester blocks, check if prevBlock/nextBlock has the same start_time and end_time
+                        prevIn = prevBlock && prevBlock.start_time === planBlock.start_time && prevBlock.end_time === planBlock.end_time && prevBlock.course_number === planBlock.course_number;
+                        nextIn = nextBlock && nextBlock.start_time === planBlock.start_time && nextBlock.end_time === planBlock.end_time && nextBlock.course_number === planBlock.course_number;
+                    } else {
+                        // For other blocks, check if they have the same course_number and work_type
+                        prevIn = prevBlock && prevBlock.course_number === planBlock.course_number && prevBlock.work_type === planBlock.work_type;
+                        nextIn = nextBlock && nextBlock.course_number === planBlock.course_number && nextBlock.work_type === planBlock.work_type;
+                    }
                     
                     // For semester blocks, startsHere is true if this is the first time slot that overlaps with the block
                     // (i.e., no previous time slot also overlaps with this same block)
