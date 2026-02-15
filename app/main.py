@@ -176,6 +176,14 @@ async def schedule_page(request: Request):
     return HTMLResponse(content=template.render())
 
 @app.get("/my-courses", response_class=HTMLResponse)
+async def my_courses_page():
+    template = jinja_env.get_template("my_courses.html")
+    return HTMLResponse(content=template.render())
+
+@app.get("/chat", response_class=HTMLResponse)
+async def chat_page():
+    template = jinja_env.get_template("chat.html")
+    return HTMLResponse(content=template.render())
 async def my_courses_page(request: Request):
     """My Courses page - displays all courses with semester selection"""
     try:
@@ -974,6 +982,68 @@ async def get_user_preferences(current_user: dict = Depends(get_current_user)):
     except Exception as e:
         logging.error(f"Error getting user preferences: {e}")
         raise HTTPException(status_code=500, detail=f"Error getting preferences: {str(e)}")
+
+
+@app.get("/api/user/context")
+async def get_user_context(current_user: dict = Depends(get_current_user)):
+    """
+    Get user context for RAG chat personalization
+    Returns profile, courses, preferences, and constraints
+    """
+    try:
+        user_id = current_user.get("id") or current_user.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User not authenticated")
+        
+        client = supabase_admin if supabase_admin else supabase
+        if not client:
+            raise HTTPException(status_code=500, detail="Supabase client not configured")
+        
+        # Get profile
+        profile_result = client.table("user_profiles").select("*").eq("id", user_id).limit(1).execute()
+        profile = profile_result.data[0] if profile_result.data else {}
+        
+        # Get courses
+        courses_result = client.table("courses").select("*").eq("user_id", user_id).execute()
+        courses = courses_result.data if courses_result.data else []
+        
+        # Get preferences
+        preferences = {
+            "study_preferences_raw": profile.get("study_preferences_raw") or "",
+            "study_preferences_summary": profile.get("study_preferences_summary") or {}
+        }
+        
+        # Get course time preferences
+        prefs_result = client.table("course_time_preferences").select("*").eq("user_id", user_id).execute()
+        course_time_preferences = prefs_result.data if prefs_result.data else []
+        
+        # Get constraints (optional, for context)
+        constraints_result = client.table("constraints").select("*").eq("user_id", user_id).execute()
+        constraints = constraints_result.data if constraints_result.data else []
+        
+        user_context = {
+            "profile": {
+                "name": profile.get("name"),
+                "faculty": profile.get("faculty"),
+                "study_track": profile.get("study_track"),
+                "current_semester": profile.get("current_semester"),
+                "current_year": profile.get("current_year"),
+                "cumulative_average": profile.get("cumulative_average"),
+                "success_rate": profile.get("success_rate")
+            },
+            "courses": courses[:20],  # Limit to 20 courses
+            "preferences": preferences,
+            "course_time_preferences": course_time_preferences,
+            "constraints_count": len(constraints)
+        }
+        
+        return JSONResponse(content=user_context)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error getting user context: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting user context: {str(e)}")
 
 
 # Authentication endpoints
@@ -4275,10 +4345,11 @@ async def execute_agent(
     current_user: dict = Depends(get_cli_user)
 ):
     """
-    Main agent execution endpoint for terminal/CLI usage
+    Main agent execution endpoint for terminal/CLI usage and chat
     Routes user prompt to appropriate executor via supervisor
     תמיד עובד עם משתמש העל (super user) - UUID: 56a2597d-62fc-49b3-9f98-1b852941b5ef
     """
+    chat_logger = logging.getLogger("CHAT")
     try:
         user_prompt = request_data.get("prompt", "")
         if not user_prompt:
@@ -4288,24 +4359,55 @@ async def execute_agent(
         if not user_id:
             raise HTTPException(status_code=401, detail="User not authenticated")
         
+        chat_logger.info(f"CHAT: 📥 API /api/execute called by user {user_id}")
+        chat_logger.info(f"CHAT: Query: {user_prompt[:200]}...")
+        
+        # Get user_context and ui_context from request
+        user_context = request_data.get("user_context")
+        ui_context = request_data.get("ui_context")
+        chat_logger.info(f"CHAT: Has user_context: {user_context is not None}, Has ui_context: {ui_context is not None}")
+        
         # Initialize supervisor and route task
         supervisor = Supervisor()
+        chat_logger.info("CHAT: Initializing supervisor and routing task...")
         result = await supervisor.route_task(
             user_prompt=user_prompt,
-            user_id=user_id
+            user_id=user_id,
+            user_context=user_context,
+            ui_context=ui_context
         )
+        chat_logger.info(f"CHAT: ✅ Task routed successfully, status: {result.get('status')}")
+        
+        # Clean result to remove any non-serializable objects before JSON serialization
+        def clean_for_json(obj):
+            """Recursively clean object to ensure JSON serializability"""
+            if isinstance(obj, dict):
+                return {k: clean_for_json(v) for k, v in obj.items() 
+                       if k != "llm_client" and not hasattr(v, "__dict__")}
+            elif isinstance(obj, list):
+                return [clean_for_json(item) for item in obj]
+            elif hasattr(obj, "__dict__"):
+                # Skip objects that can't be serialized
+                return str(type(obj).__name__)
+            else:
+                return obj
+        
+        cleaned_result = clean_for_json(result)
         
         # Return pretty-printed JSON
         return Response(
-            content=json.dumps(result, indent=2, ensure_ascii=False),
+            content=json.dumps(cleaned_result, indent=2, ensure_ascii=False),
             media_type="application/json"
         )
         
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"Error executing agent: {e}")
+        chat_logger = logging.getLogger("CHAT")
+        chat_logger.error(f"CHAT: ❌ Error executing agent: {e}")
         import traceback
+        chat_logger.error(f"CHAT: Traceback: {traceback.format_exc()}")
+        logging.error(f"Error executing agent: {e}")
         logging.error(f"Traceback: {traceback.format_exc()}")
         return JSONResponse(
             status_code=500,

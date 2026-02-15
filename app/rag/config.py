@@ -34,6 +34,8 @@ except ValueError:
 
 # ----- Retrieval -----
 TOP_K = int(os.getenv("RAG_TOP_K", "5"))  # number of chunks to retrieve per query
+MIN_SCORE = float(os.getenv("RAG_MIN_SCORE", "0.7"))  # minimum similarity score threshold
+MAX_CONTEXT_LENGTH = int(os.getenv("RAG_MAX_CONTEXT_LENGTH", "3000"))  # max characters for context
 
 # ----- Embedding -----
 # Optional: for llmod.ai or other OpenAI-compatible embedding API

@@ -17,6 +17,7 @@ from app.agents.executors.block_mover import BlockMover
 from app.agents.executors.block_resizer import BlockResizer
 from app.agents.executors.block_creator import BlockCreator
 from app.agents.executors.constraint_manager import ConstraintManager
+from app.agents.executors.rag_chat import RAGChatExecutor
 from app.agents.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,7 @@ class Supervisor:
             "block_resizer": BlockResizer(),
             "block_creator": BlockCreator(),
             "constraint_manager": ConstraintManager(),
+            "rag_chat": RAGChatExecutor(),
         }
         self.module_name = "supervisor"
         self.llm_client = LLMClient()
@@ -145,17 +147,41 @@ class Supervisor:
                 if executor_name in ["block_mover", "block_resizer", "request_handler"]:
                     executor_params["user_prompt"] = user_prompt
                 
-                result = await executor.execute(user_id=user_id, **executor_params, **kwargs)
+                # Pass user_context, ui_context, and llm_client to RAG executor
+                if executor_name == "rag_chat":
+                    executor_params["query"] = user_prompt  # RAG executor expects 'query' not 'user_prompt'
+                    if "user_context" in kwargs:
+                        executor_params["user_context"] = kwargs["user_context"]
+                    if "ui_context" in kwargs:
+                        executor_params["ui_context"] = kwargs["ui_context"]
+                    executor_params["llm_client"] = self.llm_client
+                    # Remove user_context and ui_context from kwargs to avoid duplicate arguments
+                    kwargs_clean = {k: v for k, v in kwargs.items() 
+                                   if k not in ["user_context", "ui_context"]}
+                else:
+                    kwargs_clean = kwargs
+                
+                result = await executor.execute(user_id=user_id, **executor_params, **kwargs_clean)
 
-                steps.append(executor.get_step_log(
-                    prompt={"user_prompt": user_prompt, **executor_params},
-                    response=result
-                ))
-
+                # RAG executor returns its own steps, so merge them
+                if executor_name == "rag_chat" and "steps" in result:
+                    steps.extend(result["steps"])
+                else:
+                    # Clean executor_params to remove non-serializable objects before logging
+                    clean_params = {k: v for k, v in executor_params.items() 
+                                   if k != "llm_client" and not hasattr(v, "__dict__")}
+                    steps.append(executor.get_step_log(
+                        prompt={"user_prompt": user_prompt, **clean_params},
+                        response=result
+                    ))
+                
+                # Extract response - RAG executor uses "response" key, others use "message"
+                response_text = result.get("response") or result.get("message", "Task completed successfully")
+                
                 return {
-                    "status": "ok",
-                    "error": None,
-                    "response": result.get("message", "Task completed successfully"),
+                    "status": result.get("status", "ok"),
+                    "error": result.get("error"),
+                    "response": response_text,
                     "steps": steps
                 }
             except HTTPException as http_exc:
@@ -260,4 +286,6 @@ class Supervisor:
         if any(word in prompt_lower for word in ["add constraint", "הוסף אילוץ", "I have", "יש לי", "training", "אימון", "work", "עבודה", "meeting", "מפגש", "constraint", "אילוץ"]):
             return "constraint_manager", {}
         
-        return None, {}
+        # Default to RAG chat for informational questions
+        # If no specific action is detected, treat as informational query
+        return "rag_chat", {}

@@ -63,6 +63,19 @@ class LLMClient:
         if not llmod_api_key:
             llmod_api_key = os.getenv("LLM_API_KEY")
 
+        # Check if EMBEDDING_BASE_URL is set to llmod.ai - if so, we should use LLMod.ai
+        embedding_base_url = os.getenv("EMBEDDING_BASE_URL")
+        use_llmod_base = False
+        if embedding_base_url and "llmod" in embedding_base_url.lower():
+            use_llmod_base = True
+            logger.info(f"   EMBEDDING_BASE_URL points to LLMod.ai: {embedding_base_url}")
+            # If LLMOD_API_KEY is not set but OPENAI_API_KEY is, use OPENAI_API_KEY with LLMod base_url
+            if not llmod_api_key:
+                openai_key_temp = os.getenv("OPENAI_API_KEY")
+                if openai_key_temp:
+                    logger.info("   LLMOD_API_KEY not found, but OPENAI_API_KEY found - will use it with LLMod.ai base_url")
+                    llmod_api_key = openai_key_temp
+
         if llmod_api_key:
             logger.info(f"   Found LLMod API key (length: {len(llmod_api_key)}, starts with: {llmod_api_key[:10]}...)")
             if llmod_api_key == "your_llmod_api_key_here":
@@ -72,7 +85,12 @@ class LLMClient:
         else:
             logger.warning("   ⚠️ No LLMod API key found (checked LLMOD_API_KEY and LLM_API_KEY)")
 
-        llmod_base_url = os.getenv("LLMOD_BASE_URL") or os.getenv("LLM_BASE_URL") or "https://api.llmod.ai/v1"
+        llmod_base_url = os.getenv("LLMOD_BASE_URL") or os.getenv("LLM_BASE_URL")
+        if not llmod_base_url and use_llmod_base:
+            # If EMBEDDING_BASE_URL points to llmod.ai, use it as base_url
+            llmod_base_url = embedding_base_url
+        if not llmod_base_url:
+            llmod_base_url = "https://api.llmod.ai/v1"
 
         if llmod_base_url and not llmod_base_url.endswith("/v1"):
             if llmod_base_url.endswith("/"):
@@ -219,6 +237,7 @@ class LLMClient:
 2. What parameters to extract from the user's request
 
 Available executors:
+- rag_chat: Answer questions about Technion academic information, procedures, regulations, courses, and general academic advice. Use this for ANY informational question, procedural question, or general inquiry that doesn't require a specific action (like adding courses, moving blocks, etc.). This is the default executor for chat/informational queries. No parameters needed - just pass the user's question as-is.
 - course_manager: Add courses from catalog to user's course list. Requires: course_number (string, e.g., "10403"). Optional: course_name (string, e.g., "אלגוריתמים"). Note: Semester and year are handled by default in the backend and do not need to be extracted.
 - schedule_retriever: Get weekly schedule. Optional: date (YYYY-MM-DD or YYYY/MM/DD format). If no date is provided, default to the current week.
 - group_manager: Create study groups and invite members. Use this when the user wants to create a new study group or invite people to a group. Requires: course_number (string, e.g., "10403"), group_name (string), invite_emails (list of email addresses). Optional: course_name (string), description (string). Validations: Only registered users enrolled in the course can be invited. At least one other user (besides the creator) must be invited. Cannot invite yourself.
