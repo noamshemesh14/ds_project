@@ -162,6 +162,41 @@ curl -X POST "http://127.0.0.1:8000/api/execute" -H "Authorization: Bearer %TOKE
 curl -X POST "http://127.0.0.1:8000/api/execute" -H "Authorization: Bearer %TOKEN%" -H "Content-Type: application/json" -d "{\"prompt\":\"reject request req-123-456\"}"
 ```
 
+### 9. Chat with TechnionAI (RAG Chat)
+
+**Ask informational questions about Technion:**
+
+**PowerShell (Recommended - works best):**
+```powershell
+$body = @{prompt="What are the prerequisites for the algorithms course?"} | ConvertTo-Json
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/execute" -Method POST -ContentType "application/json" -Body $body
+```
+
+**PowerShell with curl.exe:**
+```powershell
+$json = '{"prompt":"What are the prerequisites for the algorithms course?"}'
+curl.exe -X POST http://127.0.0.1:8000/api/execute -H "Content-Type: application/json" -d $json
+```
+
+**Windows CMD:**
+```cmd
+curl -X POST "http://127.0.0.1:8000/api/execute" -H "Content-Type: application/json" -d "{\"prompt\":\"What are the prerequisites for the algorithms course?\"}"
+```
+
+**More examples:**
+```cmd
+# Ask about academic procedures
+curl -X POST "http://127.0.0.1:8000/api/execute" -H "Content-Type: application/json" -d "{\"prompt\":\"How can I cancel a course?\"}"
+
+# Ask about course information
+curl -X POST "http://127.0.0.1:8000/api/execute" -H "Content-Type: application/json" -d "{\"prompt\":\"What is the difference between course 104043 and course 104044?\"}"
+
+# Ask about regulations
+curl -X POST "http://127.0.0.1:8000/api/execute" -H "Content-Type: application/json" -d "{\"prompt\":\"What are the rules for exam retakes (moed bet)?\"}"
+```
+
+**Note:** All chat queries go through the Supervisor, which intelligently routes informational questions to the RAG Chat executor. The system uses RAG (Retrieval-Augmented Generation) to answer questions based on official Technion documents and academic information.
+
 ## Response Format
 
 All API responses follow this structure:

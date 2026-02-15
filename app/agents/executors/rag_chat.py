@@ -1,7 +1,7 @@
 """
 RAG Chat Executor
 Handles informational questions using RAG (Retrieval-Augmented Generation) over academy data
-with fallback to web search when needed
+RAG-only mode: requires embedding client and Pinecone index to function
 """
 import logging
 import os
@@ -202,37 +202,6 @@ class RAGChatExecutor:
             logger.error(f"CHAT: Pinecone error traceback: {traceback.format_exc()}")
             return []
 
-    def _web_search(self, query: str) -> Optional[str]:
-        """
-        Fallback web search using DuckDuckGo (no API key needed)
-        Returns search results as text
-        """
-        try:
-            from duckduckgo_search import DDGS
-            logger.info(f"CHAT: 🔍 Starting DuckDuckGo search for: {query}")
-            with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=3))
-                logger.info(f"CHAT: 🔍 DuckDuckGo returned {len(results)} results")
-                if results:
-                    # Combine top results
-                    search_text = "\n\n".join([
-                        f"Source: {r.get('title', 'Unknown')}\n{r.get('body', '')}"
-                        for r in results[:3]
-                    ])
-                    logger.info(f"CHAT: ✅ Web search text length: {len(search_text)} chars")
-                    return search_text
-                else:
-                    logger.warning(f"CHAT: ⚠️ DuckDuckGo returned empty results")
-            return None
-        except ImportError:
-            logger.warning("CHAT: ⚠️ duckduckgo_search not installed. Install with: pip install duckduckgo-search")
-            return None
-        except Exception as e:
-            logger.error(f"CHAT: ❌ Error in web search: {e}")
-            import traceback
-            logger.error(f"CHAT: Web search traceback: {traceback.format_exc()}")
-            return None
-
     def _format_user_context(self, user_context: Optional[Dict[str, Any]]) -> str:
         """Format user context for LLM prompt"""
         if not user_context:
@@ -309,28 +278,13 @@ class RAGChatExecutor:
             self.llm_client = llm_client
             logger.info(f"CHAT: ✅ LLM client initialized (model: {llm_client.model})")
             
-            # Check if RAG is available - if not, continue with LLM only
+            # Check if RAG is available - RAG is required
             if not self.embedding_client or not self.pinecone_index:
-                logger.warning("CHAT: ⚠️ RAG system not initialized (embedding or Pinecone not available)")
-                logger.info("CHAT: Continuing with LLM-only mode (no RAG context)")
-                # Continue without RAG - use LLM with user context and web search
-                user_context_str = self._format_user_context(user_context)
-                logger.info("CHAT: 🔍 Attempting web search for query")
-                web_results = self._web_search(query)
-                if web_results:
-                    logger.info(f"CHAT: ✅ Web search found results (length: {len(web_results)} chars)")
-                else:
-                    logger.info("CHAT: ⚠️ Web search returned no results")
-                
-                response_text = await self._generate_response_without_rag(
-                    query, web_results, user_context_str, steps
-                )
-                
+                logger.error("CHAT: ❌ RAG system not initialized (embedding or Pinecone not available)")
                 return {
-                    "status": "success",
-                    "response": response_text,
-                    "context_used": False,  # No RAG context
-                    "web_search_used": bool(web_results),
+                    "status": "error",
+                    "error": "RAG system not available",
+                    "response": "מצטער, אבל מערכת ה-RAG לא זמינה כרגע. אנא ודא שהמערכת מוגדרת כראוי (OPENAI_API_KEY, PINECONE_API_KEY).",
                     "steps": steps
                 }
 
@@ -338,26 +292,11 @@ class RAGChatExecutor:
             logger.info(f"CHAT: 🔍 Step 1: Embedding query: {query[:100]}...")
             query_embedding = self._embed_query(query)
             if not query_embedding:
-                # Fallback: Continue without RAG, use LLM with user context and web search
-                logger.warning("CHAT: ⚠️ Embedding failed, continuing without RAG context")
-                logger.info("CHAT: 🔍 Attempting web search for query")
-                web_results = self._web_search(query)
-                if web_results:
-                    logger.info(f"CHAT: ✅ Web search found results (length: {len(web_results)} chars)")
-                else:
-                    logger.info("CHAT: ⚠️ Web search returned no results")
-                
-                # Generate response using LLM with user context and web results only
-                user_context_str = self._format_user_context(user_context)
-                response_text = await self._generate_response_without_rag(
-                    query, web_results, user_context_str, steps
-                )
-                
+                logger.error("CHAT: ❌ Embedding failed - RAG cannot continue")
                 return {
-                    "status": "success",
-                    "response": response_text,
-                    "context_used": False,  # No RAG context
-                    "web_search_used": bool(web_results),
+                    "status": "error",
+                    "error": "Failed to embed query",
+                    "response": "מצטער, אבל לא הצלחתי לעבד את השאלה שלך. אנא נסה שוב מאוחר יותר.",
                     "steps": steps
                 }
 
@@ -389,36 +328,20 @@ class RAGChatExecutor:
             }
             steps.append(retrieval_step)
 
-            # Step 3: Generate response - always use chunks if available, LLM will decide if web search is needed
-            if context_chunks:
-                logger.info(f"CHAT: ✅ Step 3: Using {len(context_chunks)} context chunks from documents")
-                # Try web search in parallel to have it ready if needed
-                logger.info(f"CHAT: 🔍 Attempting web search in parallel for query: {query}")
-                web_results = self._web_search(query)
-                if web_results:
-                    logger.info(f"CHAT: ✅ Web search found results (length: {len(web_results)} chars)")
-                else:
-                    logger.info(f"CHAT: ⚠️ Web search returned no results")
-                
-                response_text = await self._generate_response_with_fallback(
-                    query, context_chunks, web_results, user_context, steps
-                )
-            else:
-                # No chunks at all - try web search only
-                logger.warning(f"CHAT: ⚠️ No chunks retrieved from Pinecone, using web search only")
-                logger.info(f"CHAT: 🔍 Attempting web search for query: {query}")
-                web_results = self._web_search(query)
-                if web_results:
-                    logger.info(f"CHAT: ✅ Web search found results (length: {len(web_results)} chars)")
-                    response_text = await self._generate_web_based_response(
-                        query, web_results, user_context, steps
-                    )
-                else:
-                    logger.warning(f"CHAT: ⚠️ Web search returned no results")
-                    response_text = (
-                        "לא מצאתי מספיק מידע במסמכי הטכניון או במקורות מקוונים כדי לענות על השאלה שלך. "
-                        "אנא נסה לנסח את השאלה מחדש או פנה למזכירות האקדמית לקבלת סיוע."
-                    )
+            # Step 3: Generate response - RAG only, chunks are required
+            if not context_chunks:
+                logger.warning(f"CHAT: ⚠️ No chunks retrieved from Pinecone")
+                return {
+                    "status": "error",
+                    "error": "No context chunks retrieved",
+                    "response": "מצטער, אבל לא מצאתי מידע רלוונטי במסמכי הטכניון כדי לענות על השאלה שלך. אנא נסה לנסח את השאלה מחדש או פנה למזכירות האקדמית לקבלת סיוע.",
+                    "steps": steps
+                }
+            
+            logger.info(f"CHAT: ✅ Step 3: Using {len(context_chunks)} context chunks from documents")
+            response_text = await self._generate_response_with_fallback(
+                query, context_chunks, user_context, steps
+            )
 
             return {
                 "status": "success",
@@ -442,11 +365,10 @@ class RAGChatExecutor:
         self,
         query: str,
         context_chunks: List[Dict[str, Any]],
-        web_results: Optional[str],
         user_context: Optional[Dict[str, Any]],
         steps: List[Dict[str, Any]]
     ) -> str:
-        """Generate response based on retrieved documents, with web search fallback if needed"""
+        """Generate response based on retrieved documents from RAG (RAG-only mode)"""
         # Combine context chunks (respecting MAX_CONTEXT_LENGTH)
         context_text = ""
         total_length = 0
@@ -460,35 +382,46 @@ class RAGChatExecutor:
 
         user_context_str = self._format_user_context(user_context)
 
-        system_prompt = """You are TechnionAI, a helpful academic advisor for Technion students.
-Answer questions about academic information, procedures, regulations, courses, and general academic advice.
+        system_prompt = """You are TechnionAI, a smart academic advisor for Technion students.
 
-IMPORTANT: Answer in the SAME LANGUAGE as the user's question. If the question is in Hebrew, answer in Hebrew. If in English, answer in English.
+Your role is to help students with academic information, regulations, procedures, courses, and academic guidance.
 
-Guidelines:
-- First, try to answer based on the provided context from Technion academy documents
-- If the context doesn't contain enough information to answer the question, use the web search results provided
-- Be concise but thorough
-- Use the user context to personalize your response (e.g., mention their faculty, courses) but don't invent facts
-- If asked about specific courses, provide details from the context when available
-- Format lists clearly when needed
-- Always respond in the same language as the question
-- If you use web search results, mention that the information comes from online sources"""
+LANGUAGE RULE:
+Always respond in the SAME LANGUAGE as the user's question.
 
-        web_section = ""
-        if web_results:
-            web_section = f"""
+KNOWLEDGE RULE (RAG ONLY):
+You must base your answer strictly and exclusively on the provided Retrieved Context from official Technion documents.
 
-Web search results (use these if the Technion documents don't contain enough information):
-{web_results}
+- Do NOT mention "provided documents", "uploaded files", or "context".
+- Do NOT refer to the existence of internal files or sources.
+- Do NOT say things like "based on the documents you provided".
+- Simply present the information as official Technion policy.
+
+If the Retrieved Context does not contain sufficient information:
+- Clearly state that there is no official information available on this topic.
+- Do NOT suggest uploading documents.
+- Do NOT mention missing files.
+- Do NOT guess or add external knowledge.
+- You may suggest contacting the relevant academic office if appropriate.
+
+PERSONALIZATION:
+You may use the user_context (faculty, degree, year) to personalize tone or recommendations.
+However:
+- Do NOT invent personal data.
+- Do NOT override official academic rules.
+
+STYLE:
+- Be clear, structured, and professional.
+- Use bullet points when helpful.
+- If the information is partial, explain what is known and what is not officially specified.
+- Maintain a natural advisor tone.
+- Never hallucinate.
 """
-        else:
-            web_section = "\n(No web search results available)"
 
         user_prompt = f"""Context from Technion academy documents:
 
 {context_text if context_text else "No specific context found in the knowledge base."}
-{web_section}
+
 User context:
 {user_context_str}
 
@@ -496,8 +429,7 @@ User question: {query}
 
 IMPORTANT: Answer in the SAME LANGUAGE as the user's question. If the question is in Hebrew, answer in Hebrew. If in English, answer in English.
 
-Please answer the user's question. First try to use the Technion documents context. If that doesn't contain enough information, use the web search results. 
-If neither source has the information, say so honestly and suggest what they might ask instead or where to find the information."""
+Please answer the user's question based ONLY on the Technion documents context provided. If the context doesn't contain sufficient information, say so honestly and suggest what they might ask instead or where to find the information."""
 
         try:
             import asyncio
@@ -527,8 +459,7 @@ If neither source has the information, say so honestly and suggest what they mig
                     "query": query,
                     "has_context": bool(context_text),
                     "context_length": len(context_text),
-                    "chunks_used": len(context_chunks),
-                    "has_web_results": bool(web_results)
+                    "chunks_used": len(context_chunks)
                 },
                 "response": {
                     "response_length": len(llm_response_text),
@@ -542,193 +473,6 @@ If neither source has the information, say so honestly and suggest what they mig
         except Exception as e:
             error_msg = str(e)
             logger.error(f"CHAT: ❌ Error generating LLM response: {error_msg}")
-            import traceback
-            logger.error(f"CHAT: Traceback: {traceback.format_exc()}")
-            
-            # Check if it's an authentication error
-            if "401" in error_msg or "invalid_api_key" in error_msg or "Incorrect API key" in error_msg or "AuthenticationError" in str(type(e)):
-                logger.error("CHAT: ❌ API key authentication failed for LLM")
-                return (
-                    "מצטער, אבל יש בעיה עם מפתח ה-API. "
-                    "אנא בדוק את הגדרות ה-OPENAI_API_KEY או LLMOD_API_KEY בקובץ .env. "
-                    "אם הבעיה נמשכת, אנא פנה למנהל המערכת."
-                )
-            else:
-                return "מצטער, אבל נתקלתי בשגיאה בעת יצירת התשובה. אנא נסה שוב."
-
-    async def _generate_response_without_rag(
-        self,
-        query: str,
-        web_results: Optional[str],
-        user_context_str: str,
-        steps: List[Dict[str, Any]]
-    ) -> str:
-        """Generate response without RAG context, using only user context and web search"""
-        system_prompt = """You are TechnionAI, a helpful academic advisor for Technion students.
-Answer questions about academic information, procedures, regulations, courses, and general academic advice.
-
-IMPORTANT: Answer in the SAME LANGUAGE as the user's question. If the question is in Hebrew, answer in Hebrew. If in English, answer in English.
-
-Guidelines:
-- Use the web search results provided to answer the question
-- Use the user context to personalize your response (e.g., mention their name, faculty, courses) but don't invent facts
-- Be concise but thorough
-- Format lists clearly when needed
-- Always respond in the same language as the question
-- If you use web search results, mention that the information comes from online sources"""
-
-        web_section = ""
-        if web_results:
-            web_section = f"""
-
-Web search results:
-{web_results}
-"""
-        else:
-            web_section = "\n(No web search results available)"
-
-        user_prompt = f"""{web_section}
-User context:
-{user_context_str}
-
-User question: {query}
-
-IMPORTANT: Answer in the SAME LANGUAGE as the user's question. If the question is in Hebrew, answer in Hebrew. If in English, answer in English.
-
-Please answer the user's question using the web search results and user context. If the information is not available, say so honestly and suggest what they might ask instead or where to find the information."""
-
-        try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            
-            # gpt-5 models only support temperature=1
-            model_name = self.llm_client.model.lower()
-            temperature = 1.0 if "gpt-5" in model_name else 0.7
-
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.llm_client.client.chat.completions.create(
-                    model=self.llm_client.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    temperature=temperature
-                )
-            )
-
-            llm_response_text = response.choices[0].message.content
-
-            steps.append({
-                "module": "llm_answer_generator",
-                "prompt": {
-                    "query": query,
-                    "has_context": False,
-                    "has_web_results": bool(web_results),
-                    "has_user_context": bool(user_context_str)
-                },
-                "response": {
-                    "response_length": len(llm_response_text),
-                    "model": self.llm_client.model
-                }
-            })
-
-            logger.info(f"CHAT: ✅ Generated response without RAG: {llm_response_text[:100]}...")
-            return llm_response_text
-
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"CHAT: ❌ Error generating response: {error_msg}")
-            import traceback
-            logger.error(f"CHAT: Traceback: {traceback.format_exc()}")
-            
-            # Check if it's an authentication error
-            if "401" in error_msg or "invalid_api_key" in error_msg or "Incorrect API key" in error_msg or "AuthenticationError" in str(type(e)):
-                logger.error("CHAT: ❌ API key authentication failed for LLM")
-                return (
-                    "מצטער, אבל יש בעיה עם מפתח ה-API. "
-                    "אנא בדוק את הגדרות ה-OPENAI_API_KEY או LLMOD_API_KEY בקובץ .env. "
-                    "אם הבעיה נמשכת, אנא פנה למנהל המערכת."
-                )
-            else:
-                return "מצטער, אבל נתקלתי בשגיאה בעת יצירת התשובה. אנא נסה שוב."
-
-    async def _generate_web_based_response(
-        self,
-        query: str,
-        web_results: str,
-        user_context: Optional[Dict[str, Any]],
-        steps: List[Dict[str, Any]]
-    ) -> str:
-        """Generate response based on web search results"""
-        user_context_str = self._format_user_context(user_context)
-
-        system_prompt = """You are TechnionAI, a helpful academic advisor for Technion students.
-Answer questions based on web search results when Technion academy documents don't have the information.
-
-IMPORTANT: Answer in the SAME LANGUAGE as the user's question. If the question is in Hebrew, answer in Hebrew. If in English, answer in English.
-
-Guidelines:
-- Be concise but thorough
-- Mention that this information comes from online sources (be transparent)
-- Use the user context to personalize your response if relevant
-- Always respond in the same language as the question"""
-
-        user_prompt = f"""Web search results:
-
-{web_results}
-
-User context:
-{user_context_str}
-
-User question: {query}
-
-IMPORTANT: Answer in the SAME LANGUAGE as the user's question. If the question is in Hebrew, answer in Hebrew. If in English, answer in English.
-
-Please answer the user's question based on the web search results. 
-Mention that this information comes from online sources since it wasn't found in the Technion academy documents."""
-
-        try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            
-            # gpt-5 models only support temperature=1
-            model_name = self.llm_client.model.lower()
-            temperature = 1.0 if "gpt-5" in model_name else 0.7
-
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.llm_client.client.chat.completions.create(
-                    model=self.llm_client.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    temperature=temperature
-                )
-            )
-
-            llm_response_text = response.choices[0].message.content
-
-            steps.append({
-                "module": "rag_answer_generator",
-                "prompt": {
-                    "query": query,
-                    "source": "web_search",
-                    "has_web_results": True
-                },
-                "response": {
-                    "response_length": len(llm_response_text),
-                    "model": self.llm_client.model
-                }
-            })
-
-            logger.info(f"CHAT: ✅ Generated web-based response: {llm_response_text[:100]}...")
-            return llm_response_text
-
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"CHAT: ❌ Error generating web-based LLM response: {error_msg}")
             import traceback
             logger.error(f"CHAT: Traceback: {traceback.format_exc()}")
             
