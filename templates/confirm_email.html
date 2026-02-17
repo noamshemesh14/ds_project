@@ -146,9 +146,9 @@
                 console.warn('Could not decode token:', e);
             }
             
-            // Redirect to home page after 2 seconds
+            // Redirect to schedule page after 2 seconds
             setTimeout(() => {
-                window.location.href = '/';
+                window.location.href = '/schedule';
             }, 2000);
         } else {
             // No token - might be already confirmed or invalid link

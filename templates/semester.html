@@ -1011,33 +1011,18 @@
                 </div>
             </div>
             
-            <!-- Constraints Section -->
-            <div class="constraints-section">
+            <!-- Study Preferences Section -->
+            <div class="constraints-section" style="margin-top: 2rem;">
                 <div class="constraints-header">
-                    <h3 class="constraints-title">אילוצים קבועים למערכת</h3>
-                    <button class="add-constraint-btn" onclick="addConstraint()">+ הוסף אילוץ</button>
+                    <h3 class="constraints-title">העדפות למידה</h3>
                 </div>
-                <div class="constraints-list" id="constraintsList">
-                    <div class="constraint-item">
-                        <div class="constraint-info">
-                            <h4>אימון</h4>
-                            <p>ימי ראשון ורביעי, 18:00-20:00</p>
-                        </div>
-                        <div class="constraint-actions">
-                            <button class="btn-icon" onclick="editConstraint(0)">✏️</button>
-                            <button class="btn-icon" onclick="deleteConstraint(0)">🗑️</button>
-                        </div>
-                    </div>
-                    <div class="constraint-item">
-                        <div class="constraint-info">
-                            <h4>עבודה</h4>
-                            <p>ימי שני וחמישי, 16:00-20:00</p>
-                        </div>
-                        <div class="constraint-actions">
-                            <button class="btn-icon" onclick="editConstraint(1)">✏️</button>
-                            <button class="btn-icon" onclick="deleteConstraint(1)">🗑️</button>
-                        </div>
-                    </div>
+                <div style="background: white; padding: 1.5rem; border-radius: 10px; margin-top: 1rem;">
+                    <p style="color: #666; margin-bottom: 1rem; font-size: 0.95em;">
+                        כתוב כאן את ההעדפות שלך ללמידה. לדוגמה: שעות מועדפות, אורך מפגשי למידה, תדירות הפסקות, סגנון ריכוז, העדפות ספציפיות לקורסים וכו'.
+                    </p>
+                    <textarea id="preferencesTextarea" placeholder="לדוגמה: אני מעדיף ללמוד בבוקר (9:00-12:00), מפגשי למידה של שעתיים עם הפסקות של 15 דקות. אני צריך יותר זמן לקורס מערכות הפעלה..." style="width: 100%; min-height: 150px; padding: 1rem; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 1em; font-family: inherit; resize: vertical; direction: rtl;"></textarea>
+                    <button class="submit-button" onclick="savePreferences()" style="margin-top: 1rem; width: auto; padding: 0.75rem 2rem;">💾 שמור העדפות</button>
+                    <div id="preferencesStatus" style="margin-top: 0.5rem; font-size: 0.9em;"></div>
                 </div>
             </div>
             
@@ -2041,6 +2026,86 @@
             }
         }
         
+        // Load and save preferences
+        async function loadPreferences() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            
+            try {
+                const response = await fetch('/api/user/preferences', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    const textarea = document.getElementById('preferencesTextarea');
+                    if (textarea && data.study_preferences_raw) {
+                        textarea.value = data.study_preferences_raw;
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading preferences:', error);
+            }
+        }
+        
+        async function savePreferences() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                alert('אנא התחבר כדי לשמור העדפות');
+                return;
+            }
+            
+            const textarea = document.getElementById('preferencesTextarea');
+            const statusDiv = document.getElementById('preferencesStatus');
+            if (!textarea) return;
+            
+            const preferencesText = textarea.value.trim();
+            if (!preferencesText) {
+                if (statusDiv) {
+                    statusDiv.textContent = '⚠️ אנא הזן העדפות לפני שמירה';
+                    statusDiv.style.color = '#ff9800';
+                }
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/user/preferences', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        study_preferences_raw: preferencesText
+                    })
+                });
+                
+                if (response.ok) {
+                    if (statusDiv) {
+                        statusDiv.textContent = '✅ העדפות נשמרו בהצלחה!';
+                        statusDiv.style.color = '#4caf50';
+                    }
+                    setTimeout(() => {
+                        if (statusDiv) statusDiv.textContent = '';
+                    }, 3000);
+                } else {
+                    const error = await response.json();
+                    if (statusDiv) {
+                        statusDiv.textContent = '❌ שגיאה בשמירה: ' + (error.detail || 'שגיאה לא ידועה');
+                        statusDiv.style.color = '#f44336';
+                    }
+                }
+            } catch (error) {
+                console.error('Error saving preferences:', error);
+                if (statusDiv) {
+                    statusDiv.textContent = '❌ שגיאה בשמירה: ' + error.message;
+                    statusDiv.style.color = '#f44336';
+                }
+            }
+        }
+        
         // Load user data on page load if authenticated
         async function loadUserData() {
             const token = localStorage.getItem('auth_token');
@@ -2130,11 +2195,13 @@
             document.addEventListener('DOMContentLoaded', function() {
                 checkAuthStatus();
                 loadUserData();
+                loadPreferences();
                 if (localStorage.getItem('auth_token')) { loadNotifications(); }
             });
         } else {
             checkAuthStatus();
             loadUserData();
+            loadPreferences();
             if (localStorage.getItem('auth_token')) { loadNotifications(); }
         }
     </script>
