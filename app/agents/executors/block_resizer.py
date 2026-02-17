@@ -47,6 +47,7 @@ class BlockResizer:
         day_of_week: Optional[int] = None,
         start_time: Optional[str] = None,
         new_duration: Optional[int] = None,
+        new_start_time: Optional[str] = None,
         week_start: Optional[str] = None,
         user_prompt: Optional[str] = None,
         **kwargs
@@ -236,10 +237,17 @@ class BlockResizer:
                 else:
                     group_id = group_plan_blocks_result.data[0]["group_id"]
                 
+                # Get group name for notifications
+                group_result = client.table("study_groups").select("group_name, course_name").eq("id", group_id).limit(1).execute()
+                group_name = group_result.data[0].get("group_name", "Group") if group_result.data else "Group"
+                
                 # Extract reason from user_prompt if available
                 hours_explanation = ""
                 if user_prompt:
                     hours_explanation = user_prompt
+                
+                # Use new_start_time if provided, otherwise keep original start time
+                proposed_start_time = new_start_time if new_start_time else original_start
                 
                 # Create group change request
                 request_data = {
@@ -251,7 +259,7 @@ class BlockResizer:
                     "original_end_time": original_end,
                     "original_duration_hours": original_duration,
                     "proposed_day_of_week": original_day,  # Keep same day for resize
-                    "proposed_start_time": original_start,  # Keep same start time for resize
+                    "proposed_start_time": proposed_start_time,  # Use new start time if provided
                     "proposed_duration_hours": new_duration,
                     "requested_by": user_id,
                     "hours_explanation": hours_explanation,
@@ -269,14 +277,23 @@ class BlockResizer:
                 members_result = client.table("group_members").select("user_id").eq("group_id", group_id).eq("status", "approved").execute()
                 member_ids = [m["user_id"] for m in (members_result.data or []) if m["user_id"] != user_id]
                 
+                # Calculate proposed end time for notification message
+                proposed_start_minutes = _time_to_minutes(proposed_start_time)
+                proposed_end_minutes = proposed_start_minutes + (new_duration * 60)
+                proposed_end_time = _minutes_to_time(proposed_end_minutes)
+                
                 # Send notifications to all other members
                 for member_id in member_ids:
                     try:
+                        if proposed_start_time != original_start:
+                            message = f"Request to change meeting from {original_start}-{original_end} ({original_duration}h) to {proposed_start_time}-{proposed_end_time} ({new_duration}h). Approval from all members required."
+                        else:
+                            message = f"Request to change meeting duration from {original_duration} hours to {new_duration} hours. Approval from all members required."
                         client.table("notifications").insert({
                             "user_id": member_id,
                             "type": "group_change_request",
                             "title": f"Request to change meeting duration: {group_name}",
-                            "message": f"Request to change meeting duration from {original_duration} hours to {new_duration} hours. Approval from all members required.",
+                            "message": message,
                             "link": f"/schedule?change_request={request_id}",
                             "read": False
                         }).execute()

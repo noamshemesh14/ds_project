@@ -348,7 +348,7 @@ class BlockMover:
                     new_start_minutes = _time_to_minutes(new_start_time)
                     new_end_time = _minutes_to_time(new_start_minutes + duration_minutes)
                 
-                conflict_reasons = self._check_conflicts(client, user_id, week_start, new_day, new_start_time, new_end_time, block_id_actual, course_number)
+                conflict_reasons = self._check_conflicts(client, user_id, week_start, new_day, new_start_time, new_end_time, [block_id_actual], course_number)
                 
                 # If there are real conflicts (not same course), reject the request
                 if conflict_reasons:
@@ -477,12 +477,20 @@ class BlockMover:
             new_start_minutes = _time_to_minutes(new_start_time)
             new_end_time = _minutes_to_time(new_start_minutes + total_duration_minutes)
             
+            logger.info(f"🔍 Checking conflicts: moving {num_hours_to_move} block(s) from day {original_day} {block.get('start_time')} to day {new_day} {new_start_time}-{new_end_time}")
+            logger.info(f"🔍 Blocks to exclude from conflict check: {blocks_to_move_ids}")
+            
             # Check conflicts for all blocks that will be moved
-            conflict_reasons = self._check_conflicts(client, user_id, week_start, new_day, new_start_time, new_end_time, block_id_actual, course_number)
+            # Pass all block IDs that will be moved so they can be excluded from conflict check
+            blocks_to_exclude = blocks_to_move_ids if blocks_to_move_ids else [block_id_actual]
+            conflict_reasons = self._check_conflicts(client, user_id, week_start, new_day, new_start_time, new_end_time, blocks_to_exclude, course_number)
             
             if conflict_reasons:
+                logger.error(f"❌ Conflicts detected: {conflict_reasons}")
                 conflict_message = "Cannot move block - conflicts detected:\n" + "\n".join(conflict_reasons)
                 raise HTTPException(status_code=400, detail=conflict_message)
+            
+            logger.info(f"✅ No conflicts detected - proceeding with move")
             
             # Update all consecutive blocks
             # Calculate time slots for the new location (extend to 22:00 to support evening hours)
@@ -591,18 +599,28 @@ class BlockMover:
         new_day: int,
         new_start_time: str,
         new_end_time: str,
-        block_id: Optional[str] = None,
+        blocks_to_exclude: Optional[list] = None,
         course_number: Optional[str] = None
     ) -> list:
         """Check for conflicts with constraints and other blocks
         
         Args:
+            blocks_to_exclude: List of block IDs to exclude from conflict check (blocks being moved). Can also be a single block_id string.
             course_number: Course number of the block being moved. Blocks of the same course are ignored (not considered conflicts).
         """
+        # Normalize blocks_to_exclude to a list
+        if blocks_to_exclude is None:
+            blocks_to_exclude = []
+        elif isinstance(blocks_to_exclude, str):
+            blocks_to_exclude = [blocks_to_exclude]
+        elif not isinstance(blocks_to_exclude, list):
+            blocks_to_exclude = []
         conflict_reasons = []
         
         new_start_minutes = _time_to_minutes(new_start_time)
         new_end_minutes = _time_to_minutes(new_end_time)
+        
+        logger.info(f"🔍 _check_conflicts called: new_day={new_day}, new_start_time={new_start_time}, new_end_time={new_end_time}, blocks_to_exclude={blocks_to_exclude}, course_number={course_number}")
         
         # Check 1: Weekly constraints
         if week_start:
@@ -647,30 +665,84 @@ class BlockMover:
                 if new_start_minutes < c_end and new_end_minutes > c_start:
                     conflict_reasons.append(f"Permanent hard constraint: {constraint.get('title', 'Constraint')} ({constraint.get('start_time')}-{constraint.get('end_time')})")
         
-        # Check 3: Existing blocks (other courses)
+        # Check 3: Existing blocks (personal and group blocks)
         if week_start:
             user_plan = client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).limit(1).execute()
             if user_plan.data:
                 user_plan_id = user_plan.data[0]["id"]
-                existing_blocks = client.table("weekly_plan_blocks").select("id, course_name, course_number, start_time, end_time").eq("plan_id", user_plan_id).eq("day_of_week", new_day).execute()
+                existing_blocks = client.table("weekly_plan_blocks").select("id, course_name, course_number, work_type, start_time, end_time").eq("plan_id", user_plan_id).eq("day_of_week", new_day).execute()
+                
+                logger.info(f"🔍 Checking {len(existing_blocks.data or [])} existing blocks on day {new_day} for conflicts with {new_start_time}-{new_end_time}")
                 
                 for existing_block in (existing_blocks.data or []):
-                    # Skip the block we're moving
-                    if block_id and existing_block.get("id") == block_id:
+                    block_id = existing_block.get("id")
+                    # Skip the blocks we're moving
+                    if block_id in blocks_to_exclude:
+                        logger.info(f"🔍 Skipping block {block_id} - it's being moved")
                         continue
                     
-                    # Skip blocks of the same course (same course blocks don't conflict when moving)
-                    # This handles the case where we're moving a block and there's another block of the same course at the new location
-                    existing_course_number = existing_block.get("course_number")
-                    if course_number and existing_course_number and str(existing_course_number) == str(course_number):
-                        logger.info(f"🔍 Skipping conflict check for same course block: {existing_course_number}")
-                        continue
+                    # DO NOT skip blocks of the same course - we need to check ALL blocks for conflicts
+                    # Even if it's the same course, if there's another block at the new location, it's a conflict
+                    # The only blocks we skip are the ones being moved (already handled above)
                     
                     e_start = _time_to_minutes(existing_block.get("start_time", "00:00"))
                     e_end = _time_to_minutes(existing_block.get("end_time", "00:00"))
                     
+                    logger.info(f"🔍 Checking block {block_id}: {existing_block.get('start_time')}-{existing_block.get('end_time')} (course: {existing_block.get('course_name')}, work_type: {existing_block.get('work_type')})")
+                    
+                    # Check for time overlap
                     if new_start_minutes < e_end and new_end_minutes > e_start:
-                        conflict_reasons.append(f"Existing block: {existing_block.get('course_name', 'Course')} ({existing_block.get('start_time')}-{existing_block.get('end_time')})")
+                        work_type_str = existing_block.get("work_type", "personal")
+                        block_type = "Group block" if work_type_str == "group" else "Personal block"
+                        conflict_msg = f"{block_type}: {existing_block.get('course_name', 'Course')} ({existing_block.get('start_time')}-{existing_block.get('end_time')})"
+                        logger.warning(f"⚠️ Conflict detected: {conflict_msg} overlaps with new time {new_start_time}-{new_end_time}")
+                        conflict_reasons.append(conflict_msg)
+                    else:
+                        logger.info(f"✅ No overlap: {existing_block.get('start_time')}-{existing_block.get('end_time')} vs {new_start_time}-{new_end_time}")
+            else:
+                logger.warning(f"⚠️ No weekly plan found for week {week_start} - skipping block conflict check")
+        
+        # Check 4: Group blocks (from group_plan_blocks)
+        if week_start:
+            # Get all groups the user is a member of
+            user_groups = client.table("group_members").select("group_id").eq("user_id", user_id).eq("status", "approved").execute()
+            group_ids = [g["group_id"] for g in (user_groups.data or [])]
+            
+            if group_ids:
+                # Get all group blocks for these groups on the new day
+                # Note: group_plan_blocks only has course_number, not course_name
+                group_blocks = client.table("group_plan_blocks").select("group_id, course_number, start_time, end_time").eq("week_start", week_start).eq("day_of_week", new_day).in_("group_id", group_ids).execute()
+                
+                logger.info(f"🔍 Checking {len(group_blocks.data or [])} group blocks on day {new_day} for conflicts with {new_start_time}-{new_end_time}")
+                
+                for group_block in (group_blocks.data or []):
+                    # DO NOT skip blocks of the same course - we need to check ALL blocks for conflicts
+                    # Even if it's the same course, if there's another block at the new location, it's a conflict
+                    group_course_number = group_block.get("course_number")
+                    
+                    g_start = _time_to_minutes(group_block.get("start_time", "00:00"))
+                    g_end = _time_to_minutes(group_block.get("end_time", "00:00"))
+                    
+                    logger.info(f"🔍 Checking group block: {group_block.get('start_time')}-{group_block.get('end_time')} (course_number: {group_course_number})")
+                    
+                    # Check for time overlap
+                    if new_start_minutes < g_end and new_end_minutes > g_start:
+                        # Get group name and course name for better error message
+                        group_id = group_block.get("group_id")
+                        group_info = client.table("study_groups").select("group_name, course_name").eq("id", group_id).limit(1).execute()
+                        if group_info.data:
+                            group_name = group_info.data[0].get("group_name", "Group")
+                            course_name = group_info.data[0].get("course_name", "Course")
+                        else:
+                            group_name = "Group"
+                            course_name = "Course"
+                        conflict_msg = f"Group block: {group_name} - {course_name} ({group_block.get('start_time')}-{group_block.get('end_time')})"
+                        logger.warning(f"⚠️ Conflict detected with group block: {conflict_msg} overlaps with new time {new_start_time}-{new_end_time}")
+                        conflict_reasons.append(conflict_msg)
+                    else:
+                        logger.info(f"✅ No overlap with group block: {group_block.get('start_time')}-{group_block.get('end_time')} vs {new_start_time}-{new_end_time}")
+            else:
+                logger.info(f"🔍 No group memberships found - skipping group block conflict check")
         
         return conflict_reasons
     

@@ -7046,9 +7046,9 @@ async def create_group_change_request(
         elif request_type == "resize":
             if not all([group_id, week_start, proposed_duration is not None]):
                 raise HTTPException(status_code=400, detail="Missing required fields for resize request")
-            # For resize, keep the same day/time
+            # For resize, keep the same day, but allow changing start time
             proposed_day = original_day
-            proposed_start = original_start
+            proposed_start = body.get("proposed_start_time") if body.get("proposed_start_time") else original_start
         
         client = supabase_admin if supabase_admin else supabase
         if not client:
@@ -7129,7 +7129,14 @@ async def create_group_change_request(
                         block_end_minutes = _time_to_minutes(block_end)
                         
                         if proposed_start_minutes < block_end_minutes and proposed_end_minutes > block_start_minutes:
-                            requester_conflicts.append(f"לוז קיים: {block.get('course_name', 'קורס')} ({block.get('start_time')})")
+                            requester_conflicts.append(f"לוז קיים: {block.get('course_name', 'קורס')} ({block.get('start_time')}-{block.get('end_time')})")
+        
+        # If there are conflicts, reject the request
+        if requester_conflicts:
+            raise HTTPException(
+                status_code=400,
+                detail=f"לא ניתן ליצור בקשה - יש התנגשויות בלוז שלך:\n" + "\n".join(requester_conflicts)
+            )
         
         # Validate that the selected time range contains only consecutive blocks of the same course/group
         if request_type == "move" and original_day is not None and original_start and original_duration:
@@ -7363,12 +7370,12 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
     
     if request_type == "resize" and proposed_duration:
         # Handle resize: update duration of group blocks
-        # IMPORTANT: Keep the original time/position, only add/remove blocks at the end
+        # Allow changing start time if proposed_start is different from original_start
         time_slots = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
         
-        # Use original time/position, not proposed (for resize, we keep the same location)
+        # Use proposed start time if provided and different, otherwise use original
         actual_day = original_day if original_day is not None else proposed_day
-        actual_start = original_start if original_start else proposed_start
+        actual_start = proposed_start if proposed_start and proposed_start != original_start else (original_start if original_start else proposed_start)
         
         logging.info(f"📊 Resize request: original_duration={original_duration}h, proposed_duration={proposed_duration}h, day={actual_day}, start={actual_start}, week_start={week_start}")
         
@@ -7411,10 +7418,23 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
         logging.info(f"📊 Resize calculation: original_duration={original_duration}h, proposed_duration={proposed_duration}h, duration_diff={duration_diff}h")
         logging.info(f"📊 Need to {'add' if duration_diff > 0 else 'remove' if duration_diff < 0 else 'no change'} {abs(duration_diff)} blocks")
         
-        if duration_diff == 0:
-            logging.warning(f"⚠️ duration_diff is 0 - no changes will be made! original_duration={original_duration}, proposed_duration={proposed_duration}")
+        # Check if start time changed
+        start_time_changed = proposed_start and proposed_start != original_start
         
-        if duration_diff > 0:
+        if duration_diff == 0 and not start_time_changed:
+            logging.warning(f"⚠️ duration_diff is 0 and start time unchanged - no changes will be made! original_duration={original_duration}, proposed_duration={proposed_duration}")
+        
+        # If start time changed, delete all existing blocks and recreate from new start
+        if start_time_changed:
+            logging.info(f"🔄 Start time changed from {original_start} to {proposed_start} - will delete all existing blocks and recreate")
+            if existing_group_blocks.data:
+                for block in existing_group_blocks.data:
+                    client.table("group_plan_blocks").delete().eq("id", block["id"]).execute()
+                    logging.info(f"🗑️ Deleted group block {block['id']} (start={block.get('start_time')}, end={block.get('end_time')})")
+                logging.info(f"✅ Deleted {len(existing_group_blocks.data)} existing group blocks")
+                existing_group_blocks.data = []  # Clear the list since we deleted all blocks
+        
+        if duration_diff > 0 or start_time_changed:
             # Need to add blocks - find the last existing block's end time
             if existing_group_blocks.data and len(existing_group_blocks.data) > 0:
                 last_block = existing_group_blocks.data[-1]
@@ -7464,9 +7484,10 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
             
             # Add new blocks starting from start_idx
             new_group_blocks = []
+            blocks_to_create = proposed_duration if start_time_changed else duration_diff
             if start_idx is not None:
                 # Use time_slots approach
-                for i in range(duration_diff):
+                for i in range(blocks_to_create):
                     new_time = time_slots[start_idx + i] if (start_idx + i) < len(time_slots) else None
                     if new_time:
                         new_end = time_slots[start_idx + i + 1] if (start_idx + i + 1) < len(time_slots) else "21:00"
@@ -7480,12 +7501,15 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
                             "created_by": requester_id
                         })
             else:
-                # Manual time calculation (when last_end is beyond time_slots)
-                last_block = existing_group_blocks.data[-1]
-                last_end = last_block.get("end_time")
-                start_minutes = _time_to_minutes(last_end)
+                # Manual time calculation (when last_end is beyond time_slots or start time changed)
+                if start_time_changed:
+                    start_minutes = _time_to_minutes(actual_start)
+                else:
+                    last_block = existing_group_blocks.data[-1]
+                    last_end = last_block.get("end_time")
+                    start_minutes = _time_to_minutes(last_end)
                 
-                for i in range(duration_diff):
+                for i in range(blocks_to_create):
                     block_start_minutes = start_minutes + (i * 60)
                     block_end_minutes = block_start_minutes + 60
                     new_time = _minutes_to_time(block_start_minutes)
@@ -7572,7 +7596,15 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
             if plan_id:
                 existing_member_blocks = client.table("weekly_plan_blocks").select("*").eq("plan_id", plan_id).eq("work_type", "group").eq("course_number", course_number).eq("day_of_week", actual_day).order("start_time").execute()
                 
-                if duration_diff > 0:
+                # If start time changed, delete all existing member blocks and recreate
+                if start_time_changed:
+                    if existing_member_blocks.data:
+                        for block in existing_member_blocks.data:
+                            client.table("weekly_plan_blocks").delete().eq("id", block["id"]).execute()
+                        logging.info(f"🗑️ Deleted {len(existing_member_blocks.data)} existing member blocks for user {mid}")
+                        existing_member_blocks.data = []
+                
+                if duration_diff > 0 or start_time_changed:
                     # Add new blocks for this member
                     member_start_idx = None
                     if existing_member_blocks.data and len(existing_member_blocks.data) > 0:
@@ -7594,13 +7626,17 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
                                 # Use manual calculation
                                 member_start_idx = None
                     else:
-                        # No existing blocks - use the same start_idx as group blocks
-                        member_start_idx = start_idx if start_idx is not None else None
+                        # No existing blocks - use the same start_idx as group blocks, or actual_start if time changed
+                        if start_time_changed and actual_start in time_slots:
+                            member_start_idx = time_slots.index(actual_start)
+                        else:
+                            member_start_idx = start_idx if start_idx is not None else None
                     
                     new_member_blocks = []
+                    member_blocks_to_create = proposed_duration if start_time_changed else duration_diff
                     if member_start_idx is not None:
                         # Use time_slots approach
-                        for i in range(duration_diff):
+                        for i in range(member_blocks_to_create):
                             new_time = time_slots[member_start_idx + i] if (member_start_idx + i) < len(time_slots) else None
                             if new_time:
                                 new_end = time_slots[member_start_idx + i + 1] if (member_start_idx + i + 1) < len(time_slots) else "21:00"
@@ -7617,15 +7653,17 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
                                 })
                     else:
                         # Manual time calculation
-                        if existing_member_blocks.data and len(existing_member_blocks.data) > 0:
+                        if start_time_changed:
+                            start_minutes = _time_to_minutes(actual_start) if actual_start else _time_to_minutes("19:00")
+                        elif existing_member_blocks.data and len(existing_member_blocks.data) > 0:
                             last_block = existing_member_blocks.data[-1]
                             last_end = last_block.get("end_time")
                             start_minutes = _time_to_minutes(last_end)
                         else:
-                            # Use original_start
+                            # Use actual_start
                             start_minutes = _time_to_minutes(actual_start) if actual_start else _time_to_minutes("19:00")
                         
-                        for i in range(duration_diff):
+                        for i in range(member_blocks_to_create):
                             block_start_minutes = start_minutes + (i * 60)
                             block_end_minutes = block_start_minutes + 60
                             new_time = _minutes_to_time(block_start_minutes)
@@ -7917,14 +7955,231 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
             except Exception as pref_err:
                 logging.warning(f"⚠️ Failed to update preferences: {pref_err}")
         else:
-            # This is a move - use the existing move logic from approve_group_change_request
-            # (The full move logic is already in approve_group_change_request, so we'll handle it there)
-            logging.info(f"⚠️ Move request type not fully implemented in _apply_group_change_request - should be handled by approve_group_change_request")
-            # Mark request as approved even if move logic is not here
+            # This is a move - apply the move logic
+            # The move logic is handled in approve_group_change_request, but we need to call it here too
+            # For now, we'll mark the request as approved and let approve_group_change_request handle the actual move
+            # This is a workaround - ideally we should extract the move logic to a separate function
+            logging.info(f"⚠️ Move request type - marking as approved, but move logic should be handled by approve_group_change_request endpoint")
+            # Mark request as approved - the actual move will be handled when approve_group_change_request is called
+            # But wait - if we're here, it means all members approved, so we should apply the move
+            # Let's call the move logic from approve_group_change_request inline
+            # Actually, we can't easily call approve_group_change_request from here because it's an endpoint
+            # So we need to implement move logic here too
+            
+            # Get original and proposed values
+            original_day = change_request.get("original_day_of_week")
+            original_start = change_request.get("original_start_time")
+            original_duration = change_request.get("original_duration_hours", 1)
+            proposed_day = change_request.get("proposed_day_of_week")
+            proposed_start = change_request.get("proposed_start_time")
+            proposed_end = change_request.get("proposed_end_time")
+            proposed_duration = change_request.get("proposed_duration_hours")
+            
+            # Calculate original end time
+            original_end = _minutes_to_time(_time_to_minutes(original_start) + (original_duration * 60)) if original_start else None
+            
+            # Calculate proposed_duration from proposed_start and proposed_end if not provided
+            if not proposed_duration and proposed_start and proposed_end:
+                proposed_start_minutes = _time_to_minutes(proposed_start)
+                proposed_end_minutes = _time_to_minutes(proposed_end)
+                proposed_duration = (proposed_end_minutes - proposed_start_minutes) // 60
+                logging.info(f"📊 Calculated proposed_duration from time range: {proposed_start}-{proposed_end} = {proposed_duration} hours")
+            else:
+                proposed_duration = proposed_duration or original_duration
+            
+            # Step 1: Delete old group_plan_blocks at original location
+            if original_day is not None and original_start:
+                original_start_minutes = _time_to_minutes(original_start)
+                original_end_minutes = _time_to_minutes(original_end) if original_end else original_start_minutes + (original_duration * 60)
+                
+                all_blocks = client.table("group_plan_blocks").select("id, start_time, end_time, day_of_week").eq("group_id", group_id).eq("week_start", week_start).eq("day_of_week", original_day).execute()
+                
+                proposed_start_minutes = _time_to_minutes(proposed_start) if proposed_start else None
+                proposed_end_minutes = _time_to_minutes(proposed_end) if proposed_end else (proposed_start_minutes + ((proposed_duration if proposed_duration else 1) * 60) if proposed_start_minutes else None)
+                
+                blocks_to_delete = []
+                for block in (all_blocks.data or []):
+                    if block.get("day_of_week") != original_day:
+                        continue
+                    
+                    block_start_minutes = _time_to_minutes(block.get("start_time", "00:00"))
+                    block_end_minutes = _time_to_minutes(block.get("end_time", "00:00"))
+                    
+                    overlaps_original = block_start_minutes < original_end_minutes and block_end_minutes > original_start_minutes
+                    
+                    if original_day == proposed_day and proposed_start_minutes is not None and proposed_end_minutes is not None:
+                        overlaps_new = block_start_minutes < proposed_end_minutes and block_end_minutes > proposed_start_minutes
+                        if overlaps_new:
+                            continue
+                    
+                    if overlaps_original:
+                        blocks_to_delete.append(block["id"])
+                
+                if blocks_to_delete:
+                    for block_id in blocks_to_delete:
+                        client.table("group_plan_blocks").delete().eq("id", block_id).execute()
+                    logging.info(f"✅ Deleted {len(blocks_to_delete)} group_plan_blocks at original location")
+            
+            # Step 2: Create new group_plan_blocks at new location
+            if proposed_day is not None and proposed_start:
+                proposed_start_minutes = _time_to_minutes(proposed_start)
+                proposed_end_minutes = _time_to_minutes(proposed_end) if proposed_end else proposed_start_minutes + ((proposed_duration if proposed_duration else 1) * 60)
+                
+                existing_at_new_location = client.table("group_plan_blocks").select("id, start_time, end_time").eq("group_id", group_id).eq("week_start", week_start).eq("day_of_week", proposed_day).execute()
+                
+                blocks_to_delete_at_new = []
+                for block in (existing_at_new_location.data or []):
+                    block_start_minutes = _time_to_minutes(block.get("start_time", "00:00"))
+                    block_end_minutes = _time_to_minutes(block.get("end_time", "00:00"))
+                    
+                    if block_start_minutes < proposed_end_minutes and block_end_minutes > proposed_start_minutes:
+                        blocks_to_delete_at_new.append(block["id"])
+                
+                if blocks_to_delete_at_new:
+                    for block_id in blocks_to_delete_at_new:
+                        client.table("group_plan_blocks").delete().eq("id", block_id).execute()
+                    logging.info(f"✅ Deleted {len(blocks_to_delete_at_new)} existing group_plan_blocks at new location")
+                
+                time_slots = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
+                new_group_blocks = []
+                
+                if proposed_start in time_slots:
+                    start_idx = time_slots.index(proposed_start)
+                else:
+                    proposed_minutes = _time_to_minutes(proposed_start)
+                    closest_idx = 0
+                    min_diff = abs(_time_to_minutes(time_slots[0]) - proposed_minutes)
+                    for i, slot in enumerate(time_slots):
+                        diff = abs(_time_to_minutes(slot) - proposed_minutes)
+                        if diff < min_diff:
+                            min_diff = diff
+                            closest_idx = i
+                    start_idx = closest_idx
+                
+                duration = proposed_duration if proposed_duration else original_duration
+                
+                for i in range(duration):
+                    if start_idx + i < len(time_slots):
+                        new_time = time_slots[start_idx + i]
+                        new_end = time_slots[start_idx + i + 1] if (start_idx + i + 1) < len(time_slots) else "21:00"
+                        if proposed_end and _time_to_minutes(new_end) > _time_to_minutes(proposed_end):
+                            new_end = proposed_end
+                        new_group_blocks.append({
+                            "group_id": group_id,
+                            "week_start": week_start,
+                            "course_number": course_number,
+                            "day_of_week": proposed_day,
+                            "start_time": new_time,
+                            "end_time": new_end,
+                            "created_by": requester_id
+                        })
+                
+                if new_group_blocks:
+                    client.table("group_plan_blocks").insert(new_group_blocks).execute()
+                    logging.info(f"✅ Created {len(new_group_blocks)} new group_plan_blocks at new location")
+            
+            # Step 3: Update all member's weekly_plan_blocks
+            for mid in member_ids:
+                member_plan = client.table("weekly_plans").select("id").eq("user_id", mid).eq("week_start", week_start).limit(1).execute()
+                if member_plan.data:
+                    plan_id = member_plan.data[0]["id"]
+                    
+                    # Delete old blocks at original location
+                    if original_day is not None and original_start:
+                        original_start_minutes = _time_to_minutes(original_start)
+                        original_end_minutes = _time_to_minutes(original_end) if original_end else original_start_minutes + (original_duration * 60)
+                        
+                        all_member_blocks = client.table("weekly_plan_blocks").select("id, start_time, end_time, day_of_week").eq("plan_id", plan_id).eq("work_type", "group").eq("course_number", course_number).eq("day_of_week", original_day).execute()
+                        
+                        proposed_start_minutes = _time_to_minutes(proposed_start) if proposed_start else None
+                        proposed_end_minutes = _time_to_minutes(proposed_end) if proposed_end else (proposed_start_minutes + ((proposed_duration if proposed_duration else 1) * 60) if proposed_start_minutes else None)
+                        
+                        blocks_to_delete = []
+                        for block in (all_member_blocks.data or []):
+                            if block.get("day_of_week") != original_day:
+                                continue
+                            
+                            block_start_minutes = _time_to_minutes(block.get("start_time", "00:00"))
+                            block_end_minutes = _time_to_minutes(block.get("end_time", "00:00"))
+                            
+                            overlaps_original = block_start_minutes < original_end_minutes and block_end_minutes > original_start_minutes
+                            
+                            if original_day == proposed_day and proposed_start_minutes is not None and proposed_end_minutes is not None:
+                                overlaps_new = block_start_minutes < proposed_end_minutes and block_end_minutes > proposed_start_minutes
+                                if overlaps_new:
+                                    continue
+                            
+                            if overlaps_original:
+                                blocks_to_delete.append(block["id"])
+                        
+                        if blocks_to_delete:
+                            for block_id in blocks_to_delete:
+                                client.table("weekly_plan_blocks").delete().eq("id", block_id).execute()
+                            logging.info(f"✅ Deleted {len(blocks_to_delete)} weekly_plan_blocks for member {mid} at original location")
+                    
+                    # Create new blocks at new location
+                    if proposed_day is not None and proposed_start:
+                        proposed_start_minutes = _time_to_minutes(proposed_start)
+                        proposed_end_minutes = _time_to_minutes(proposed_end) if proposed_end else proposed_start_minutes + ((proposed_duration if proposed_duration else 1) * 60)
+                        
+                        existing_at_new_location = client.table("weekly_plan_blocks").select("id, start_time, end_time").eq("plan_id", plan_id).eq("work_type", "group").eq("course_number", course_number).eq("day_of_week", proposed_day).execute()
+                        
+                        blocks_to_delete_at_new = []
+                        for block in (existing_at_new_location.data or []):
+                            block_start_minutes = _time_to_minutes(block.get("start_time", "00:00"))
+                            block_end_minutes = _time_to_minutes(block.get("end_time", "00:00"))
+                            
+                            if block_start_minutes < proposed_end_minutes and block_end_minutes > proposed_start_minutes:
+                                blocks_to_delete_at_new.append(block["id"])
+                        
+                        if blocks_to_delete_at_new:
+                            for block_id in blocks_to_delete_at_new:
+                                client.table("weekly_plan_blocks").delete().eq("id", block_id).execute()
+                        
+                        new_member_blocks = []
+                        if proposed_start in time_slots:
+                            start_idx = time_slots.index(proposed_start)
+                        else:
+                            proposed_minutes = _time_to_minutes(proposed_start)
+                            closest_idx = 0
+                            min_diff = abs(_time_to_minutes(time_slots[0]) - proposed_minutes)
+                            for i, slot in enumerate(time_slots):
+                                diff = abs(_time_to_minutes(slot) - proposed_minutes)
+                                if diff < min_diff:
+                                    min_diff = diff
+                                    closest_idx = i
+                            start_idx = closest_idx
+                        
+                        duration = proposed_duration if proposed_duration else original_duration
+                        
+                        for i in range(duration):
+                            if start_idx + i < len(time_slots):
+                                new_time = time_slots[start_idx + i]
+                                new_end = time_slots[start_idx + i + 1] if (start_idx + i + 1) < len(time_slots) else "21:00"
+                                if proposed_end and _time_to_minutes(new_end) > _time_to_minutes(proposed_end):
+                                    new_end = proposed_end
+                                new_member_blocks.append({
+                                    "plan_id": plan_id,
+                                    "user_id": mid,
+                                    "course_number": course_number,
+                                    "course_name": course_name,
+                                    "work_type": "group",
+                                    "day_of_week": proposed_day,
+                                    "start_time": new_time,
+                                    "end_time": new_end,
+                                    "source": "group"
+                                })
+                        
+                        if new_member_blocks:
+                            client.table("weekly_plan_blocks").insert(new_member_blocks).execute()
+                            logging.info(f"✅ Created {len(new_member_blocks)} weekly_plan_blocks for member {mid} at new location")
+            
+            # Mark request as approved
             client.table("group_meeting_change_requests").update({
                 "status": "approved",
                 "resolved_at": datetime.now().isoformat()
             }).eq("id", request_id).execute()
+            logging.info(f"✅ Move request {request_id} applied and marked as approved")
     
     # Mark request as approved (if not already done in resize section)
     if request_type != "resize" or not proposed_duration:
@@ -7993,10 +8248,17 @@ async def approve_group_change_request(
         if request_type == "move" or request_type == "resize":
             conflict_reasons = []
             
-            # For resize, use original day/start (the meeting stays in place, just duration changes)
-            # For move, use proposed day/start (the meeting moves to a new location)
-            check_day = original_day if (request_type == "resize" and original_day is not None) else proposed_day
-            check_start = original_start if (request_type == "resize" and original_start) else proposed_start
+            # For resize, check if start time changed - if so, use proposed_start, otherwise use original_start
+            # For move, always use proposed day/start (the meeting moves to a new location)
+            if request_type == "resize":
+                # Check if start time changed
+                start_time_changed = proposed_start and proposed_start != original_start
+                check_day = original_day if original_day is not None else proposed_day
+                check_start = proposed_start if start_time_changed else (original_start if original_start else proposed_start)
+            else:
+                # Move request
+                check_day = proposed_day
+                check_start = proposed_start
             check_duration = proposed_duration  # Always check the new duration
             
             # Check 1: Weekly constraints (hard constraints)
@@ -8064,7 +8326,16 @@ async def approve_group_change_request(
             for block in (existing_blocks.data or []):
                 # Skip if it's the same group's block (we're moving/resizing it)
                 if block.get("work_type") == "group" and block.get("course_number") == group_course_number:
-                    continue
+                    # For resize, also skip if it's the original block we're resizing (only if start time didn't change)
+                    if request_type == "resize":
+                        start_time_changed = proposed_start and proposed_start != original_start
+                        if not start_time_changed:
+                            # Check if this is the original block being resized
+                            block_start = block.get("start_time")
+                            if block_start == original_start:
+                                continue
+                    else:
+                        continue
                 
                 b_start = _time_to_minutes(block.get("start_time", "00:00"))
                 # Use end_time if available, otherwise assume 1 hour
@@ -8077,7 +8348,7 @@ async def approve_group_change_request(
                 p_end = p_start + (check_duration * 60) if check_duration else p_start + 60
                 
                 if p_start < b_end and p_end > b_start:
-                    conflict_reasons.append(f"לוז קיים: {block.get('course_name', 'קורס')} ({block.get('start_time')})")
+                    conflict_reasons.append(f"לוז קיים: {block.get('course_name', 'קורס')} ({block.get('start_time')}-{block.get('end_time', block.get('start_time'))})")
             
             # If there are conflicts, auto-reject and notify
             if conflict_reasons:
@@ -8138,9 +8409,15 @@ async def approve_group_change_request(
                         "read": False
                     }).execute()
                 
+                # Format conflict message for better readability
+                conflict_list = conflict_reasons if isinstance(conflict_reasons, list) else [conflict_msg]
+                # Remove duplicates
+                unique_conflicts = list(dict.fromkeys(conflict_list))
+                formatted_conflicts = "\n• ".join(unique_conflicts)
+                
                 raise HTTPException(
                     status_code=400, 
-                    detail=f"לא ניתן לאשר - יש התנגשות בלוז שלך:\\n{conflict_msg}"
+                    detail=f"לא ניתן לאשר - יש התנגשויות בלוז שלך:\n• {formatted_conflicts}"
                 )
         
         # No conflicts - record the approval
