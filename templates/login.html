@@ -311,7 +311,7 @@
                     
                     // Redirect after 1 second
                     setTimeout(() => {
-                        window.location.href = '/';
+                        window.location.href = '/schedule';
                     }, 1000);
                 } else {
                     throw new Error('לא התקבל token אימות');
@@ -385,7 +385,7 @@
                     
                     // Redirect after 1 second
                     setTimeout(() => {
-                        window.location.href = '/';
+                        window.location.href = '/schedule';
                     }, 1000);
                 } else if (data.requires_email_confirmation || !data.user.email_confirmed) {
                     // Check if this is a new user or existing user
@@ -431,7 +431,7 @@
         
         // Check if already logged in
         if (localStorage.getItem('auth_token')) {
-            window.location.href = '/';
+            window.location.href = '/schedule';
         }
     </script>
 </body>
