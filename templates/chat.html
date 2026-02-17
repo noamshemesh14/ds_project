@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TechnionAI - יועץ אקדמי חכם</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            direction: rtl;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .navbar {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .navbar-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .logo {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+            list-style: none;
+            align-items: center;
+        }
+        
+        .nav-links a {
+            text-decoration: none;
+            color: #333;
+            font-weight: 500;
+            transition: color 0.3s;
+            cursor: pointer;
+        }
+        
+        .nav-links a:hover {
+            color: #667eea;
+        }
+        
+        .chat-container {
+            flex: 1;
+            max-width: 1000px;
+            width: 100%;
+            margin: 2rem auto;
+            display: flex;
+            flex-direction: column;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+        
+        .chat-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1.5rem 2rem;
+            text-align: center;
+        }
+        
+        .chat-header h1 {
+            font-size: 1.8em;
+            margin-bottom: 0.5rem;
+        }
+        
+        .chat-header p {
+            opacity: 0.9;
+            font-size: 0.9em;
+        }
+        
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 2rem;
+            background: #f8f9fa;
+            min-height: 400px;
+            max-height: calc(100vh - 300px);
+        }
+        
+        .message {
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: flex-start;
+            gap: 1rem;
+            animation: fadeIn 0.3s ease-in;
+        }
+        
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .message.user {
+            flex-direction: row-reverse;
+        }
+        
+        .message-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: white;
+            flex-shrink: 0;
+        }
+        
+        .message.user .message-avatar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .message.assistant .message-avatar {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+        
+        .message-content {
+            max-width: 70%;
+            padding: 1rem 1.5rem;
+            border-radius: 20px;
+            line-height: 1.6;
+            word-wrap: break-word;
+        }
+        
+        .message.user .message-content {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-bottom-right-radius: 5px;
+        }
+        
+        .message.assistant .message-content {
+            background: white;
+            color: #333;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-bottom-left-radius: 5px;
+        }
+        
+        .message-time {
+            font-size: 0.75em;
+            opacity: 0.7;
+            margin-top: 0.5rem;
+        }
+        
+        .loading-indicator {
+            display: flex;
+            gap: 0.5rem;
+            padding: 1rem 1.5rem;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            max-width: 100px;
+        }
+        
+        .loading-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #667eea;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+        
+        .loading-dot:nth-child(1) {
+            animation-delay: -0.32s;
+        }
+        
+        .loading-dot:nth-child(2) {
+            animation-delay: -0.16s;
+        }
+        
+        @keyframes bounce {
+            0%, 80%, 100% {
+                transform: scale(0);
+            }
+            40% {
+                transform: scale(1);
+            }
+        }
+        
+        .chat-input-container {
+            padding: 1.5rem 2rem;
+            background: white;
+            border-top: 1px solid #e0e0e0;
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+        
+        .chat-input {
+            flex: 1;
+            padding: 1rem 1.5rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 25px;
+            font-size: 1em;
+            font-family: inherit;
+            resize: none;
+            max-height: 120px;
+            transition: border-color 0.3s;
+        }
+        
+        .chat-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .chat-input:disabled {
+            background: #f5f5f5;
+            cursor: not-allowed;
+        }
+        
+        .send-button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 1rem 2rem;
+            border-radius: 25px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s, opacity 0.2s;
+            font-size: 1em;
+        }
+        
+        .send-button:hover:not(:disabled) {
+            transform: translateY(-2px);
+        }
+        
+        .send-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .error-message {
+            background: #fee;
+            color: #c33;
+            padding: 1rem 1.5rem;
+            border-radius: 10px;
+            margin: 1rem 2rem;
+            border-right: 4px solid #c33;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: #999;
+        }
+        
+        .empty-state h2 {
+            margin-bottom: 1rem;
+            color: #667eea;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-content">
+            <div class="logo">TechnionAI</div>
+            <ul class="nav-links">
+                <li><a href="/">דף הבית</a></li>
+                <li><a href="/schedule">מערכת שעות</a></li>
+                <li><a href="/my-courses">הקורסים שלי</a></li>
+            </ul>
+        </div>
+    </nav>
+    
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>TechnionAI</h1>
+            <p>יועץ אקדמי חכם לטכניון - שאל אותי כל שאלה!</p>
+        </div>
+        
+        <div class="chat-messages" id="chatMessages">
+            <div class="empty-state">
+                <h2>ברוכים הבאים ל-TechnionAI!</h2>
+                <p>אני כאן לעזור לך עם שאלות אקדמיות, נהלים, קורסים וכל מה שקשור לטכניון.</p>
+                <p>תוכל לשאול אותי כל שאלה - אני אחפש את התשובה במסמכי הטכניון ואענה לך.</p>
+            </div>
+        </div>
+        
+        <div class="chat-input-container">
+            <textarea 
+                id="chatInput" 
+                class="chat-input" 
+                placeholder="שאל אותי כל שאלה..."
+                rows="1"
+            ></textarea>
+            <button id="sendButton" class="send-button">שלח</button>
+        </div>
+    </div>
+    
+    <script>
+        const chatMessages = document.getElementById('chatMessages');
+        const chatInput = document.getElementById('chatInput');
+        const sendButton = document.getElementById('sendButton');
+        
+        let isLoading = false;
+        let userContext = null;
+        
+        // Load user context on page load
+        async function loadUserContext() {
+            try {
+                const token = localStorage.getItem('auth_token') || localStorage.getItem('access_token');
+                if (!token) {
+                    console.warn('No auth token found');
+                    return;
+                }
+                
+                const response = await fetch('/api/user/context', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    userContext = await response.json();
+                    console.log('User context loaded:', userContext);
+                }
+            } catch (error) {
+                console.error('Error loading user context:', error);
+            }
+        }
+        
+        // Auto-resize textarea
+        chatInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        });
+        
+        // Send message on Enter (Shift+Enter for new line)
+        chatInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+        
+        // Send button click
+        sendButton.addEventListener('click', sendMessage);
+        
+        function addMessage(content, isUser = false) {
+            const emptyState = chatMessages.querySelector('.empty-state');
+            if (emptyState) {
+                emptyState.remove();
+            }
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user' : 'assistant'}`;
+            
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar';
+            avatar.textContent = isUser ? 'אתה' : 'AI';
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.textContent = content;
+            
+            const timeDiv = document.createElement('div');
+            timeDiv.className = 'message-time';
+            timeDiv.textContent = new Date().toLocaleTimeString('he-IL', { 
+                hour: '2-digit', 
+                minute: '2-digit' 
+            });
+            
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(contentDiv);
+            contentDiv.appendChild(timeDiv);
+            
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        
+        function showLoading() {
+            const loadingDiv = document.createElement('div');
+            loadingDiv.className = 'message assistant';
+            loadingDiv.id = 'loadingMessage';
+            
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar';
+            avatar.textContent = 'AI';
+            
+            const loadingIndicator = document.createElement('div');
+            loadingIndicator.className = 'loading-indicator';
+            loadingIndicator.innerHTML = `
+                <div class="loading-dot"></div>
+                <div class="loading-dot"></div>
+                <div class="loading-dot"></div>
+            `;
+            
+            loadingDiv.appendChild(avatar);
+            loadingDiv.appendChild(loadingIndicator);
+            chatMessages.appendChild(loadingDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        
+        function removeLoading() {
+            const loadingMessage = document.getElementById('loadingMessage');
+            if (loadingMessage) {
+                loadingMessage.remove();
+            }
+        }
+        
+        function showError(message) {
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'error-message';
+            errorDiv.textContent = `שגיאה: ${message}`;
+            chatMessages.appendChild(errorDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        
+        async function sendMessage() {
+            const message = chatInput.value.trim();
+            if (!message || isLoading) {
+                return;
+            }
+            
+            // Add user message
+            addMessage(message, true);
+            chatInput.value = '';
+            chatInput.style.height = 'auto';
+            
+            // Disable input
+            isLoading = true;
+            chatInput.disabled = true;
+            sendButton.disabled = true;
+            
+            // Show loading
+            showLoading();
+            
+            try {
+                const token = localStorage.getItem('auth_token') || localStorage.getItem('access_token');
+                if (!token) {
+                    throw new Error('לא מחובר. אנא התחבר תחילה.');
+                }
+                
+                // Load user context if not loaded
+                if (!userContext) {
+                    await loadUserContext();
+                }
+                
+                const response = await fetch('/api/execute', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        prompt: message,
+                        user_context: userContext,
+                        ui_context: {
+                            source: 'free_text'
+                        }
+                    })
+                });
+                
+                const data = await response.json();
+                
+                removeLoading();
+                
+                if (data.status === 'ok' || data.status === 'success') {
+                    addMessage(data.response || 'תשובה התקבלה בהצלחה');
+                } else {
+                    const errorMsg = data.error || 'אירעה שגיאה בעת שליחת ההודעה';
+                    showError(errorMsg);
+                }
+            } catch (error) {
+                removeLoading();
+                showError(error.message || 'אירעה שגיאה בעת שליחת ההודעה');
+                console.error('Error sending message:', error);
+            } finally {
+                // Re-enable input
+                isLoading = false;
+                chatInput.disabled = false;
+                sendButton.disabled = false;
+                chatInput.focus();
+            }
+        }
+        
+        // Load user context on page load
+        loadUserContext();
+        
+        // Focus input on load
+        chatInput.focus();
+    </script>
+</body>
+</html>
+
