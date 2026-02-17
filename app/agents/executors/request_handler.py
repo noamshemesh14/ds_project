@@ -349,14 +349,186 @@ class RequestHandler:
                             # #region agent log
                             try:
                                 with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                                    f.write(json.dumps({"runId":"run1","hypothesisId":"F","location":"app/agents/executors/request_handler.py:execute","message":"No groups found - raising error","data":{"group_name":group_name,"course_number":course_number,"course_name":course_name},"timestamp":int(__import__('time').time()*1000)}) + '\n')
+                                    f.write(json.dumps({"runId":"run1","hypothesisId":"F","location":"app/agents/executors/request_handler.py:execute","message":"No groups found - trying to find change requests directly","data":{"group_name":group_name,"course_number":course_number,"course_name":course_name},"timestamp":int(__import__('time').time()*1000)}) + '\n')
                             except: pass
                             # #endregion
-                            raise HTTPException(status_code=404, detail=f"No group found matching: group_name={group_name}, course_number={course_number}, course_name={course_name}")
+                            
+                            # If no groups found but we have course_name or other search params, try to find change requests directly
+                            # by searching through user's groups and their change requests
+                            logger.info(f"   No groups found by name/number, trying to find change requests directly using available params")
+                            
+                            # Get all groups the user is a member of
+                            user_groups_result = client.table("group_members").select("group_id").eq("user_id", user_id).eq("status", "approved").execute()
+                            user_group_ids = [g["group_id"] for g in (user_groups_result.data or [])]
+                            
+                            if user_group_ids:
+                                # If we have course_name, filter groups by course_name first
+                                if course_name:
+                                    matching_groups = client.table("study_groups").select("id, group_name, course_id, course_name").in_("id", user_group_ids).ilike("course_name", f"%{course_name}%").execute()
+                                    if matching_groups.data:
+                                        logger.info(f"   Found {len(matching_groups.data)} groups matching course_name: {course_name}")
+                                        matching_group_ids = [g["id"] for g in matching_groups.data]
+                                    else:
+                                        # No groups match course_name, search all user groups
+                                        matching_group_ids = user_group_ids
+                                elif course_number:
+                                    matching_groups = client.table("study_groups").select("id, group_name, course_id, course_name").in_("id", user_group_ids).eq("course_id", course_number).execute()
+                                    if matching_groups.data:
+                                        logger.info(f"   Found {len(matching_groups.data)} groups matching course_number: {course_number}")
+                                        matching_group_ids = [g["id"] for g in matching_groups.data]
+                                    else:
+                                        matching_group_ids = user_group_ids
+                                else:
+                                    matching_group_ids = user_group_ids
+                                
+                                # Search for change requests in matching groups
+                                logger.info(f"   Searching change requests in {len(matching_group_ids)} groups")
+                                
+                                # Calculate week_start if we have date
+                                search_week_start = week_start
+                                if not search_week_start and date:
+                                    from datetime import datetime, timedelta
+                                    try:
+                                        date_normalized = date.replace("/", "-")
+                                        date_obj = None
+                                        for fmt in ["%Y-%m-%d", "%d-%m-%Y", "%d-%m-%y"]:
+                                            try:
+                                                date_obj = datetime.strptime(date_normalized, fmt)
+                                                break
+                                            except ValueError:
+                                                continue
+                                        if date_obj:
+                                            days_since_sunday = (date_obj.weekday() + 1) % 7
+                                            sunday = date_obj - timedelta(days=days_since_sunday)
+                                            search_week_start = sunday.strftime("%Y-%m-%d")
+                                            logger.info(f"   Calculated week_start from date: {search_week_start}")
+                                    except:
+                                        pass
+                                
+                                # Search for pending change requests
+                                change_req_search = client.table("group_meeting_change_requests").select("id, group_id, week_start, proposed_day_of_week, proposed_start_time, original_day_of_week, original_start_time, request_type, status").in_("group_id", matching_group_ids).eq("status", "pending")
+                                
+                                if search_week_start:
+                                    change_req_search = change_req_search.eq("week_start", search_week_start)
+                                
+                                all_change_requests = change_req_search.order("created_at", desc=True).limit(20).execute()
+                                
+                                # Filter by available parameters
+                                matching_requests = []
+                                for req in (all_change_requests.data or []):
+                                    score = 0
+                                    
+                                    # Score by day_of_week match
+                                    req_day = req.get("proposed_day_of_week") or req.get("original_day_of_week")
+                                    if day_of_week is not None:
+                                        if req_day == day_of_week:
+                                            score += 10
+                                        else:
+                                            continue  # Skip if day doesn't match
+                                    
+                                    # Score by start_time match
+                                    # For move requests, check proposed_start_time (the new time)
+                                    # For other requests, check both proposed and original
+                                    req_proposed_start = req.get("proposed_start_time")
+                                    req_original_start = req.get("original_start_time")
+                                    req_type = req.get("request_type", "move")
+                                    
+                                    if start_time:
+                                        start_time_normalized = start_time[:5] if len(start_time) > 5 else start_time
+                                        
+                                        # For move requests, the start_time should match proposed_start_time
+                                        # For resize requests, it could match either
+                                        if req_type == "move":
+                                            # Move: check proposed_start_time
+                                            if req_proposed_start:
+                                                req_start_normalized = req_proposed_start[:5] if len(req_proposed_start) > 5 else req_proposed_start
+                                                if req_start_normalized == start_time_normalized:
+                                                    score += 10
+                                                else:
+                                                    continue  # Skip if time doesn't match
+                                            else:
+                                                continue  # No proposed_start_time for move request
+                                        else:
+                                            # Resize or other: check both proposed and original
+                                            req_start_normalized = None
+                                            if req_proposed_start:
+                                                req_start_normalized = req_proposed_start[:5] if len(req_proposed_start) > 5 else req_proposed_start
+                                            elif req_original_start:
+                                                req_start_normalized = req_original_start[:5] if len(req_original_start) > 5 else req_original_start
+                                            
+                                            if req_start_normalized and req_start_normalized == start_time_normalized:
+                                                score += 10
+                                            else:
+                                                # For resize, start_time is less critical - don't skip, just don't add score
+                                                pass
+                                    
+                                    # Score by time_of_day match
+                                    if time_of_day:
+                                        time_mapping = {
+                                            "morning": ("08:00", "12:00"),
+                                            "afternoon": ("12:00", "17:00"),
+                                            "evening": ("17:00", "21:00"),
+                                            "night": ("20:00", "23:00")
+                                        }
+                                        if time_of_day.lower() in time_mapping:
+                                            start_range, end_range = time_mapping[time_of_day.lower()]
+                                            # Use the appropriate start time based on request type
+                                            check_time = req_proposed_start if req_type == "move" else (req_proposed_start or req_original_start)
+                                            if check_time and not (start_range <= check_time < end_range):
+                                                continue  # Skip if time_of_day doesn't match
+                                            score += 5
+                                    
+                                    # Score by request_type match
+                                    if request_type and req.get("request_type") == request_type:
+                                        score += 3
+                                    
+                                    matching_requests.append((score, req))
+                                
+                                if matching_requests:
+                                    # Sort by score and take the best match
+                                    matching_requests.sort(key=lambda x: x[0], reverse=True)
+                                    best_request = matching_requests[0][1]
+                                    found_group_id = best_request.get("group_id")
+                                    
+                                    # Get group info for the found request
+                                    group_info = client.table("study_groups").select("id, group_name, course_id, course_name").eq("id", found_group_id).limit(1).execute()
+                                    if group_info.data:
+                                        groups_result = group_info
+                                        logger.info(f"   ✅ Found change request {best_request.get('id')} for group {found_group_id} (score={matching_requests[0][0]})")
+                                        # Set change_request_id so it will be processed
+                                        change_request_id = best_request.get("id")
+                                
+                                # If still no groups found and no change request found, raise a more informative error
+                                if not groups_result.data and not change_request_id:
+                                    error_details = []
+                                    if course_name:
+                                        error_details.append(f"קורס: {course_name}")
+                                    if course_number:
+                                        error_details.append(f"מספר קורס: {course_number}")
+                                    if date:
+                                        error_details.append(f"תאריך: {date}")
+                                    if day_of_week is not None:
+                                        day_names = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
+                                        error_details.append(f"יום: {day_names[day_of_week]}")
+                                    if start_time:
+                                        error_details.append(f"שעה: {start_time}")
+                                    
+                                    error_msg = f"לא נמצאה קבוצה או בקשה לשינוי עבור הפרמטרים שסופקו"
+                                    if error_details:
+                                        error_msg += f": {', '.join(error_details)}"
+                                    error_msg += ". אנא בדוק:\n• שהקורס נכון\n• שיש לך קבוצה פעילה עבור קורס זה\n• שיש בקשה ממתינה לאישור"
+                                    
+                                    raise HTTPException(status_code=404, detail=error_msg)
+                            else:
+                                # No groups at all for this user
+                                raise HTTPException(
+                                    status_code=404, 
+                                    detail=f"לא נמצאה קבוצה עבור הקורס '{course_name or course_number or 'לא צוין'}'. אנא בדוק שיש לך קבוצה פעילה עבור קורס זה."
+                                )
                     
                     # Try to find pending invitation or change request for any of these groups
-                    # (only if we didn't already find a pending invitation)
-                    if groups_result and groups_result.data:
+                    # (only if we didn't already find a pending invitation or change request)
+                    if groups_result and groups_result.data and not change_request_id:
                         for group in groups_result.data:
                             group_id = group["id"]
                             logger.info(f"🔍 Checking group {group_id} ({group.get('group_name')})")
@@ -690,7 +862,28 @@ class RequestHandler:
                                 break
                     
                     if not invitation_id and not change_request_id:
-                        raise HTTPException(status_code=404, detail=f"No pending invitation or change request found for group matching: group_name={group_name}, course_number={course_number}")
+                        # Build detailed error message in English
+                        error_details = []
+                        if group_name:
+                            error_details.append(f"group_name={group_name}")
+                        if course_number:
+                            error_details.append(f"course_number={course_number}")
+                        if course_name:
+                            error_details.append(f"course_name={course_name}")
+                        if date:
+                            error_details.append(f"date={date}")
+                        if day_of_week is not None:
+                            day_names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+                            error_details.append(f"day={day_names[day_of_week]}")
+                        if start_time:
+                            error_details.append(f"start_time={start_time}")
+                        
+                        error_msg = "No pending invitation or change request found"
+                        if error_details:
+                            error_msg += f" for: {', '.join(error_details)}"
+                        error_msg += ". Please check that the parameters are correct and there is a pending request to approve."
+                        
+                        raise HTTPException(status_code=404, detail=error_msg)
             
             # Handle invitation
             if invitation_id:

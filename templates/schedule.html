@@ -3775,7 +3775,9 @@
                         const errorText = await response.text();
                         errorMessage = errorText || errorMessage;
                     }
-                    alert('❌ שגיאה: ' + errorMessage);
+                    // Replace \n with actual newlines for alert display
+                    const formattedError = errorMessage.replace(/\\n/g, '\n');
+                    alert('❌ שגיאה:\n\n' + formattedError);
                 }
             } catch (error) {
                 console.error('Error approving change request:', error);
@@ -4353,6 +4355,12 @@
             // Set duration selector
             const durationSelect = document.getElementById('editBlockNewDuration');
             durationSelect.value = blockData.duration;
+            
+            // Set new start time selector (default to empty - keep current)
+            const newStartTimeSelect = document.getElementById('editBlockNewStartTime');
+            if (newStartTimeSelect) {
+                newStartTimeSelect.value = '';
+            }
             
             // Show/hide group warning
             const groupWarning = document.getElementById('editBlockGroupWarning');
@@ -4953,9 +4961,11 @@
             } else {
                 // Handle resize (duration change)
                 const newDuration = parseInt(document.getElementById('editBlockNewDuration').value);
+                const newStartTimeSelect = document.getElementById('editBlockNewStartTime');
+                const newStartTime = newStartTimeSelect && newStartTimeSelect.value ? newStartTimeSelect.value : null;
             
-            // If duration didn't change
-            if (newDuration === selectedBlockData.duration) {
+            // If duration didn't change and start time didn't change
+            if (newDuration === selectedBlockData.duration && !newStartTime) {
                 closeBlockEditModal();
                 return;
             }
@@ -4963,7 +4973,7 @@
             // Check if it's a group block
                 if (isGroupBlock) {
                 // Need to send change request
-                await submitGroupResizeRequest(selectedBlockData, newDuration, explanation, weekStart);
+                await submitGroupResizeRequest(selectedBlockData, newDuration, newStartTime, explanation, weekStart);
             } else {
                 // Personal block - update directly
                 await updatePersonalBlockDuration(selectedBlockData, newDuration, explanation, weekStart);
@@ -5010,7 +5020,7 @@
             }
         }
         
-        async function submitGroupResizeRequest(blockData, newDuration, explanation, weekStart) {
+        async function submitGroupResizeRequest(blockData, newDuration, newStartTime, explanation, weekStart) {
             // Find the group_id for this course
             let groupId = blockData.group_id;
             
@@ -5037,23 +5047,30 @@
             }
             
             try {
+                const requestBody = {
+                    group_id: groupId,
+                    week_start: weekStart,
+                    request_type: 'resize',
+                    original_day_of_week: blockData.day,
+                    original_start_time: blockData.startTime,
+                    original_duration_hours: blockData.duration,
+                    proposed_duration_hours: newDuration,
+                    reason: explanation,
+                    hours_explanation: explanation
+                };
+                
+                // Add new_start_time if provided
+                if (newStartTime) {
+                    requestBody.proposed_start_time = newStartTime;
+                }
+                
                 const response = await fetch('/api/schedule/group-change-request/create', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${token}`
                     },
-                    body: JSON.stringify({
-                        group_id: groupId,
-                        week_start: weekStart,
-                        request_type: 'resize',
-                        original_day_of_week: blockData.day,
-                        original_start_time: blockData.startTime,
-                        original_duration_hours: blockData.duration,
-                        proposed_duration_hours: newDuration,
-                        reason: explanation,
-                        hours_explanation: explanation
-                    })
+                    body: JSON.stringify(requestBody)
                 });
                 
                 if (response.ok) {
@@ -5413,6 +5430,28 @@
                 
                 <!-- Duration Selector -->
                 <div id="editBlockResizeSection" style="margin-bottom: 1.5rem;">
+                    <label style="font-weight: bold; display: block; margin-bottom: 0.5rem;">
+                        שעת התחלה חדשה (אופציונלי):
+                    </label>
+                    <select id="editBlockNewStartTime" style="width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 8px; font-size: 1em; margin-bottom: 1rem;">
+                        <option value="">שמור שעת התחלה נוכחית</option>
+                        <option value="08:00">08:00</option>
+                        <option value="09:00">09:00</option>
+                        <option value="10:00">10:00</option>
+                        <option value="11:00">11:00</option>
+                        <option value="12:00">12:00</option>
+                        <option value="13:00">13:00</option>
+                        <option value="14:00">14:00</option>
+                        <option value="15:00">15:00</option>
+                        <option value="16:00">16:00</option>
+                        <option value="17:00">17:00</option>
+                        <option value="18:00">18:00</option>
+                        <option value="19:00">19:00</option>
+                        <option value="20:00">20:00</option>
+                        <option value="21:00">21:00</option>
+                        <option value="22:00">22:00</option>
+                        <option value="23:00">23:00</option>
+                    </select>
                     <label style="font-weight: bold; display: block; margin-bottom: 0.5rem;">
                         משך חדש (שעות):
                     </label>
