@@ -2192,14 +2192,14 @@
                     }
                     const planBlock = weeklyPlanBlocks.find(b => {
                         if (b.day_of_week !== day) return false;
-                        if (b.work_type === 'semester' && b.start_time && b.end_time) return isTimeInRange(time, b.start_time, b.end_time);
+                        if (b.start_time && b.end_time) return isTimeInRange(time, b.start_time, b.end_time);
                         return b.start_time === time;
                     });
                     if (planBlock) {
                         const slotIndex = timeSlots.indexOf(time);
                         let startsHere;
                         let numHours = 1;
-                        if (planBlock.work_type === 'semester' && planBlock.start_time && planBlock.end_time) {
+                        if (planBlock.start_time && planBlock.end_time) {
                             if (slotIndex > 0) {
                                 const prevTime = timeSlots[slotIndex - 1];
                                 startsHere = !isTimeInRange(prevTime, planBlock.start_time, planBlock.end_time);
