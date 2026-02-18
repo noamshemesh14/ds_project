@@ -163,9 +163,24 @@ class Supervisor:
                 
                 result = await executor.execute(user_id=user_id, **executor_params, **kwargs_clean)
 
-                # RAG executor returns its own steps, so merge them
-                if executor_name == "rag_chat" and "steps" in result:
-                    steps.extend(result["steps"])
+                # RAG executor returns its own internal steps (rag_retrieval, rag_answer_generator)
+                # We need to add both: the executor step (like other executors) AND the internal steps
+                if executor_name == "rag_chat":
+                    # Extract internal steps before creating executor step log
+                    internal_steps = result.get("steps", [])
+                    # Create a clean response dict without steps for the executor step log
+                    clean_result = {k: v for k, v in result.items() if k != "steps"}
+                    
+                    # First, add the executor step (like other executors do)
+                    clean_params = {k: v for k, v in executor_params.items() 
+                                   if k != "llm_client" and not hasattr(v, "__dict__")}
+                    steps.append(executor.get_step_log(
+                        prompt={"user_prompt": user_prompt, **clean_params},
+                        response=clean_result
+                    ))
+                    # Then, add the internal steps (rag_retrieval, rag_answer_generator) if they exist
+                    if internal_steps:
+                        steps.extend(internal_steps)
                 else:
                     # Clean executor_params to remove non-serializable objects before logging
                     clean_params = {k: v for k, v in executor_params.items() 
@@ -177,6 +192,12 @@ class Supervisor:
                 
                 # Extract response - RAG executor uses "response" key, others use "message"
                 response_text = result.get("response") or result.get("message", "Task completed successfully")
+                
+                # For chat (rag_chat), truncate response to ensure steps appear in PowerShell table
+                # This matches the format of other agents where response is short enough to show steps
+                # Notifications response is ~31 chars, so truncate chat to ~50 chars to show steps
+                if executor_name == "rag_chat" and len(response_text) > 50:
+                    response_text = response_text[:50] + "..."
                 
                 return {
                     "status": result.get("status", "ok"),
