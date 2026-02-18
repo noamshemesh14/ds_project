@@ -1,6 +1,7 @@
 """
 Authentication utilities for Supabase
 """
+import os
 from fastapi import HTTPException, Depends, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase import Client
@@ -92,6 +93,20 @@ async def get_current_user(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="No authentication token provided"
             )
+        
+        # Main character: fixed token from .env (no real login)
+        main_token = os.environ.get("MAIN_CHARACTER_TOKEN")
+        if main_token and token.strip() == main_token.strip():
+            user_id = os.environ.get("MAIN_CHARACTER_USER_ID", "").strip()
+            email = os.environ.get("MAIN_CHARACTER_EMAIL", "main@system").strip()
+            if user_id:
+                logging.info(f"✅ Main character login: {email} (id: {user_id})")
+                return {
+                    "id": user_id,
+                    "sub": user_id,
+                    "email": email,
+                    "user_metadata": {}
+                }
         
         logging.info(f"🔐 Attempting to authenticate with token (length: {len(token)}, first 30 chars: {token[:30]}...)")
         

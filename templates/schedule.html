@@ -2134,20 +2134,134 @@
             });
         }
 
-        // Initialize weekly schedule
+        // Initialize weekly schedule (rowSpan so blocks span all hours like מערכת סמסטרית)
         function initWeeklySchedule() {
             const tbody = document.getElementById('weekly-schedule-body');
             if (!tbody) return;
+            const typeLabels = { 'lecture': 'הרצאה', 'tutorial': 'תרגול', 'lab': 'מעבדה', 'seminar': 'סמינר', 'other': 'אחר' };
+            const skip = {};
             tbody.innerHTML = '';
-
-            timeSlots.forEach(time => {
+            for (let rowIndex = 0; rowIndex < timeSlots.length; rowIndex++) {
+                const time = timeSlots[rowIndex];
                 const row = document.createElement('tr');
                 const timeCell = document.createElement('td');
                 timeCell.className = 'time-slot';
                 timeCell.textContent = time;
                 row.appendChild(timeCell);
-
                 for (let day = 0; day < 7; day++) {
+                    if (skip[rowIndex] && skip[rowIndex][day]) continue;
+                    let daysArray;
+                    const weeklyConstraint = weeklyConstraints.find(c => {
+                        daysArray = Array.isArray(c.days) ? c.days : (typeof c.days === 'string' ? (() => { try { return JSON.parse(c.days); } catch { return []; } })() : []);
+                        return daysArray.includes(day) && isTimeInRange(time, c.start_time, c.end_time);
+                    });
+                    if (weeklyConstraint) {
+                        const slotIndex = timeSlots.indexOf(time);
+                        const prevTime = slotIndex > 0 ? timeSlots[slotIndex - 1] : null;
+                        const startsHere = !prevTime || !isTimeInRange(prevTime, weeklyConstraint.start_time, weeklyConstraint.end_time);
+                        let numHours = 1;
+                        if (startsHere) {
+                            for (let i = slotIndex; i < timeSlots.length && isTimeInRange(timeSlots[i], weeklyConstraint.start_time, weeklyConstraint.end_time); i++) {
+                                if (i > slotIndex) numHours++;
+                            }
+                        }
+                        const cell = document.createElement('td');
+                        cell.className = 'schedule-cell has-constraint' + (weeklyConstraint.is_hard === false ? ' soft-constraint' : '');
+                        if (startsHere && numHours > 1) cell.rowSpan = numHours;
+                        cell.dataset.day = day;
+                        cell.dataset.time = time;
+                        if (startsHere) {
+                            const cellHeight = 80;
+                            const badgeHeight = (cellHeight * numHours) - 10;
+                            const badge = document.createElement('span');
+                            badge.className = 'constraint-badge ' + (weeklyConstraint.is_hard === false ? 'soft' : '');
+                            badge.style.height = badgeHeight + 'px';
+                            badge.style.minHeight = badgeHeight + 'px';
+                            const constraintLabel = weeklyConstraint.is_permanent ? '🔁 ' : '';
+                            const constraintIcon = weeklyConstraint.is_hard === false ? '🟡 ' : '🔒 ';
+                            let displayName = constraintIcon + constraintLabel + weeklyConstraint.title;
+                            if (displayName.length > 35) displayName = displayName.substring(0, 32) + '...';
+                            badge.textContent = displayName;
+                            badge.title = weeklyConstraint.title + ' (' + (weeklyConstraint.is_permanent ? 'אילוץ קבוע' : 'אילוץ שבועי') + ', ' + (weeklyConstraint.is_hard ? 'קשיח' : 'רך') + ')';
+                            cell.appendChild(badge);
+                            if (!weeklyConstraint.is_permanent) cell.onclick = () => openWeeklyConstraintModal(null, null, weeklyConstraint.id);
+                        }
+                        row.appendChild(cell);
+                        for (let r = 1; r < numHours && rowIndex + r < timeSlots.length; r++) { if (!skip[rowIndex + r]) skip[rowIndex + r] = {}; skip[rowIndex + r][day] = true; }
+                        continue;
+                    }
+                    const planBlock = weeklyPlanBlocks.find(b => {
+                        if (b.day_of_week !== day) return false;
+                        if (b.work_type === 'semester' && b.start_time && b.end_time) return isTimeInRange(time, b.start_time, b.end_time);
+                        return b.start_time === time;
+                    });
+                    if (planBlock) {
+                        const slotIndex = timeSlots.indexOf(time);
+                        let startsHere;
+                        let numHours = 1;
+                        if (planBlock.work_type === 'semester' && planBlock.start_time && planBlock.end_time) {
+                            if (slotIndex > 0) {
+                                const prevTime = timeSlots[slotIndex - 1];
+                                startsHere = !isTimeInRange(prevTime, planBlock.start_time, planBlock.end_time);
+                            } else {
+                                startsHere = true;
+                            }
+                            const sh = (planBlock.start_time || '0:0').split(':').map(Number);
+                            const eh = (planBlock.end_time || '0:0').split(':').map(Number);
+                            numHours = Math.max(1, Math.ceil((eh[0] * 60 + (eh[1] || 0) - (sh[0] * 60 + (sh[1] || 0))) / 60));
+                        } else {
+                            const prevTime = slotIndex > 0 ? timeSlots[slotIndex - 1] : null;
+                            const prevBlock = prevTime && weeklyPlanBlocks.find(b => b.day_of_week === day && b.start_time === prevTime && b.course_number === planBlock.course_number && b.work_type === planBlock.work_type);
+                            startsHere = !prevBlock;
+                            if (startsHere) {
+                                for (let h = 1; slotIndex + h < timeSlots.length; h++) {
+                                    const nt = timeSlots[slotIndex + h];
+                                    if (weeklyPlanBlocks.find(b => b.day_of_week === day && b.start_time === nt && b.course_number === planBlock.course_number && b.work_type === planBlock.work_type)) numHours++;
+                                    else break;
+                                }
+                            }
+                        }
+                        const cell = document.createElement('td');
+                        cell.className = 'schedule-cell has-course' + (planBlock.work_type === 'semester' ? ' has-semester-item' : (planBlock.work_type === 'group' ? ' group-work' : ' personal-work'));
+                        cell.dataset.day = day;
+                        cell.dataset.time = time;
+                        if (startsHere && numHours > 1) cell.rowSpan = numHours;
+                        if (startsHere) {
+                            cell.dataset.blockCourse = planBlock.course_number;
+                            cell.dataset.blockWorkType = planBlock.work_type;
+                            cell.dataset.blockDuration = numHours;
+                            if (planBlock.work_type !== 'semester') cell.style.cursor = 'pointer'; else { cell.style.cursor = 'not-allowed'; cell.title = 'בלוק סמסטר - לא ניתן לערוך (אילוץ קשיח)'; }
+                            cell.onclick = null;
+                            const cellHeight = 80;
+                            const badgeHeight = (cellHeight * numHours) - 10;
+                            if (planBlock.work_type === 'semester') {
+                                const badge = document.createElement('span');
+                                const itemType = (planBlock.type || 'lecture').toLowerCase();
+                                badge.className = 'semester-item-badge ' + itemType;
+                                badge.style.height = badgeHeight + 'px';
+                                badge.style.minHeight = badgeHeight + 'px';
+                                badge.style.zIndex = '10';
+                                let displayName = (planBlock.course_name || '') + ' (' + (typeLabels[planBlock.type] || planBlock.type || 'סמסטר') + ')';
+                                if (displayName.length > 35) displayName = displayName.substring(0, 32) + '...';
+                                badge.textContent = displayName;
+                                badge.title = (planBlock.course_name || '') + ' (' + (planBlock.start_time || '') + '-' + (planBlock.end_time || '') + ') - בלוק סמסטר (לא ניתן לערוך)';
+                                cell.appendChild(badge);
+                            } else {
+                                const badge = document.createElement('span');
+                                badge.className = 'course-badge ' + (planBlock.work_type === 'group' ? 'group-work' : 'personal-work');
+                                badge.style.height = badgeHeight + 'px';
+                                badge.style.minHeight = badgeHeight + 'px';
+                                let displayName = planBlock.course_name || '';
+                                if (displayName.length > 35) displayName = displayName.substring(0, 32) + '...';
+                                badge.textContent = (planBlock.work_type === 'group' ? '👥 ' : '👤 ') + displayName;
+                                badge.title = (planBlock.course_name || '') + ' - לחץ לעריכה';
+                                cell.appendChild(badge);
+                            }
+                        }
+                        row.appendChild(cell);
+                        for (let r = 1; r < numHours && rowIndex + r < timeSlots.length; r++) { if (!skip[rowIndex + r]) skip[rowIndex + r] = {}; skip[rowIndex + r][day] = true; }
+                        continue;
+                    }
                     const cell = document.createElement('td');
                     cell.className = 'schedule-cell available';
                     cell.dataset.day = day;
@@ -2156,317 +2270,13 @@
                     row.appendChild(cell);
                 }
                 tbody.appendChild(row);
-            });
-            updateWeeklyScheduleDisplay();
+            }
+            if (typeof enableDragAndDrop === 'function') enableDragAndDrop();
         }
 
         // Update weekly schedule display based on weekly constraints and plan blocks
         function updateWeeklyScheduleDisplay() {
-            const cells = document.querySelectorAll('#weekly-schedule-body .schedule-cell');
-            cells.forEach(cell => {
-                cell.className = 'schedule-cell';
-                cell.innerHTML = '';
-
-                const day = parseInt(cell.dataset.day);
-                const time = cell.dataset.time;
-
-                // Check both weekly and permanent constraints
-                const weeklyConstraint = weeklyConstraints.find(c => {
-                    let daysArray = c.days;
-                    if (!Array.isArray(daysArray)) {
-                        if (typeof daysArray === 'string') {
-                            try {
-                                daysArray = JSON.parse(daysArray);
-                            } catch {
-                                daysArray = daysArray.split(',').map(d => parseInt(d.trim())).filter(d => !isNaN(d));
-                            }
-                        } else {
-                            daysArray = [];
-                        }
-                    }
-                    return daysArray.includes(day) && isTimeInRange(time, c.start_time, c.end_time);
-                });
-
-                if (weeklyConstraint) {
-                    cell.classList.add('has-constraint');
-                    // Add soft-constraint class if it's a soft constraint
-                    if (weeklyConstraint.is_hard === false) {
-                        cell.classList.add('soft-constraint');
-                    }
-                    const slotIndex = timeSlots.indexOf(time);
-                    const prevTime = slotIndex > 0 ? timeSlots[slotIndex - 1] : null;
-                    const nextTime = slotIndex < timeSlots.length - 1 ? timeSlots[slotIndex + 1] : null;
-                    const prevIn = prevTime && isTimeInRange(prevTime, weeklyConstraint.start_time, weeklyConstraint.end_time);
-                    const nextIn = nextTime && isTimeInRange(nextTime, weeklyConstraint.start_time, weeklyConstraint.end_time);
-                    const startsHere = !prevIn;
-                    if (startsHere && !nextIn) {
-                        cell.classList.add('constraint-start', 'constraint-end');
-                    } else if (startsHere) {
-                        cell.classList.add('constraint-start');
-                    } else if (!nextIn) {
-                        cell.classList.add('constraint-end');
-                    } else {
-                        cell.classList.add('constraint-middle');
-                    }
-
-                    // Calculate number of hours for this constraint
-                    const constraintStartParts = weeklyConstraint.start_time.split(':').map(Number);
-                    const constraintEndParts = weeklyConstraint.end_time.split(':').map(Number);
-                    const constraintStartMinutes = constraintStartParts[0] * 60 + (constraintStartParts[1] || 0);
-                    const constraintEndMinutes = constraintEndParts[0] * 60 + (constraintEndParts[1] || 0);
-                    const numHours = Math.ceil((constraintEndMinutes - constraintStartMinutes) / 60);
-                    
-                    // Create badge only at the start of the constraint (like course blocks)
-                    if (startsHere) {
-                        const cellHeight = 80; // matches td height in CSS
-                        const badgeHeight = (cellHeight * numHours) - 10; // -10 for padding
-                        
-                        const badge = document.createElement('span');
-                        badge.className = `constraint-badge ${weeklyConstraint.is_hard === false ? 'soft' : ''}`;
-                        badge.style.height = `${badgeHeight}px`;
-                        badge.style.minHeight = `${badgeHeight}px`;
-                        
-                        const constraintLabel = weeklyConstraint.is_permanent ? '🔁 ' : '';
-                        const constraintIcon = weeklyConstraint.is_hard === false ? '🟡 ' : '🔒 ';
-                        let displayName = constraintIcon + constraintLabel + weeklyConstraint.title;
-                        if (displayName.length > 35) {
-                            displayName = displayName.substring(0, 32) + '...';
-                        }
-                        
-                        badge.textContent = displayName;
-                        badge.title = `${weeklyConstraint.title} (${weeklyConstraint.is_permanent ? 'אילוץ קבוע' : 'אילוץ שבועי'}, ${weeklyConstraint.is_hard ? 'קשיח' : 'רך'})`;
-                        cell.appendChild(badge);
-                    }
-                    // Only allow editing weekly constraints (not permanent ones)
-                    if (weeklyConstraint.is_permanent) {
-                        cell.onclick = null; // Permanent constraints are read-only in weekly view
-                    } else {
-                    cell.onclick = () => openWeeklyConstraintModal(null, null, weeklyConstraint.id);
-                    }
-                } else {
-                    cell.classList.add('available');
-                    cell.onclick = () => handleWeeklyCellClick(day, time);
-                }
-
-                // Find block for this day and time
-                // For semester blocks, check if time is within the block's time range (start_time to end_time)
-                // For other blocks, match by exact start_time
-                const planBlock = weeklyPlanBlocks.find(b => {
-                    if (b.day_of_week !== day) return false;
-                    if (b.work_type === 'semester' && b.start_time && b.end_time) {
-                        // For semester blocks, check if time is within the range
-                        return isTimeInRange(time, b.start_time, b.end_time);
-                    } else {
-                        // For other blocks, match by exact start_time
-                        return b.start_time === time;
-                    }
-                });
-                if (planBlock) {
-                    // Debug: Log semester blocks when found
-                    if (planBlock.work_type === 'semester') {
-                        console.log(`📚 Found semester block at ${days[day]} ${time}:`, planBlock);
-                    }
-                    cell.classList.remove('available');
-                    cell.classList.add('has-course');
-                    // Add work type class for background color
-                    // NOTE: Semester blocks use semester-item-badge with their own styling, so we use has-semester-item class
-                    if (planBlock.work_type === 'semester') {
-                        cell.classList.add('has-semester-item');
-                    } else {
-                        let workTypeClass = 'personal-work';  // default
-                        if (planBlock.work_type === 'group') {
-                            workTypeClass = 'group-work';
-                        }
-                        cell.classList.add(workTypeClass);
-                    }
-
-                    const slotIndex = timeSlots.indexOf(time);
-                    const prevTime = slotIndex > 0 ? timeSlots[slotIndex - 1] : null;
-                    const nextTime = slotIndex < timeSlots.length - 1 ? timeSlots[slotIndex + 1] : null;
-                    
-                    // For semester blocks, check if prevTime/nextTime are within the block's time range
-                    let prevBlock = null;
-                    let nextBlock = null;
-                    // Always search for blocks in prevTime/nextTime, regardless of block type
-                    prevBlock = prevTime && weeklyPlanBlocks.find(b => {
-                        if (b.day_of_week !== day) return false;
-                        if (b.work_type === 'semester' && b.start_time && b.end_time) {
-                            return isTimeInRange(prevTime, b.start_time, b.end_time) && 
-                                   b.course_number === planBlock.course_number && 
-                                   b.work_type === planBlock.work_type;
-                        } else {
-                            return b.start_time === prevTime && 
-                                   b.course_number === planBlock.course_number && 
-                                   b.work_type === planBlock.work_type;
-                        }
-                    });
-                    nextBlock = nextTime && weeklyPlanBlocks.find(b => {
-                        if (b.day_of_week !== day) return false;
-                        if (b.work_type === 'semester' && b.start_time && b.end_time) {
-                            return isTimeInRange(nextTime, b.start_time, b.end_time) && 
-                                   b.course_number === planBlock.course_number && 
-                                   b.work_type === planBlock.work_type;
-                        } else {
-                            return b.start_time === nextTime && 
-                                   b.course_number === planBlock.course_number && 
-                                   b.work_type === planBlock.work_type;
-                        }
-                    });
-                    
-                    // For semester blocks, check if prevBlock/nextBlock is the SAME block (same start_time/end_time)
-                    // For other blocks, check if they have the same course_number and work_type
-                    let prevIn, nextIn;
-                    if (planBlock.work_type === 'semester' && planBlock.start_time && planBlock.end_time) {
-                        // For semester blocks, check if prevBlock/nextBlock has the same start_time and end_time
-                        prevIn = prevBlock && prevBlock.start_time === planBlock.start_time && prevBlock.end_time === planBlock.end_time && prevBlock.course_number === planBlock.course_number;
-                        nextIn = nextBlock && nextBlock.start_time === planBlock.start_time && nextBlock.end_time === planBlock.end_time && nextBlock.course_number === planBlock.course_number;
-                    } else {
-                        // For other blocks, check if they have the same course_number and work_type
-                        prevIn = prevBlock && prevBlock.course_number === planBlock.course_number && prevBlock.work_type === planBlock.work_type;
-                        nextIn = nextBlock && nextBlock.course_number === planBlock.course_number && nextBlock.work_type === planBlock.work_type;
-                    }
-                    
-                    // For semester blocks, startsHere is true if this is the first time slot that overlaps with the block
-                    // (i.e., no previous time slot also overlaps with this same block)
-                    let startsHere;
-                    if (planBlock.work_type === 'semester' && planBlock.start_time && planBlock.end_time) {
-                        // Check if this time slot is the first one that overlaps with the semester block
-                        // We need to check if there's a previous time slot that also overlaps
-                        const timeIndex = timeSlots.indexOf(time);
-                        if (timeIndex > 0) {
-                            const prevTime = timeSlots[timeIndex - 1];
-                            const prevOverlaps = isTimeInRange(prevTime, planBlock.start_time, planBlock.end_time);
-                            // If previous time slot doesn't overlap, this is the start
-                            startsHere = !prevOverlaps;
-                        } else {
-                            // First time slot of the day, so it's definitely the start if it overlaps
-                            startsHere = isTimeInRange(time, planBlock.start_time, planBlock.end_time);
-                        }
-                    } else {
-                        startsHere = !prevIn;
-                    }
-                    if (startsHere && !nextIn) {
-                        cell.classList.add('course-start', 'course-end');
-                    } else if (startsHere) {
-                        cell.classList.add('course-start');
-                    } else if (!nextIn) {
-                        cell.classList.add('course-end');
-                    } else {
-                        cell.classList.add('course-middle');
-                    }
-
-                    // Count consecutive hours for this block
-                    let numHours = 1;
-                    // For semester blocks, calculate duration from start_time to end_time
-                    if (planBlock.work_type === 'semester' && planBlock.start_time && planBlock.end_time) {
-                        const [startHour, startMin] = planBlock.start_time.split(':').map(Number);
-                        const [endHour, endMin] = planBlock.end_time.split(':').map(Number);
-                        const startMinutes = startHour * 60 + (startMin || 0);
-                        const endMinutes = endHour * 60 + (endMin || 0);
-                        numHours = Math.ceil((endMinutes - startMinutes) / 60);
-                        numHours = Math.max(1, numHours);  // At least 1 hour
-                    } else {
-                        // For other blocks, count consecutive hours
-                        let currentHour = parseInt(time.split(':')[0]);
-                        for (let h = 1; h < 12; h++) {
-                            const nextHour = currentHour + h;
-                            if (nextHour >= 24) break;
-                            const nextTimeStr = `${String(nextHour).padStart(2, '0')}:00`;
-                            const nextBlk = weeklyPlanBlocks.find(b => {
-                                if (b.day_of_week !== day) return false;
-                                if (b.work_type === 'semester' && b.start_time && b.end_time) {
-                                    return isTimeInRange(nextTimeStr, b.start_time, b.end_time) &&
-                                           b.course_number === planBlock.course_number &&
-                                           b.work_type === planBlock.work_type;
-                                } else {
-                                    return b.start_time === nextTimeStr &&
-                                           b.course_number === planBlock.course_number &&
-                                           b.work_type === planBlock.work_type;
-                                }
-                            });
-                            if (nextBlk) numHours++;
-                            else break;
-                        }
-                    }
-
-                    // Store block data for click handling (will be set up in enableDragAndDrop)
-                    // NOTE: Semester blocks are read-only (hard constraints) - don't make them draggable
-                    if (startsHere) {
-                        cell.dataset.blockCourse = planBlock.course_number;
-                        cell.dataset.blockWorkType = planBlock.work_type;
-                        cell.dataset.blockDuration = numHours;
-                        // Semester blocks are read-only - don't make them draggable
-                        if (planBlock.work_type !== 'semester') {
-                            cell.style.cursor = 'pointer';
-                        } else {
-                            cell.style.cursor = 'not-allowed';
-                            cell.title = 'בלוק סמסטר - לא ניתן לערוך (אילוץ קשיח)';
-                        }
-                    }
-                    // Clear any previous onclick to avoid conflicts with addEventListener
-                    cell.onclick = null;
-
-                    // Create badge only at the start of the block
-                    if (startsHere) {
-                        const cellHeight = 80; // matches td height in CSS
-                        const badgeHeight = (cellHeight * numHours) - 10; // -10 for padding
-                        
-                        // For semester blocks, use the same style as semester schedule view
-                        if (planBlock.work_type === 'semester') {
-                            const badge = document.createElement('span');
-                            const itemType = (planBlock.type || 'lecture').toLowerCase();
-                            badge.className = `semester-item-badge ${itemType}`;  // Use semester badge style with type class
-                            badge.style.height = `${badgeHeight}px`;
-                            badge.style.minHeight = `${badgeHeight}px`;
-                            badge.style.zIndex = '10';
-                            
-                            const typeLabels = {
-                                'lecture': 'הרצאה',
-                                'tutorial': 'תרגול',
-                                'lab': 'מעבדה',
-                                'seminar': 'סמינר',
-                                'other': 'אחר'
-                            };
-                            
-                            let displayName = `${planBlock.course_name} (${typeLabels[planBlock.type] || planBlock.type || 'סמסטר'})`;
-                            if (displayName.length > 35) {
-                                displayName = displayName.substring(0, 32) + '...';
-                            }
-                            badge.textContent = displayName;
-                            badge.title = `${planBlock.course_name} (${typeLabels[planBlock.type] || planBlock.type || 'סמסטר'}, ${planBlock.start_time}-${planBlock.end_time}${planBlock.location ? ', ' + planBlock.location : ''}) - בלוק סמסטר (לא ניתן לערוך)`;
-                            cell.appendChild(badge);
-                        } else {
-                            // For personal/group blocks, use the original badge style
-                            const badge = document.createElement('span');
-                            const isGroup = planBlock.work_type === 'group';
-                            let badgeClass = 'course-badge personal-work';
-                            if (isGroup) {
-                                badgeClass = 'course-badge group-work';
-                            }
-                            badge.className = badgeClass;
-                            badge.style.height = `${badgeHeight}px`;
-                            badge.style.minHeight = `${badgeHeight}px`;
-                            
-                            let typeIcon = '👤';
-                            let typeLabel = 'אישי';
-                            if (isGroup) {
-                                typeIcon = '👥';
-                                typeLabel = 'קבוצה';
-                            }
-                            
-                            // Shorten long course names for display
-                            let displayName = planBlock.course_name;
-                            if (displayName.length > 35) {
-                                displayName = displayName.substring(0, 32) + '...';
-                            }
-                            
-                            badge.textContent = `${typeIcon} ${displayName}`;
-                            badge.title = `${planBlock.course_name} (${typeLabel}) - לחץ לעריכה`;
-                            cell.appendChild(badge);
-                        }
-                    }
-                }
-            });
+            initWeeklySchedule();
         }
 
         // Handle weekly cell click

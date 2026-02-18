@@ -468,8 +468,9 @@ async def save_user(
             plans = client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).execute()
             if plans.data:
                 for p in plans.data:
-                    client.table("weekly_plan_blocks").delete().eq("plan_id", p["id"]).execute()
-                logging.info(f"   Deleted current week's weekly_plan_blocks for user {user_id}")
+                    # Only delete blocks that came from profile (course lecture/tutorial); leave personal/group blocks
+                    client.table("weekly_plan_blocks").delete().eq("plan_id", p["id"]).eq("source", "profile").execute()
+                logging.info(f"   Deleted profile-sourced weekly_plan_blocks for user {user_id} (kept other blocks)")
         except Exception as e:
             logging.warning(f"   Error deleting weekly_plan_blocks: {e}")
         
