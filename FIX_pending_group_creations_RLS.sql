@@ -36,3 +36,4 @@ CREATE POLICY "Users can create invitations with NULL group_id"
     WITH CHECK (inviter_id = auth.uid());
 
 
+
