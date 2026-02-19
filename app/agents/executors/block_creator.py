@@ -281,6 +281,15 @@ class BlockCreator:
                     error_msg += ". You must be a member of a group for this course."
                     raise HTTPException(status_code=404, detail=error_msg)
                 
+                # Verify user is registered for this course
+                if course_number:
+                    user_course_check = client.table("courses").select("id").eq("user_id", user_id).eq("course_number", course_number).limit(1).execute()
+                    if not user_course_check.data:
+                        raise HTTPException(
+                            status_code=400, 
+                            detail=f"You are not registered for course {course_number}. Please register for the course before creating group blocks."
+                        )
+                
                 # Extract reason from user_prompt if available
                 reason = ""
                 if user_prompt:
@@ -321,9 +330,14 @@ class BlockCreator:
                 change_request = request_result.data[0]
                 request_id = change_request["id"]
                 
-                # Get all group members (except requester)
+                # Get all group members (including requester for counting, but notifications only to others)
                 members_result = client.table("group_members").select("user_id").eq("group_id", group_id).eq("status", "approved").execute()
+                all_member_ids = [m["user_id"] for m in (members_result.data or [])]
                 member_ids = [m["user_id"] for m in (members_result.data or []) if m["user_id"] != user_id]
+                
+                # Verify requester is in the group
+                if user_id not in all_member_ids:
+                    raise HTTPException(status_code=403, detail="You are not a member of this group")
                 
                 # Get group name and requester name
                 group_result = client.table("study_groups").select("group_name, course_name").eq("id", group_id).limit(1).execute()
@@ -359,9 +373,10 @@ class BlockCreator:
                 
                 return {
                     "status": "success",
-                    "message": f"Change request created for adding {duration}h group block. Waiting for approval from all members.",
+                    "message": f"Change request created for adding {duration}h group block. Waiting for approval from all {len(all_member_ids)} members.",
                     "request_id": request_id,
                     "members_to_approve": len(member_ids),
+                    "total_members": len(all_member_ids),
                     "has_conflicts": False,
                     "conflicts": []
                 }
