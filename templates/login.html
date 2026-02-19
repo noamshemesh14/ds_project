@@ -452,9 +452,9 @@
             }
         }
         
-        // Check if already logged in - redirect to agent landing (/) first, not schedule
+        // If already logged in, go to the app (schedule) — not back to landing, so "Go to the site" works
         if (localStorage.getItem('auth_token')) {
-            window.location.href = '/';
+            window.location.href = '/schedule';
         }
     </script>
 </body>
