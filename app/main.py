@@ -11299,6 +11299,27 @@ async def get_group_members(
 
 # ==================== ASSIGNMENTS API ====================
 
+@app.get("/api/team_info")
+async def get_team_info(current_user: dict = Depends(get_current_user)):
+    """
+    Returns student details for the team (for presentation).
+    Purpose: retrieve student names and emails.
+    """
+    # Optional: require auth so only logged-in user can call
+    user_id = current_user.get("id") or current_user.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    return {
+        "group_batch_order_number": "3_6",
+        "team_name": "נטע, מעין ונועם",
+        "students": [
+            {"name": "Neta Silam", "email": "neta.silam@campus.technion.ac.il"},
+            {"name": "Mayyan Galamidi", "email": "mgalamidi@campus.technion.ac.il"},
+            {"name": "Noam Shemesh", "email": "noam.shemesh@campus.technion.ac.il"},
+        ],
+    }
+    
 @app.get("/api/assignments/sample")
 async def get_sample_assignments():
     """
