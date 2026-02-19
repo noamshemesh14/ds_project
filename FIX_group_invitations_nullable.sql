@@ -18,3 +18,4 @@ ALTER COLUMN group_id DROP NOT NULL;
 -- Expected result: is_nullable = 'YES'
 
 
+
