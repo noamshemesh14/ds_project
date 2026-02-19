@@ -1788,6 +1788,21 @@
         const courses = [];
         let editingWeeklyConstraintId = null;
         const semesterScheduleItems = [];
+        // Maps course_name -> course_number so both views use the same key (and color)
+        let courseNameToNumber = {};
+        function refreshCourseNameToNumber() {
+            courseNameToNumber = {};
+            semesterScheduleItems.forEach(item => {
+                const num = item.course_number != null && item.course_number !== '' ? String(item.course_number).trim() : '';
+                const name = (item.course_name || '').trim();
+                if (num && name) courseNameToNumber[name] = num;
+            });
+            (weeklyPlanBlocks || []).filter(b => b.work_type === 'semester').forEach(b => {
+                const num = (b.course_number != null && b.course_number !== '') ? String(b.course_number).trim() : '';
+                const name = (b.course_name || '').trim();
+                if (num && name) courseNameToNumber[name] = num;
+            });
+        }
         let editingSemesterScheduleId = null;
 
         function getWeekStartDate() {
@@ -1853,18 +1868,24 @@
             updateScheduleDisplay();
         }
         
-        // Unique color per course (same for הרצאה and תרגול)
+        // Canonical key for a course (same in מערכת סמסטרית and מערכת שבועית)
+        function getCourseKey(item) {
+            if (!item) return '';
+            const name = (item.course_name || '').trim();
+            let key = (item.course_number != null && item.course_number !== '') ? String(item.course_number).trim() : '';
+            if (!key && courseNameToNumber[name]) key = courseNameToNumber[name];
+            if (!key) key = name;
+            return key;
+        }
+
+        // Unique color per course – same key ⇒ same color; many distinct hues
         function getCourseColor(courseKey) {
-            if (!courseKey) return '#6c757d';
-            const palette = [
-                '#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6',
-                '#1abc9c', '#e67e22', '#34495e', '#c0392b', '#2980b9',
-                '#27ae60', '#8e44ad'
-            ];
+            const key = (courseKey !== undefined && courseKey !== null) ? String(courseKey).trim() : '';
+            if (!key) return '#6c757d';
             let hash = 0;
-            const str = String(courseKey);
-            for (let i = 0; i < str.length; i++) hash = ((hash << 5) - hash) + str.charCodeAt(i);
-            return palette[Math.abs(hash) % palette.length];
+            for (let i = 0; i < key.length; i++) hash = ((hash << 5) - hash) + key.charCodeAt(i);
+            const h = Math.abs(hash) % 360;  // 360 hues
+            return `hsl(${h}, 62%, 48%)`;
         }
 
         // Rebuild semester table with rowSpan so blocks span all their hours (like weekly colored blocks)
@@ -1954,7 +1975,7 @@
                             const itemType = (semesterItem.type || 'lecture').toLowerCase();
                             badge.className = 'semester-item-badge ' + itemType;
 
-                            badge.style.background = getCourseColor(semesterItem.course_number || semesterItem.course_name || '');
+                            badge.style.background = getCourseColor(getCourseKey(semesterItem));
                             
                             // Set badge height to span all hours (like in weekly view)
                             const cellHeight = 80; // matches td height in CSS
@@ -2085,7 +2106,7 @@
                             const badge = document.createElement('span');
                             const itemType = (semesterItem.type || 'lecture').toLowerCase();
                             badge.className = `semester-item-badge ${itemType}`;  // Add type class for color
-                            badge.style.background = getCourseColor(semesterItem.course_number || semesterItem.course_name || '');
+                            badge.style.background = getCourseColor(getCourseKey(semesterItem));
                             badge.style.height = `${badgeHeight}px`;
                             badge.style.minHeight = `${badgeHeight}px`;
                             badge.style.zIndex = '10';
@@ -2259,7 +2280,7 @@
                                 const badge = document.createElement('span');
                                 const itemType = (planBlock.type || 'lecture').toLowerCase();
                                 badge.className = 'semester-item-badge ' + itemType;
-                                badge.style.background = getCourseColor(planBlock.course_number || planBlock.course_name || '');
+                                badge.style.background = getCourseColor(getCourseKey(planBlock));
                                 badge.style.height = badgeHeight + 'px';
                                 badge.style.minHeight = badgeHeight + 'px';
                                 badge.style.zIndex = '10';
@@ -2978,6 +2999,8 @@
                 weeklyPlanBlocks.push(...(data.blocks || []));
                 updateWeeklyScheduleDisplay();
                 alert('המערכת השבועית נוצרה בהצלחה!');
+                refreshCourseNameToNumber();
+                updateWeeklyScheduleDisplay();
             } catch (error) {
                 console.error('Error generating weekly plan:', error);
                 alert(error.message);
@@ -3000,6 +3023,8 @@
                     // #endregion
                     weeklyPlanBlocks.length = 0;
                     weeklyPlanBlocks.push(...(data.blocks || []));
+                    refreshCourseNameToNumber();
+                    updateWeeklyScheduleDisplay();
                     
                     // Debug: Log semester blocks
                     const semesterBlocks = weeklyPlanBlocks.filter(b => b.work_type === 'semester');
@@ -3178,7 +3203,10 @@
                     // #endregion
                     weeklyPlanBlocks.length = 0;
                     weeklyPlanBlocks.push(...(planData.blocks || []));
+                    refreshCourseNameToNumber();
+                    updateWeeklyScheduleDisplay();
                     // #region agent log
+
                     fetch('http://127.0.0.1:7242/ingest/d8f8b004-9648-44ca-a8ba-cf19194b68d6',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'schedule.html:2313',message:'weeklyPlanBlocks updated',data:{blocks_count:weeklyPlanBlocks.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
                     // #endregion
                 }
@@ -5061,6 +5089,7 @@
                     const data = await response.json();
                     semesterScheduleItems.length = 0;
                     semesterScheduleItems.push(...(data.items || []));
+                    refreshCourseNameToNumber();
                     updateScheduleDisplay();
                 } else if (response.status === 401) {
                     console.warn('Not authenticated, skipping semester schedule load');
