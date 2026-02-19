@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent – Run Task</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            min-height: 100vh;
+            color: #e8e8e8;
+            padding: 24px;
+        }
+        .top-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #eee;
+        }
+        .btn-login {
+            background: rgba(255,255,255,0.15);
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.3);
+            padding: 10px 20px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 500;
+            transition: background 0.2s, border-color 0.2s;
+        }
+        .btn-login:hover {
+            background: rgba(255,255,255,0.25);
+            border-color: rgba(255,255,255,0.5);
+        }
+        .panel {
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .panel h2 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #b8c5d6;
+        }
+        textarea {
+            width: 100%;
+            min-height: 120px;
+            padding: 14px;
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+            background: rgba(0,0,0,0.2);
+            color: #e8e8e8;
+            font-size: 1rem;
+            resize: vertical;
+        }
+        textarea::placeholder { color: rgba(255,255,255,0.4); }
+        .btn-run {
+            margin-top: 12px;
+            background: #4a7c59;
+            color: #fff;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .btn-run:hover { background: #5a9c69; }
+        .btn-run:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+        .response-box {
+            white-space: pre-wrap;
+            word-break: break-word;
+            padding: 14px;
+            background: rgba(0,0,0,0.25);
+            border-radius: 8px;
+            border-left: 4px solid #4a7c59;
+            min-height: 60px;
+        }
+        .response-box.empty { color: rgba(255,255,255,0.4); }
+        .steps-list { list-style: none; }
+        .step-item {
+            background: rgba(0,0,0,0.2);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            padding: 14px;
+            margin-bottom: 12px;
+        }
+        .step-item .module {
+            font-weight: 600;
+            color: #7eb8da;
+            margin-bottom: 8px;
+        }
+        .step-item .prompt {
+            font-size: 0.9em;
+            color: #aaa;
+            margin-bottom: 6px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .step-item .step-response {
+            font-size: 0.95em;
+            white-space: pre-wrap;
+            word-break: break-word;
+            margin-top: 6px;
+        }
+        .error-msg {
+            color: #e88;
+            padding: 10px;
+            background: rgba(200,80,80,0.15);
+            border-radius: 8px;
+            margin-top: 8px;
+        }
+        .loading { opacity: 0.7; pointer-events: none; }
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <h1>Agent – Run Task</h1>
+        <a href="/login" class="btn-login">התחברות – Go to site</a>
+    </div>
+
+    <div class="panel">
+        <h2>Prompt / Task</h2>
+        <textarea id="promptInput" placeholder="Enter your prompt or task (e.g. show my schedule, add course 104043, what are the prerequisites for algorithms?)"></textarea>
+        <button type="button" class="btn-run" id="runBtn">Run Agent</button>
+    </div>
+
+    <div class="panel">
+        <h2>Response</h2>
+        <div id="responseBox" class="response-box empty">—</div>
+        <div id="responseError" class="error-msg" style="display: none;"></div>
+    </div>
+
+    <div class="panel">
+        <h2>Steps trace</h2>
+        <ul id="stepsList" class="steps-list"></ul>
+    </div>
+
+    <script>
+        const promptInput = document.getElementById('promptInput');
+        const runBtn = document.getElementById('runBtn');
+        const responseBox = document.getElementById('responseBox');
+        const responseError = document.getElementById('responseError');
+        const stepsList = document.getElementById('stepsList');
+
+        function setLoading(loading) {
+            runBtn.disabled = loading;
+            document.body.classList.toggle('loading', loading);
+        }
+
+        function showError(msg) {
+            responseError.textContent = msg;
+            responseError.style.display = msg ? 'block' : 'none';
+        }
+
+        function renderSteps(steps) {
+            stepsList.innerHTML = '';
+            if (!steps || !steps.length) {
+                stepsList.innerHTML = '<li class="step-item"><span class="module">—</span> No steps.</li>';
+                return;
+            }
+            steps.forEach((step, i) => {
+                const li = document.createElement('li');
+                li.className = 'step-item';
+                const module = step.module || ('Step ' + (i + 1));
+                const promptStr = typeof step.prompt === 'object' ? JSON.stringify(step.prompt, null, 2) : (step.prompt || '—');
+                const resp = step.response;
+                const respStr = typeof resp === 'object' ? JSON.stringify(resp, null, 2) : (resp != null ? String(resp) : '—');
+                li.innerHTML = '<span class="module">' + escapeHtml(module) + '</span>' +
+                    '<div class="prompt">' + escapeHtml(promptStr) + '</div>' +
+                    '<div class="step-response">' + escapeHtml(respStr) + '</div>';
+                stepsList.appendChild(li);
+            });
+        }
+
+        function escapeHtml(s) {
+            const div = document.createElement('div');
+            div.textContent = s;
+            return div.innerHTML;
+        }
+
+        runBtn.addEventListener('click', async function () {
+            const prompt = (promptInput.value || '').trim();
+            if (!prompt) {
+                responseBox.textContent = 'Please enter a prompt.';
+                responseBox.classList.remove('empty');
+                showError('');
+                renderSteps([]);
+                return;
+            }
+
+            setLoading(true);
+            responseBox.textContent = 'Running…';
+            responseBox.classList.remove('empty');
+            showError('');
+            renderSteps([]);
+
+            try {
+                const res = await fetch('/api/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt: prompt })
+                });
+                const data = await res.json().catch(() => ({}));
+
+                if (!res.ok) {
+                    responseBox.textContent = data.detail || data.error || 'Request failed';
+                    responseBox.classList.remove('empty');
+                    showError('Status: ' + res.status);
+                    renderSteps(data.steps || []);
+                    return;
+                }
+
+                responseBox.textContent = data.response != null ? String(data.response) : '—';
+                responseBox.classList.toggle('empty', data.response == null && data.response !== '');
+                if (data.error) showError(data.error);
+                renderSteps(data.steps || []);
+            } catch (err) {
+                responseBox.textContent = 'Error: ' + (err.message || 'Network error');
+                responseBox.classList.remove('empty');
+                showError(err.message || '');
+                renderSteps([]);
+            } finally {
+                setLoading(false);
+            }
+        });
+    </script>
+</body>
+</html>
