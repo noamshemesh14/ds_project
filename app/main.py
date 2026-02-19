@@ -152,8 +152,8 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.get("/", response_class=HTMLResponse)
 async def main_page(request: Request):
-    """Main page - Academic Advisor"""
-    template = jinja_env.get_template("index.html")
+    """Opening page: minimal agent UI (prompt, Run Agent, response, steps) + link to login."""
+    template = jinja_env.get_template("agent_landing.html")
     return HTMLResponse(content=template.render())
 
 
