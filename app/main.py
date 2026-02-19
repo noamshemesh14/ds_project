@@ -2279,7 +2279,7 @@ Return only the JSON with personal_blocks array."""
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=temperature,
-                max_tokens=4000,
+                max_tokens=8000,
                 response_format={"type": "json_object"}
             )
             logging.info(f"✅ [LLM] API call successful")
@@ -11300,16 +11300,11 @@ async def get_group_members(
 # ==================== ASSIGNMENTS API ====================
 
 @app.get("/api/team_info")
-async def get_team_info(current_user: dict = Depends(get_current_user)):
+async def get_team_info():
     """
     Returns student details for the team (for presentation).
     Purpose: retrieve student names and emails.
     """
-    # Optional: require auth so only logged-in user can call
-    user_id = current_user.get("id") or current_user.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
     return {
         "group_batch_order_number": "3_6",
         "team_name": "נטע, מעין ונועם",
@@ -11319,7 +11314,43 @@ async def get_team_info(current_user: dict = Depends(get_current_user)):
             {"name": "Noam Shemesh", "email": "noam.shemesh@campus.technion.ac.il"},
         ],
     }
-    
+
+#TODO: Fix this get
+@app.get("/api/agent_info")
+async def get_agent_info():
+    """
+    Returns agent metadata: description, purpose, prompt template, and examples.
+    """
+    return {
+        "description": "Schedule and study-planning agent. Helps with courses, constraints, weekly plan, and group scheduling. Routes user requests to specialized executors (e.g. add block, move block, query schedule).",
+        "purpose": "Allow students to manage their semester/weekly schedule via natural language: add or move study blocks, ask about free slots, and coordinate with study groups.",
+        "prompt_template": {
+            "template": "You can ask in Hebrew or English. Examples: 'הוסף לי 2 שעות אישיות לקורס X ביום שלישי אחרי 14:00'; 'מתי יש לי חופשי ביום רביעי?'; 'הזז את התרגול של Y ליום חמישי 10:00'. The agent will route your request and run the right action (add block, move, resize, or answer a question)."
+        },
+        "prompt_examples": [
+            {
+                "prompt": "הוסף 2 שעות אישיות לקורס מבוא למדעי המחשב ביום שלישי אחרי 14:00",
+                "full_response": "נוספו 2 שעות אישיות לקורס 'מבוא למדעי המחשב' ביום שלישי מ-14:00. הן מופיעות במערכת השבועית שלך.",
+                "steps": [
+                    "User requested to add 2 personal hours for course",
+                    "Agent routed to add-block executor with course_name and day/time",
+                    "Executor created 2 consecutive 1-hour blocks in weekly plan",
+                    "Confirmation returned to user"
+                ]
+            },
+            {
+                "prompt": "מתי יש לי חופשי ביום רביעי?",
+                "full_response": "ביום רביעי יש לך חופשי בשעות: 8:00–10:00, 12:00–14:00, 16:00–18:00 (לפי האילוצים והבלוקים הנוכחיים).",
+                "steps": [
+                    "User asked for free slots on Wednesday",
+                    "Agent routed to query/slots executor",
+                    "Executor computed free slots from weekly plan and constraints",
+                    "List of free slots returned to user"
+                ]
+            }
+        ]
+    }
+
 @app.get("/api/assignments/sample")
 async def get_sample_assignments():
     """

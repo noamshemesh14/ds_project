@@ -2224,7 +2224,7 @@
                     const planBlock = weeklyPlanBlocks.find(b => {
                         if (b.day_of_week !== day) return false;
                         if (b.start_time && b.end_time) return isTimeInRange(time, b.start_time, b.end_time);
-                        return b.start_time === time;
+                        return normTime(b.start_time) === normTime(time);
                     });
                     if (planBlock) {
                         const slotIndex = timeSlots.indexOf(time);
@@ -2240,14 +2240,31 @@
                             const sh = (planBlock.start_time || '0:0').split(':').map(Number);
                             const eh = (planBlock.end_time || '0:0').split(':').map(Number);
                             numHours = Math.max(1, Math.ceil((eh[0] * 60 + (eh[1] || 0) - (sh[0] * 60 + (sh[1] || 0))) / 60));
+                            // Merge consecutive same-course blocks (backend may return 10-11, 11-12, 12-13 as separate blocks)
+                            while (slotIndex + numHours < timeSlots.length) {
+                                const nextTime = timeSlots[slotIndex + numHours];
+                                const nextBlock = weeklyPlanBlocks.find(b => {
+                                    if (b.day_of_week !== day || b.course_number !== planBlock.course_number || b.work_type !== planBlock.work_type) return false;
+                                    if (b.start_time && b.end_time) return isTimeInRange(nextTime, b.start_time, b.end_time);
+                                    return normTime(b.start_time) === normTime(nextTime);
+                                });
+                                if (!nextBlock) break;
+                                if (nextBlock.start_time && nextBlock.end_time) {
+                                    const nsh = (nextBlock.start_time || '0:0').split(':').map(Number);
+                                    const neh = (nextBlock.end_time || '0:0').split(':').map(Number);
+                                    numHours += Math.max(1, Math.ceil((neh[0] * 60 + (neh[1] || 0) - (nsh[0] * 60 + (nsh[1] || 0))) / 60));
+                                } else {
+                                    numHours += 1;
+                                }
+                            }
                         } else {
                             const prevTime = slotIndex > 0 ? timeSlots[slotIndex - 1] : null;
-                            const prevBlock = prevTime && weeklyPlanBlocks.find(b => b.day_of_week === day && b.start_time === prevTime && b.course_number === planBlock.course_number && b.work_type === planBlock.work_type);
+                            const prevBlock = prevTime && weeklyPlanBlocks.find(b => b.day_of_week === day && normTime(b.start_time) === normTime(prevTime) && b.course_number === planBlock.course_number && b.work_type === planBlock.work_type);
                             startsHere = !prevBlock;
                             if (startsHere) {
                                 for (let h = 1; slotIndex + h < timeSlots.length; h++) {
                                     const nt = timeSlots[slotIndex + h];
-                                    if (weeklyPlanBlocks.find(b => b.day_of_week === day && b.start_time === nt && b.course_number === planBlock.course_number && b.work_type === planBlock.work_type)) numHours++;
+                                    if (weeklyPlanBlocks.find(b => b.day_of_week === day && normTime(b.start_time) === normTime(nt) && b.course_number === planBlock.course_number && b.work_type === planBlock.work_type)) numHours++;
                                     else break;
                                 }
                             }
@@ -2328,6 +2345,15 @@
             const endMinutes = endHour * 60 + endMin;
             
             return timeMinutes >= startMinutes && timeMinutes < endMinutes;
+        }
+
+        function normTime(t) {
+            if (!t) return '';
+            const s = String(t).trim();
+            const parts = s.split(':');
+            const h = parseInt(parts[0], 10);
+            const m = parts[1] ? parseInt(parts[1], 10) : 0;
+            return (isNaN(h) ? '00' : String(h).padStart(2, '0')) + ':' + (isNaN(m) ? '00' : String(m).padStart(2, '0'));
         }
 
         function getConstraintMiddleTime(constraint) {
