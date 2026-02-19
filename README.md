@@ -38,6 +38,7 @@ Or use the provided scripts:
 - **User Authentication**: Login with username/password to get access token
 - **Course Management**: Add courses from catalog to your course list
 - **Schedule Retrieval**: View weekly schedule for any date
+- **Courses Display**: View all courses you're taking this semester
 - **Notifications**: View and clear unread notifications
 - **Block Management**: Move study blocks (personal or group)
 - **Group Management**: Create study groups and manage invitations
@@ -88,7 +89,7 @@ curl -X POST "http://127.0.0.1:8000/api/execute" -H "Authorization: Bearer %TOKE
 
 **Get schedule for specific week:**
 ```cmd
-curl -X POST "http://127.0.0.1:8000/api/execute" -H "Authorization: Bearer %TOKEN%" -H "Content-Type: application/json" -d "{\"prompt\":\"show me my schedule for the week starting 2026/02/08\"}"
+curl -X POST "http://127.0.0.1:8000/api/execute" -H "Content-Type: application/json" -d "{\"prompt\":\"show me my schedule for the week starting 2026/02/08\"}"
 ```
 
 **Get current week schedule:**
@@ -101,11 +102,28 @@ curl -X POST "http://127.0.0.1:8000/api/execute" -H "Authorization: Bearer %TOKE
 curl -X POST "http://127.0.0.1:8000/api/execute" -H "Authorization: Bearer %TOKEN%" -H "Content-Type: application/json" -d "{\"prompt\":\"schedule for 2026-02-08\"}"
 ```
 
-### 4. View Notifications
+### 4. View Courses
+
+**Get all courses for this semester:**
+```cmd
+curl -X POST "http://127.0.0.1:8000/api/execute" -H "Content-Type: application/json" -d "{\"prompt\":\"show me my courses\"}"
+```
+
+**Alternative prompts:**
+```cmd
+curl -X POST "http://127.0.0.1:8000/api/execute" -H "Authorization: Bearer %TOKEN%" -H "Content-Type: application/json" -d "{\"prompt\":\"what courses am I taking\"}"
+```
+
+**Hebrew prompts:**
+```cmd
+curl -X POST "http://127.0.0.1:8000/api/execute" -H "Content-Type: application/json" -d "{\"prompt\":\"מה הקורסים שלי\"}"
+```
+
+### 5. View Notifications
 
 **Get all unread notifications:**
 ```cmd
-curl -X POST "http://127.0.0.1:8000/api/execute" -H "Authorization: Bearer %TOKEN%" -H "Content-Type: application/json" -d "{\"prompt\":\"show notifications\"}"
+curl -X POST "http://127.0.0.1:8000/api/execute" -H "Content-Type: application/json" -d "{\"prompt\":\"show notifications\"}"
 ```
 
 **Alternative prompts:**
@@ -113,7 +131,7 @@ curl -X POST "http://127.0.0.1:8000/api/execute" -H "Authorization: Bearer %TOKE
 curl -X POST "http://127.0.0.1:8000/api/execute" -H "Authorization: Bearer %TOKEN%" -H "Content-Type: application/json" -d "{\"prompt\":\"what are my notifications\"}"
 ```
 
-### 5. Clear Notifications
+### 6. Clear Notifications
 
 **Mark all notifications as read:**
 ```cmd
@@ -125,7 +143,7 @@ curl -X POST "http://127.0.0.1:8000/api/execute" -H "Authorization: Bearer %TOKE
 curl -X POST "http://127.0.0.1:8000/api/execute" -H "Authorization: Bearer %TOKEN%" -H "Content-Type: application/json" -d "{\"prompt\":\"mark all notifications as read\"}"
 ```
 
-### 6. Move Study Block
+### 7. Move Study Block
 
 **Move personal block:**
 ```cmd
@@ -144,13 +162,13 @@ curl -X POST "http://127.0.0.1:8000/api/execute" -H "Authorization: Bearer %TOKE
 
 **Note:** Group blocks require approval from all group members. The system will create a change request and notify all members.
 
-### 7. Create Study Group
+### 8. Create Study Group
 
 ```cmd
 curl -X POST "http://127.0.0.1:8000/api/execute" -H "Authorization: Bearer %TOKEN%" -H "Content-Type: application/json" -d "{\"prompt\":\"create study group for course 104043 named Algorithms Study Group and invite user1@example.com user2@example.com\"}"
 ```
 
-### 8. Approve/Reject Requests
+### 9. Approve/Reject Requests
 
 **Approve a request:**
 ```cmd
@@ -161,41 +179,6 @@ curl -X POST "http://127.0.0.1:8000/api/execute" -H "Authorization: Bearer %TOKE
 ```cmd
 curl -X POST "http://127.0.0.1:8000/api/execute" -H "Authorization: Bearer %TOKEN%" -H "Content-Type: application/json" -d "{\"prompt\":\"reject request req-123-456\"}"
 ```
-
-### 9. Chat with TechnionAI (RAG Chat)
-
-**Ask informational questions about Technion:**
-
-**PowerShell (Recommended - works best):**
-```powershell
-$body = @{prompt="What are the prerequisites for the algorithms course?"} | ConvertTo-Json
-Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/execute" -Method POST -ContentType "application/json" -Body $body
-```
-
-**PowerShell with curl.exe:**
-```powershell
-$json = '{"prompt":"What are the prerequisites for the algorithms course?"}'
-curl.exe -X POST http://127.0.0.1:8000/api/execute -H "Content-Type: application/json" -d $json
-```
-
-**Windows CMD:**
-```cmd
-curl -X POST "http://127.0.0.1:8000/api/execute" -H "Content-Type: application/json" -d "{\"prompt\":\"What are the prerequisites for the algorithms course?\"}"
-```
-
-**More examples:**
-```cmd
-# Ask about academic procedures
-curl -X POST "http://127.0.0.1:8000/api/execute" -H "Content-Type: application/json" -d "{\"prompt\":\"How can I cancel a course?\"}"
-
-# Ask about course information
-curl -X POST "http://127.0.0.1:8000/api/execute" -H "Content-Type: application/json" -d "{\"prompt\":\"What is the difference between course 104043 and course 104044?\"}"
-
-# Ask about regulations
-curl -X POST "http://127.0.0.1:8000/api/execute" -H "Content-Type: application/json" -d "{\"prompt\":\"What are the rules for exam retakes (moed bet)?\"}"
-```
-
-**Note:** All chat queries go through the Supervisor, which intelligently routes informational questions to the RAG Chat executor. The system uses RAG (Retrieval-Augmented Generation) to answer questions based on official Technion documents and academic information.
 
 ## Response Format
 

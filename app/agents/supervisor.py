@@ -17,6 +17,7 @@ from app.agents.executors.block_mover import BlockMover
 from app.agents.executors.block_resizer import BlockResizer
 from app.agents.executors.block_creator import BlockCreator
 from app.agents.executors.constraint_manager import ConstraintManager
+from app.agents.executors.courses_retriever import CoursesRetriever
 from app.agents.executors.rag_chat import RAGChatExecutor
 from app.agents.llm_client import LLMClient
 
@@ -58,6 +59,7 @@ class Supervisor:
             "block_resizer": BlockResizer(),
             "block_creator": BlockCreator(),
             "constraint_manager": ConstraintManager(),
+            "courses_retriever": CoursesRetriever(),
             "rag_chat": RAGChatExecutor(),
         }
         self.module_name = "supervisor"

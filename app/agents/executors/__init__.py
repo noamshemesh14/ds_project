@@ -9,6 +9,7 @@ from .block_mover import BlockMover
 from .block_resizer import BlockResizer
 from .block_creator import BlockCreator
 from .constraint_manager import ConstraintManager
+from .courses_retriever import CoursesRetriever
 
 __all__ = [
     "CourseManager",
@@ -22,4 +23,5 @@ __all__ = [
     "BlockResizer",
     "BlockCreator",
     "ConstraintManager",
+    "CoursesRetriever",
 ]
