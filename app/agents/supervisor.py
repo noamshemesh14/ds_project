@@ -194,15 +194,14 @@ class Supervisor:
                 
                 # Extract response - RAG executor uses "response" key, others use "message"
                 response_text = result.get("response") or result.get("message", "Task completed successfully")
-                
-                # For chat (rag_chat), truncate response to ensure steps appear in PowerShell table
-                # This matches the format of other agents where response is short enough to show steps
-                # Notifications response is ~31 chars, so truncate chat to ~50 chars to show steps
-                if executor_name == "rag_chat" and len(response_text) > 50:
-                    response_text = response_text[:50] + "..."
-                
+
+                # Normalize status to "ok" for success (API spec)
+                status = result.get("status", "ok")
+                if status in ("ok", "success"):
+                    status = "ok"
+
                 return {
-                    "status": result.get("status", "ok"),
+                    "status": status,
                     "error": result.get("error"),
                     "response": response_text,
                     "steps": steps

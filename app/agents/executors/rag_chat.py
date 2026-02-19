@@ -323,7 +323,8 @@ class RAGChatExecutor:
                 "response": {
                     "chunks_retrieved": len(context_chunks),
                     "scores": [c.get("score", 0) for c in context_chunks],
-                    "sources": list(set([c.get("source_type", "unknown") for c in context_chunks]))
+                    "sources": list(set([c.get("source_type", "unknown") for c in context_chunks])),
+                    "chunks": [{"source_type": c.get("source_type", "unknown"), "text": c.get("text", ""), "score": c.get("score", 0)} for c in context_chunks]
                 }
             }
             steps.append(retrieval_step)
@@ -387,7 +388,7 @@ class RAGChatExecutor:
 Your role is to help students with academic information, regulations, procedures, courses, and academic guidance.
 
 LANGUAGE RULE:
-Always respond in the SAME LANGUAGE as the user's question.
+Always respond in English unless the user explicitly asks for a different language in their question (e.g. "answer in Hebrew", "בעברית", "in Hebrew"). If they do not specify a language, use English.
 
 KNOWLEDGE RULE (RAG ONLY):
 You must base your answer strictly and exclusively on the provided Retrieved Context from official Technion documents.
@@ -427,7 +428,7 @@ User context:
 
 User question: {query}
 
-IMPORTANT: Answer in the SAME LANGUAGE as the user's question. If the question is in Hebrew, answer in Hebrew. If in English, answer in English.
+IMPORTANT: Answer in English unless the user explicitly asked for another language (e.g. Hebrew) in their question.
 
 Please answer the user's question based ONLY on the Technion documents context provided. If the context doesn't contain sufficient information, say so honestly and suggest what they might ask instead or where to find the information."""
 
@@ -451,7 +452,7 @@ Please answer the user's question based ONLY on the Technion documents context p
                 )
             )
 
-            llm_response_text = response.choices[0].message.content
+            llm_response_text = response.choices[0].message.content or ""
 
             steps.append({
                 "module": "rag_answer_generator",
@@ -459,9 +460,12 @@ Please answer the user's question based ONLY on the Technion documents context p
                     "query": query,
                     "has_context": bool(context_text),
                     "context_length": len(context_text),
-                    "chunks_used": len(context_chunks)
+                    "chunks_used": len(context_chunks),
+                    "system_prompt": system_prompt,
+                    "user_prompt": user_prompt
                 },
                 "response": {
+                    "full_response": llm_response_text,
                     "response_length": len(llm_response_text),
                     "model": self.llm_client.model
                 }
