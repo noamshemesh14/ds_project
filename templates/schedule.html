@@ -3000,7 +3000,7 @@
                 updateWeeklyScheduleDisplay();
                 alert('המערכת השבועית נוצרה בהצלחה!');
                 refreshCourseNameToNumber();
-                updateWeeklyScheduleDisplay();
+                updateScheduleDisplay();                
             } catch (error) {
                 console.error('Error generating weekly plan:', error);
                 alert(error.message);
@@ -3025,6 +3025,7 @@
                     weeklyPlanBlocks.push(...(data.blocks || []));
                     refreshCourseNameToNumber();
                     updateWeeklyScheduleDisplay();
+                    updateScheduleDisplay();
                     
                     // Debug: Log semester blocks
                     const semesterBlocks = weeklyPlanBlocks.filter(b => b.work_type === 'semester');
@@ -3205,6 +3206,7 @@
                     weeklyPlanBlocks.push(...(planData.blocks || []));
                     refreshCourseNameToNumber();
                     updateWeeklyScheduleDisplay();
+                    updateScheduleDisplay();
                     // #region agent log
 
                     fetch('http://127.0.0.1:7242/ingest/d8f8b004-9648-44ca-a8ba-cf19194b68d6',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'schedule.html:2313',message:'weeklyPlanBlocks updated',data:{blocks_count:weeklyPlanBlocks.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
