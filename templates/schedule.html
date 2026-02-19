@@ -280,6 +280,10 @@
         .has-course.semester-work {
             background-color: rgba(39, 174, 96, 0.2) !important;  /* Light green for semester items */
         }
+
+        #weekly-schedule-body .schedule-cell.has-course {
+            background: white !important;
+        }
         
         /* Semester schedule blocks - same look as weekly (colored blocks spanning hours) */
         .schedule-cell.has-semester-item {
@@ -1849,6 +1853,20 @@
             updateScheduleDisplay();
         }
         
+        // Unique color per course (same for הרצאה and תרגול)
+        function getCourseColor(courseKey) {
+            if (!courseKey) return '#6c757d';
+            const palette = [
+                '#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6',
+                '#1abc9c', '#e67e22', '#34495e', '#c0392b', '#2980b9',
+                '#27ae60', '#8e44ad'
+            ];
+            let hash = 0;
+            const str = String(courseKey);
+            for (let i = 0; i < str.length; i++) hash = ((hash << 5) - hash) + str.charCodeAt(i);
+            return palette[Math.abs(hash) % palette.length];
+        }
+
         // Rebuild semester table with rowSpan so blocks span all their hours (like weekly colored blocks)
         function rebuildSemesterTableBody() {
             const tbody = document.getElementById('schedule-body');
@@ -1935,6 +1953,8 @@
                             const badge = document.createElement('span');
                             const itemType = (semesterItem.type || 'lecture').toLowerCase();
                             badge.className = 'semester-item-badge ' + itemType;
+
+                            badge.style.background = getCourseColor(semesterItem.course_number || semesterItem.course_name || '');
                             
                             // Set badge height to span all hours (like in weekly view)
                             const cellHeight = 80; // matches td height in CSS
@@ -2065,6 +2085,7 @@
                             const badge = document.createElement('span');
                             const itemType = (semesterItem.type || 'lecture').toLowerCase();
                             badge.className = `semester-item-badge ${itemType}`;  // Add type class for color
+                            badge.style.background = getCourseColor(semesterItem.course_number || semesterItem.course_name || '');
                             badge.style.height = `${badgeHeight}px`;
                             badge.style.minHeight = `${badgeHeight}px`;
                             badge.style.zIndex = '10';
@@ -2238,6 +2259,7 @@
                                 const badge = document.createElement('span');
                                 const itemType = (planBlock.type || 'lecture').toLowerCase();
                                 badge.className = 'semester-item-badge ' + itemType;
+                                badge.style.background = getCourseColor(planBlock.course_number || planBlock.course_name || '');
                                 badge.style.height = badgeHeight + 'px';
                                 badge.style.minHeight = badgeHeight + 'px';
                                 badge.style.zIndex = '10';
