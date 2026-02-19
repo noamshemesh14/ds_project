@@ -3,14 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <title>Agent – Run Task</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
-            color: #e8e8e8;
+            color: #333;
             padding: 24px;
         }
         .top-bar {
@@ -24,90 +25,117 @@
         h1 {
             font-size: 1.5rem;
             font-weight: 600;
-            color: #eee;
+            color: #333;
         }
-        .btn-login {
-            background: rgba(255,255,255,0.15);
-            color: #fff;
-            border: 1px solid rgba(255,255,255,0.3);
-            padding: 10px 20px;
-            border-radius: 8px;
+        .go-to-site-banner {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            padding: 20px 24px;
+            margin-bottom: 24px;
+            text-align: center;
+            border: 2px solid #667eea;
+        }
+        .go-to-site-banner p {
+            color: #666;
+            font-size: 1rem;
+            margin-bottom: 14px;
+        }
+        .btn-goto-site {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 16px 36px;
+            border-radius: 25px;
             text-decoration: none;
-            font-weight: 500;
-            transition: background 0.2s, border-color 0.2s;
+            font-weight: bold;
+            font-size: 1.2rem;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
         }
-        .btn-login:hover {
-            background: rgba(255,255,255,0.25);
-            border-color: rgba(255,255,255,0.5);
+        .btn-goto-site:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
         }
+        .btn-goto-site { cursor: pointer; position: relative; z-index: 1; border: none; font: inherit; }
+        .goto-site-form { display: inline-block; }
         .panel {
-            background: rgba(255,255,255,0.06);
-            border: 1px solid rgba(255,255,255,0.1);
-            border-radius: 12px;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
             padding: 20px;
             margin-bottom: 20px;
         }
         .panel h2 {
-            font-size: 1rem;
+            font-size: 1.1rem;
             font-weight: 600;
             margin-bottom: 12px;
-            color: #b8c5d6;
+            color: #667eea;
+            padding-bottom: 8px;
+            border-bottom: 3px solid #667eea;
         }
         textarea {
             width: 100%;
             min-height: 120px;
             padding: 14px;
-            border: 1px solid rgba(255,255,255,0.2);
-            border-radius: 8px;
-            background: rgba(0,0,0,0.2);
-            color: #e8e8e8;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            background: #fafafa;
+            color: #333;
             font-size: 1rem;
             resize: vertical;
         }
-        textarea::placeholder { color: rgba(255,255,255,0.4); }
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        textarea::placeholder { color: #999; }
         .btn-run {
             margin-top: 12px;
-            background: #4a7c59;
-            color: #fff;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
             border: none;
             padding: 12px 24px;
-            border-radius: 8px;
+            border-radius: 25px;
             font-size: 1rem;
-            font-weight: 600;
+            font-weight: bold;
             cursor: pointer;
-            transition: background 0.2s;
+            transition: transform 0.2s;
         }
-        .btn-run:hover { background: #5a9c69; }
+        .btn-run:hover { transform: translateY(-2px); }
         .btn-run:disabled {
-            background: #555;
+            opacity: 0.6;
             cursor: not-allowed;
+            transform: none;
         }
         .response-box {
             white-space: pre-wrap;
             word-break: break-word;
             padding: 14px;
-            background: rgba(0,0,0,0.25);
-            border-radius: 8px;
-            border-left: 4px solid #4a7c59;
+            background: #f8f9ff;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
             min-height: 60px;
+            color: #333;
         }
-        .response-box.empty { color: rgba(255,255,255,0.4); }
+        .response-box.empty { color: #999; }
         .steps-list { list-style: none; }
         .step-item {
-            background: rgba(0,0,0,0.2);
-            border: 1px solid rgba(255,255,255,0.1);
-            border-radius: 8px;
+            background: #f8f9ff;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
             padding: 14px;
             margin-bottom: 12px;
+            border-right: 4px solid #667eea;
         }
         .step-item .module {
             font-weight: 600;
-            color: #7eb8da;
+            color: #667eea;
             margin-bottom: 8px;
         }
         .step-item .prompt {
             font-size: 0.9em;
-            color: #aaa;
+            color: #666;
             margin-bottom: 6px;
             white-space: pre-wrap;
             word-break: break-word;
@@ -117,11 +145,12 @@
             white-space: pre-wrap;
             word-break: break-word;
             margin-top: 6px;
+            color: #333;
         }
         .error-msg {
-            color: #e88;
+            color: #c00;
             padding: 10px;
-            background: rgba(200,80,80,0.15);
+            background: #ffebee;
             border-radius: 8px;
             margin-top: 8px;
         }
@@ -131,7 +160,13 @@
 <body>
     <div class="top-bar">
         <h1>Agent – Run Task</h1>
-        <a href="/login" class="btn-login">התחברות – Go to site</a>
+    </div>
+
+    <div class="go-to-site-banner">
+        <p>To use the full app (schedule, profile, courses), sign in or register:</p>
+        <form class="goto-site-form" method="get" action="login">
+            <button type="submit" class="btn-goto-site">Go to the site</button>
+        </form>
     </div>
 
     <div class="panel">

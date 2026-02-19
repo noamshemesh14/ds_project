@@ -173,6 +173,25 @@
         .loading.show {
             display: block;
         }
+        
+        .back-to-landing {
+            text-align: center;
+            margin-top: 24px;
+            padding-top: 20px;
+            border-top: 1px solid #e0e0e0;
+        }
+        
+        .back-to-landing a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+        
+        .back-to-landing a:hover {
+            color: #764ba2;
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
@@ -221,6 +240,10 @@
             <button type="submit" class="submit-btn" id="signupBtn">הירשם</button>
             <div class="loading" id="signupLoading">נרשם...</div>
         </form>
+        
+        <div class="back-to-landing">
+            <a href="/">חזרה לדף הסוכן / Back to agent page</a>
+        </div>
     </div>
     
     <script>
@@ -429,9 +452,9 @@
             }
         }
         
-        // Check if already logged in
+        // Check if already logged in - redirect to agent landing (/) first, not schedule
         if (localStorage.getItem('auth_token')) {
-            window.location.href = '/schedule';
+            window.location.href = '/';
         }
     </script>
 </body>
