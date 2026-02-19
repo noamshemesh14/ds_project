@@ -3515,19 +3515,7 @@ async def get_semester_schedule_items(
         client = supabase_admin if supabase_admin else supabase
         
         response = client.table("semester_schedule_items").select("*").eq("user_id", user_id).execute()
-
-        # Build course_name -> course_number map (same logic as weekly plan) so semester and weekly use same key
-        course_name_to_number = {}
-        try:
-            courses_res = client.table("courses").select("course_number, course_name").eq("user_id", user_id).execute()
-            for c in (courses_res.data or []):
-                name = (c.get("course_name") or "").strip()
-                if name:
-                    cn = c.get("course_number")
-                    course_name_to_number[name] = str(cn).strip() if cn not in (None, "") else ""
-        except Exception as course_err:
-            logging.warning(f"Could not load courses for course_number enrichment: {course_err}")
-
+        
         items = []
         for item in response.data:
             # Parse days from JSON string if needed
@@ -3536,19 +3524,24 @@ async def get_semester_schedule_items(
                 try:
                     import json
                     days = json.loads(days)
-                except Exception:
+                except:
                     days = []
-
-            # Same key as weekly: normalized course_name lookup
-            course_name = (item.get("course_name") or "").strip()
-            course_number = course_name_to_number.get(course_name, "")
-            if not isinstance(course_number, str):
-                course_number = str(course_number).strip() if course_number not in (None, "") else ""
-
+            
+            # Get course_number for this course_name to enrich the response
+            course_number = ""
+            try:
+                courses_res = client.table("courses").select("course_number, course_name").eq("user_id", user_id).execute()
+                for c in (courses_res.data or []):
+                    if (c.get("course_name") or "").strip() == (item.get("course_name") or "").strip():
+                        course_number = c.get("course_number") or ""
+                        break
+            except Exception as course_err:
+                logging.warning(f"Could not load course_number for semester item: {course_err}")
+            
             items.append({
                 "id": item.get("id"),
                 "course_name": item.get("course_name"),
-                "course_number": course_number,
+                "course_number": course_number,  # Add course_number for consistency
                 "type": item.get("type"),
                 "days": days,
                 "start_time": item.get("start_time"),
@@ -3557,6 +3550,8 @@ async def get_semester_schedule_items(
                 "created_at": item.get("created_at"),
                 "updated_at": item.get("updated_at")
             })
+        
+        return {"items": items}
     except Exception as e:
         logging.error(f"Error fetching semester schedule items: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching semester schedule items: {str(e)}")
