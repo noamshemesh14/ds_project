@@ -53,9 +53,23 @@ class NotificationRetriever:
                     "created_at": notif.get("created_at")
                 })
             
+            # Build detailed message
+            from datetime import datetime
+            detailed_message = f"Found {len(notifications)} unread notification(s):\n\n"
+            for idx, notif in enumerate(formatted_notifications, 1):
+                detailed_message += f"{idx}. {notif.get('title', 'Notification')}\n"
+                detailed_message += f"   {notif.get('message', '')}\n"
+                if notif.get('created_at'):
+                    try:
+                        created_date = datetime.fromisoformat(notif['created_at'].replace('Z', '+00:00'))
+                        detailed_message += f"   ({created_date.strftime('%Y-%m-%d %H:%M')})\n"
+                    except:
+                        detailed_message += f"   ({notif['created_at']})\n"
+                detailed_message += "\n"
+            
             return {
                 "status": "success",
-                "message": f"Found {len(notifications)} unread notification(s)",
+                "message": detailed_message,
                 "notifications": formatted_notifications,
                 "count": len(notifications)
             }

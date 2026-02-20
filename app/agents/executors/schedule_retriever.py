@@ -319,7 +319,7 @@ class ScheduleRetriever:
             
             return {
                 "status": "success",
-                "message": f"Weekly schedule for week starting {week_start_str}",
+                "message": schedule_display,
                 "week_start": week_start_str,
                 "schedule_display": schedule_display,
                 "blocks": clean_blocks,

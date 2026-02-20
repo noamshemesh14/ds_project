@@ -53,9 +53,20 @@ class CoursesRetriever:
                     "credit_points": credit_points
                 })
             
+            # Build detailed message
+            detailed_message = f"Found {len(courses)} course(s)"
+            if total_credits > 0:
+                detailed_message += f" ({total_credits} credit points total)"
+            detailed_message += ":\n\n"
+            for idx, course in enumerate(formatted_courses, 1):
+                detailed_message += f"{idx}. {course.get('course_number', '')} - {course.get('course_name', '')}\n"
+                if course.get('credit_points'):
+                    detailed_message += f"   ({course.get('credit_points')} credit points)\n"
+                detailed_message += "\n"
+            
             return {
                 "status": "success",
-                "message": f"Found {len(courses)} course(s) ({total_credits} credit points total)",
+                "message": detailed_message,
                 "courses": formatted_courses,
                 "count": len(courses),
                 "total_credit_points": total_credits
