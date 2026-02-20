@@ -1429,15 +1429,6 @@
                         <input type="checkbox" id="constraintAllDay">
                     </div>
                 </div>
-                <div class="form-group inline">
-                    <div class="checkbox-row">
-                        <div class="checkbox-label">
-                            <span>אילוץ קשיח</span>
-                            <small>אילוץ רך מאפשר לאחר או לסיים מוקדם אם אין זמן פנוי</small>
-                        </div>
-                        <input type="checkbox" id="constraintIsHard" checked>
-                    </div>
-                </div>
                 <div class="form-actions">
                     <button type="submit" class="btn btn-primary">שמור</button>
                     <button type="button" class="btn btn-secondary" onclick="closeConstraintModal()">ביטול</button>
@@ -1560,15 +1551,6 @@
                             <small>מסמן את כל היום כלא זמין (00:00–23:59)</small>
                         </div>
                         <input type="checkbox" id="weeklyConstraintAllDay">
-                    </div>
-                </div>
-                <div class="form-group inline">
-                    <div class="checkbox-row">
-                        <div class="checkbox-label">
-                            <span>אילוץ קשיח</span>
-                            <small>אילוץ רך מאפשר לאחר או לסיים מוקדם אם אין זמן פנוי</small>
-                        </div>
-                        <input type="checkbox" id="weeklyConstraintIsHard" checked>
                     </div>
                 </div>
                 <div style="display: flex; gap: 1rem; margin-top: 1rem;">
@@ -2429,7 +2411,6 @@
                     document.getElementById('constraintEndTime').value = constraint.end_time || '';
                     const isAllDay = constraint.start_time === '00:00' && (constraint.end_time === '23:59' || constraint.end_time === '24:00');
                     document.getElementById('constraintAllDay').checked = isAllDay;
-                    document.getElementById('constraintIsHard').checked = constraint.is_hard !== false;
                     toggleAllDayConstraintInputs();
                 }
             } else {
@@ -2447,7 +2428,6 @@
                     document.getElementById('constraintEndTime').value = `${endHour.toString().padStart(2, '0')}:00`;
                 }
                 document.getElementById('constraintAllDay').checked = false;
-                document.getElementById('constraintIsHard').checked = true;
                 toggleAllDayConstraintInputs();
             }
             
@@ -2503,7 +2483,7 @@
                 days: selectedDays,
                 start_time: isAllDay ? '00:00' : document.getElementById('constraintStartTime').value,
                 end_time: isAllDay ? '23:59' : document.getElementById('constraintEndTime').value,
-                is_hard: document.getElementById('constraintIsHard').checked
+                is_hard: true
             };
             
             if (!constraintData.title) {
@@ -2796,7 +2776,6 @@
                     document.getElementById('weeklyConstraintEndTime').value = constraint.end_time || '';
                     const isAllDay = constraint.start_time === '00:00' && (constraint.end_time === '23:59' || constraint.end_time === '24:00');
                     document.getElementById('weeklyConstraintAllDay').checked = isAllDay;
-                    document.getElementById('weeklyConstraintIsHard').checked = constraint.is_hard !== false;
                     toggleAllDayWeeklyConstraintInputs();
                 }
             }
@@ -2812,7 +2791,6 @@
             }
             if (!constraintId) {
                 document.getElementById('weeklyConstraintAllDay').checked = false;
-                document.getElementById('weeklyConstraintIsHard').checked = true;
                 toggleAllDayWeeklyConstraintInputs();
             }
             document.getElementById('weeklyConstraintModal').classList.add('active');
@@ -2865,7 +2843,7 @@
                 start_time: isAllDay ? '00:00' : document.getElementById('weeklyConstraintStartTime').value,
                 end_time: isAllDay ? '23:59' : document.getElementById('weeklyConstraintEndTime').value,
                 week_start: weekStart,
-                is_hard: document.getElementById('weeklyConstraintIsHard').checked
+                is_hard: true
             };
 
             if (!constraintData.title) {

@@ -3432,7 +3432,7 @@ async def create_weekly_constraint(
             "start_time": constraint_data.start_time,
             "end_time": constraint_data.end_time,
             "week_start": constraint_data.week_start,
-            "is_hard": constraint_data.is_hard
+            "is_hard": True
         }
         response = client.table("weekly_constraints").insert(constraint_dict).execute()
         if response.data:
@@ -3488,7 +3488,7 @@ async def update_weekly_constraint(
             "start_time": constraint_data.start_time,
             "end_time": constraint_data.end_time,
             "week_start": constraint_data.week_start,
-            "is_hard": constraint_data.is_hard
+            "is_hard": True
         }
         response = client.table("weekly_constraints").update(update_data).eq("id", constraint_id).execute()
         if response.data:

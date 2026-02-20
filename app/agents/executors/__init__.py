@@ -1,4 +1,3 @@
-from .course_manager import CourseManager
 from .schedule_retriever import ScheduleRetriever
 from .group_manager import GroupManager
 from .notification_retriever import NotificationRetriever
@@ -12,7 +11,6 @@ from .constraint_manager import ConstraintManager
 from .courses_retriever import CoursesRetriever
 
 __all__ = [
-    "CourseManager",
     "ScheduleRetriever",
     "GroupManager",
     "NotificationRetriever",

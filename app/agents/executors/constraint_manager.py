@@ -100,7 +100,7 @@ class ConstraintManager:
             is_permanent: True for permanent constraint, False for one-time (default: False if not specified)
             week_start: Week start date (YYYY-MM-DD, Sunday) for one-time constraints
             date: Specific date (YYYY-MM-DD) - if provided, will be converted to week_start (Sunday of that week)
-            is_hard: True for hard constraint, False for soft (default: True)
+            is_hard: Always True - all constraints are hard constraints
             user_prompt: User's natural language prompt (for extracting info if not provided)
         """
         try:
@@ -303,7 +303,7 @@ class ConstraintManager:
                     "days": days_str,
                     "start_time": start_time,
                     "end_time": end_time,
-                    "is_hard": is_hard
+                    "is_hard": True
                 }
                 
                 response = client.table("constraints").insert(constraint_dict).execute()
@@ -329,7 +329,7 @@ class ConstraintManager:
                     "start_time": start_time,
                     "end_time": end_time,
                     "week_start": week_start,
-                    "is_hard": is_hard
+                    "is_hard": True
                 }
                 
                 response = client.table("weekly_constraints").insert(constraint_dict).execute()

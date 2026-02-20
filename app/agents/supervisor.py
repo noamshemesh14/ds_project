@@ -6,7 +6,6 @@ import logging
 import re
 from typing import Dict, Any, List, Optional
 from fastapi import HTTPException
-from app.agents.executors.course_manager import CourseManager
 from app.agents.executors.schedule_retriever import ScheduleRetriever
 from app.agents.executors.group_manager import GroupManager
 from app.agents.executors.notification_retriever import NotificationRetriever
@@ -48,7 +47,6 @@ def _write_debug_log(session_id, run_id, hypothesis_id, location, message, data)
 class Supervisor:
     def __init__(self):
         self.executors = {
-            "course_manager": CourseManager(),
             "schedule_retriever": ScheduleRetriever(),
             "group_manager": GroupManager(),
             "notification_retriever": NotificationRetriever(),
@@ -255,15 +253,6 @@ class Supervisor:
         Returns (executor_name, executor_params)
         """
         prompt_lower = user_prompt.lower()
-        
-        # Course manager patterns
-        if any(word in prompt_lower for word in ["add course", "add class", "הוסף קורס", "צרף קורס"]):
-            # Extract course number (3-6 digits)
-            course_numbers = re.findall(r'\d{3,6}', user_prompt)
-            if course_numbers:
-                # Use the longest number found (to handle cases like "104043")
-                course_number = max(course_numbers, key=len)
-                return "course_manager", {"course_number": course_number}
         
         # Schedule retriever patterns
         if any(word in prompt_lower for word in ["schedule", "לוז", "מערכת", "show schedule", "הצג לוז"]):
