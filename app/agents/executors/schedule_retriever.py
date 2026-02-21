@@ -1,7 +1,8 @@
 """
 Schedule Retriever Executor
-Retrieves and formats weekly schedules
+Retrieves and formats weekly schedules (blocks + constraints)
 """
+import json
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
@@ -140,6 +141,73 @@ class ScheduleRetriever:
         
         return merged_blocks
     
+    def _constraints_to_display_items(
+        self, client, user_id: str, week_start_str: str
+    ) -> List[Dict]:
+        """Fetch permanent and weekly constraints and convert to block-like items for display."""
+        items = []
+        # Permanent constraints (apply to every week)
+        try:
+            perm_res = client.table("constraints").select("title, days, start_time, end_time").eq("user_id", user_id).execute()
+            for c in (perm_res.data or []):
+                days_raw = c.get("days")
+                if isinstance(days_raw, str):
+                    try:
+                        days_list = json.loads(days_raw)
+                    except Exception:
+                        days_list = []
+                else:
+                    days_list = list(days_raw) if days_raw else []
+                start_t = (c.get("start_time") or "").strip()
+                end_t = (c.get("end_time") or "").strip()
+                title = (c.get("title") or "Constraint").strip()
+                for d in days_list:
+                    try:
+                        day_int = int(d) if d is not None else None
+                        if day_int is not None and 0 <= day_int <= 6 and start_t and end_t:
+                            items.append({
+                                "day_of_week": day_int,
+                                "start_time": start_t,
+                                "end_time": end_t,
+                                "course_name": title,
+                                "work_type": "constraint",
+                            })
+                    except (ValueError, TypeError):
+                        continue
+        except Exception as e:
+            logger.warning(f"Could not load permanent constraints: {e}")
+        # Weekly constraints for this week
+        try:
+            weekly_res = client.table("weekly_constraints").select("title, days, start_time, end_time").eq("user_id", user_id).eq("week_start", week_start_str).execute()
+            for c in (weekly_res.data or []):
+                days_raw = c.get("days")
+                if isinstance(days_raw, str):
+                    try:
+                        days_list = json.loads(days_raw)
+                    except Exception:
+                        days_list = []
+                else:
+                    days_list = list(days_raw) if days_raw else []
+                start_t = (c.get("start_time") or "").strip()
+                end_t = (c.get("end_time") or "").strip()
+                title = (c.get("title") or "Constraint").strip()
+                for d in days_list:
+                    try:
+                        day_int = int(d) if d is not None else None
+                        if day_int is not None and 0 <= day_int <= 6 and start_t and end_t:
+                            items.append({
+                                "day_of_week": day_int,
+                                "start_time": start_t,
+                                "end_time": end_t,
+                                "course_name": title,
+                                "work_type": "constraint",
+                            })
+                    except (ValueError, TypeError):
+                        continue
+        except Exception as e:
+            logger.warning(f"Could not load weekly constraints: {e}")
+        return items
+    
     def _format_schedule_display(self, blocks: List[Dict], week_start: str) -> str:
         """Format schedule blocks into a readable display (chronologically sorted, no IDs)"""
         if not blocks:
@@ -171,15 +239,17 @@ class ScheduleRetriever:
             day_blocks = sorted(by_day[day], key=lambda b: self._time_to_minutes(b.get("start_time", "00:00")))
             
             for block in day_blocks:
-                course_name = block.get("course_name", block.get("course_number", "Unknown"))
-                course_num = block.get("course_number", "")
-                work_type = block.get("work_type", "personal")
                 start_time = block.get("start_time", "00:00")
                 end_time = block.get("end_time", "00:00")
-                
-                work_type_label = "Group" if work_type == "group" else "Personal"
-                # Clean display: time range, course name, work type
-                lines.append(f"  {start_time}-{end_time} | {course_name} ({course_num}) - {work_type_label}")
+                work_type = block.get("work_type", "personal")
+                if work_type == "constraint":
+                    title = block.get("course_name", block.get("title", "Constraint"))
+                    lines.append(f"  {start_time}-{end_time} | {title} (אילוץ)")
+                else:
+                    course_name = block.get("course_name", block.get("course_number", "Unknown"))
+                    course_num = block.get("course_number", "")
+                    work_type_label = "Group" if work_type == "group" else ("Semester" if work_type == "semester" else "Personal")
+                    lines.append(f"  {start_time}-{end_time} | {course_name} ({course_num}) - {work_type_label}")
         
         return "\n".join(lines)
     
@@ -245,35 +315,20 @@ class ScheduleRetriever:
             
             logger.info(f"📊 Plan query result: found {len(plan_result.data) if plan_result.data else 0} plans")
             
-            # If no plan found, check what plans exist for this user
+            # If no plan found, still show constraints for the week
             if not plan_result.data or len(plan_result.data) == 0:
                 logger.warning(f"⚠️ No weekly plan found for week starting {week_start_str}")
-                # Debug: Check what plans exist for this user
+                constraint_items = self._constraints_to_display_items(client, user_id, week_start_str)
+                schedule_display = self._format_schedule_display(constraint_items, week_start_str) if constraint_items else f"No schedule found for week starting {week_start_str}"
                 all_plans = client.table("weekly_plans").select("week_start").eq("user_id", user_id).order("week_start", desc=True).limit(10).execute()
                 available_plans = [p.get('week_start') for p in all_plans.data] if all_plans.data else []
                 logger.info(f"📋 Available plans for user (last 10): {available_plans}")
-                
-                # Find closest available plan for better user feedback
-                closest_available = None
-                if available_plans:
-                    requested_week_start_dt = datetime.strptime(week_start_str, "%Y-%m-%d")
-                    min_diff = timedelta.max
-                    for ap_str in available_plans:
-                        ap_dt = datetime.strptime(ap_str, "%Y-%m-%d")
-                        diff = abs(requested_week_start_dt - ap_dt)
-                        if diff < min_diff:
-                            min_diff = diff
-                            closest_available = ap_str
-                
-                logger.info(f"   Requested week_start: {week_start_str}")
-                logger.info(f"   Closest available: {closest_available}")
-                
                 return {
                     "status": "no_schedule",
-                    "message": f"No schedule found for week starting {week_start_str}. Available plans: {available_plans}",
+                    "message": schedule_display,
                     "week_start": week_start_str,
-                    "schedule_display": f"No schedule found for week starting {week_start_str}",
-                    "blocks": [],
+                    "schedule_display": schedule_display,
+                    "blocks": [{"day_of_week": b.get("day_of_week"), "start_time": b.get("start_time"), "end_time": b.get("end_time"), "course_name": b.get("course_name"), "work_type": "constraint"} for b in constraint_items],
                     "available_plans": available_plans
                 }
             
@@ -298,23 +353,42 @@ class ScheduleRetriever:
             if merged_blocks:
                 logger.info(f"   First merged block sample: {merged_blocks[0]}")
             
-            # Format for display
-            schedule_display = self._format_schedule_display(merged_blocks, week_start_str)
+            # Add constraints (permanent + weekly) for this week
+            constraint_items = self._constraints_to_display_items(client, user_id, week_start_str)
+            combined = merged_blocks + constraint_items
+            combined.sort(key=lambda b: (b.get("day_of_week", 0), self._time_to_minutes(b.get("start_time", "00:00"))))
             
-            # Clean blocks for response (include block_id for UI interactions)
+            # Format for display (blocks + constraints)
+            schedule_display = self._format_schedule_display(combined, week_start_str)
+            
+            # Clean blocks for response (include block_id for UI interactions; include constraints)
             clean_blocks = []
-            for block in merged_blocks:
-                clean_block = {
-                    "block_id": block.get("id"),  # Include block_id for move/resize operations
-                    "day_of_week": block.get("day_of_week"),
-                    "day_name": DAY_NAMES_HEBREW[block.get("day_of_week", 0)] if block.get("day_of_week", 0) < len(DAY_NAMES_HEBREW) else DAY_NAMES[block.get("day_of_week", 0)],
-                    "start_time": block.get("start_time"),
-                    "end_time": block.get("end_time"),
-                    "course_number": block.get("course_number"),
-                    "course_name": block.get("course_name"),
-                    "work_type": block.get("work_type"),
-                    "work_type_label": "Group" if block.get("work_type") == "group" else "Personal"
-                }
+            for block in combined:
+                wt = block.get("work_type")
+                if wt == "constraint":
+                    clean_block = {
+                        "block_id": None,
+                        "day_of_week": block.get("day_of_week"),
+                        "day_name": DAY_NAMES_HEBREW[block.get("day_of_week", 0)] if block.get("day_of_week", 0) < len(DAY_NAMES_HEBREW) else DAY_NAMES[block.get("day_of_week", 0)],
+                        "start_time": block.get("start_time"),
+                        "end_time": block.get("end_time"),
+                        "course_number": "",
+                        "course_name": block.get("course_name", block.get("title", "Constraint")),
+                        "work_type": "constraint",
+                        "work_type_label": "אילוץ"
+                    }
+                else:
+                    clean_block = {
+                        "block_id": block.get("id"),
+                        "day_of_week": block.get("day_of_week"),
+                        "day_name": DAY_NAMES_HEBREW[block.get("day_of_week", 0)] if block.get("day_of_week", 0) < len(DAY_NAMES_HEBREW) else DAY_NAMES[block.get("day_of_week", 0)],
+                        "start_time": block.get("start_time"),
+                        "end_time": block.get("end_time"),
+                        "course_number": block.get("course_number"),
+                        "course_name": block.get("course_name"),
+                        "work_type": wt,
+                        "work_type_label": "Group" if wt == "group" else ("Semester" if wt == "semester" else "Personal")
+                    }
                 clean_blocks.append(clean_block)
             
             return {

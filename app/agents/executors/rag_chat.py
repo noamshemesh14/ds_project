@@ -383,7 +383,7 @@ class RAGChatExecutor:
 
         user_context_str = self._format_user_context(user_context)
 
-        system_prompt = """You are TechnionAI, a smart academic advisor for Technion students.
+        system_prompt = """You are SemesterOS Agent, a smart academic advisor for Technion students.
 
 Your role is to help students with academic information, regulations, procedures, courses, and academic guidance.
 

@@ -4082,6 +4082,15 @@ async def get_weekly_plan(
         semester_count_after = len([b for b in blocks if b.get("work_type") == "semester"])
         logging.info(f"📊 [GET_WEEKLY_PLAN] After deduplication: {len(blocks)} unique blocks (semester blocks: {semester_count_after})")
         
+        # Remove profile-sourced "group" blocks that duplicate semester schedule (lectures/tutorials).
+        # Those show as 👥 in the UI; we want only the injected semester blocks to represent course meetings.
+        # Real study-group blocks have work_type "group" but source != "profile" (they come from group_plan_blocks).
+        blocks = [
+            b for b in blocks
+            if not (b.get("source") == "profile" and b.get("work_type") == "group")
+        ]
+        logging.info(f"📋 [GET_WEEKLY_PLAN] After removing profile-sourced group dupes: {len(blocks)} blocks")
+        
         # If no blocks found via plan_ids, check directly by user_id (fallback)
         if not blocks:
             logging.warning(f"⚠️ No blocks found via plan_ids for user {user_id} and week {week_start}, checking directly")
@@ -11315,37 +11324,117 @@ async def get_team_info():
         ],
     }
 
-#TODO: Fix this get
 @app.get("/api/agent_info")
 async def get_agent_info():
     """
     Returns agent metadata: description, purpose, prompt template, and examples.
+    Steps in examples match the structure returned by POST /api/execute (module, prompt, response).
     """
     return {
-        "description": "Schedule and study-planning agent. Helps with courses, constraints, weekly plan, and group scheduling. Routes user requests to specialized executors (e.g. add block, move block, query schedule).",
-        "purpose": "Allow students to manage their semester/weekly schedule via natural language: add or move study blocks, ask about free slots, and coordinate with study groups.",
+        "description": "Schedule and study-planning agent. Helps with courses, constraints, weekly plan, and group scheduling. Routes user requests to specialized executors (e.g. add block, move block, query schedule, RAG chat). Uses LLM for routing (with reasoning), RAG for academic Q&A, and LLM for preference summarization.",
+        "purpose": "Allow students to manage their semester/weekly schedule via natural language: add or move study blocks, ask about free slots, view schedule and constraints, and coordinate with study groups. Also answers academic/informational questions via RAG.",
         "prompt_template": {
-            "template": "You can ask in Hebrew or English. Examples: 'הוסף לי 2 שעות אישיות לקורס X ביום שלישי אחרי 14:00'; 'מתי יש לי חופשי ביום רביעי?'; 'הזז את התרגול של Y ליום חמישי 10:00'. The agent will route your request and run the right action (add block, move, resize, or answer a question)."
+            "template": "You can ask in Hebrew or English. Examples: 'הוסף לי 2 שעות אישיות לקורס X ביום שלישי אחרי 14:00'; 'הצג את המערכת שלי לשבוע שמתחיל 15/02/2026'; 'מתי יש לי חופשי ביום רביעי?'; 'הזז את התרגול של Y ליום חמישי 10:00'. The agent routes your request (LLM routing with reasoning) and runs the right executor (add block, move, resize, constraints, schedule, or RAG chat)."
         },
         "prompt_examples": [
             {
                 "prompt": "הוסף 2 שעות אישיות לקורס מבוא למדעי המחשב ביום שלישי אחרי 14:00",
                 "full_response": "נוספו 2 שעות אישיות לקורס 'מבוא למדעי המחשב' ביום שלישי מ-14:00. הן מופיעות במערכת השבועית שלך.",
                 "steps": [
-                    "User requested to add 2 personal hours for course",
-                    "Agent routed to add-block executor with course_name and day/time",
-                    "Executor created 2 consecutive 1-hour blocks in weekly plan",
-                    "Confirmation returned to user"
+                    {
+                        "module": "supervisor",
+                        "prompt": {
+                            "user_prompt": "הוסף 2 שעות אישיות לקורס מבוא למדעי המחשב ביום שלישי אחרי 14:00",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "block_creator",
+                            "params": {
+                                "course_name": "מבוא למדעי המחשב",
+                                "day_of_week": 2,
+                                "start_time": "14:00",
+                                "duration": 2,
+                                "work_type": "personal"
+                            },
+                            "reasoning": "User asked to add 2 personal hours for a course on Tuesday after 14:00. block_creator is the appropriate executor for creating new study blocks."
+                        }
+                    },
+                    {
+                        "module": "block_creator",
+                        "prompt": {
+                            "user_prompt": "הוסף 2 שעות אישיות לקורס מבוא למדעי המחשב ביום שלישי אחרי 14:00",
+                            "course_name": "מבוא למדעי המחשב",
+                            "day_of_week": 2,
+                            "start_time": "14:00",
+                            "duration": 2,
+                            "work_type": "personal"
+                        },
+                        "response": {
+                            "status": "success",
+                            "message": "נוספו 2 שעות אישיות לקורס 'מבוא למדעי המחשב' ביום שלישי מ-14:00. הן מופיעות במערכת השבועית שלך.",
+                            "blocks_created": 2
+                        }
+                    }
+                ]
+            },
+            {
+                "prompt": "הצג את המערכת שלי לשבוע שמתחיל 15/02/2026",
+                "full_response": "המערכת השבועית שלך (15/02/2026):\n\nראשון: אין.\nשני: 08:00-10:00 | הרצאה (10403) - Semester; 14:00-16:00 | אימון (אילוץ).\nשלישי: 10:00-12:00 | תרגול (10403) - Semester...\n(המשך לפי הבלוקים והאילוצים שלך.)",
+                "steps": [
+                    {
+                        "module": "supervisor",
+                        "prompt": {
+                            "user_prompt": "הצג את המערכת שלי לשבוע שמתחיל 15/02/2026",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "schedule_retriever",
+                            "params": {"date": "2026-02-15"},
+                            "reasoning": "User asked to show their schedule for the week starting 15/02/2026. schedule_retriever returns weekly plan blocks and constraints for the given week."
+                        }
+                    },
+                    {
+                        "module": "schedule_retriever",
+                        "prompt": {
+                            "user_prompt": "הצג את המערכת שלי לשבוע שמתחיל 15/02/2026",
+                            "date": "2026-02-15"
+                        },
+                        "response": {
+                            "status": "success",
+                            "week_start": "2026-02-15",
+                            "schedule_display": "המערכת השבועית שלך (2026-02-15):\n\nראשון: ...\nשני: ...",
+                            "total_blocks": 12
+                        }
+                    }
                 ]
             },
             {
                 "prompt": "מתי יש לי חופשי ביום רביעי?",
                 "full_response": "ביום רביעי יש לך חופשי בשעות: 8:00–10:00, 12:00–14:00, 16:00–18:00 (לפי האילוצים והבלוקים הנוכחיים).",
                 "steps": [
-                    "User asked for free slots on Wednesday",
-                    "Agent routed to query/slots executor",
-                    "Executor computed free slots from weekly plan and constraints",
-                    "List of free slots returned to user"
+                    {
+                        "module": "supervisor",
+                        "prompt": {
+                            "user_prompt": "מתי יש לי חופשי ביום רביעי?",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "schedule_retriever",
+                            "params": {},
+                            "reasoning": "User asked for free slots on Wednesday. schedule_retriever returns the full schedule; free slots can be derived from the schedule display or a dedicated flow."
+                        }
+                    },
+                    {
+                        "module": "schedule_retriever",
+                        "prompt": {
+                            "user_prompt": "מתי יש לי חופשי ביום רביעי?"
+                        },
+                        "response": {
+                            "status": "success",
+                            "schedule_display": "...",
+                            "message": "ביום רביעי יש לך חופשי בשעות: 8:00–10:00, 12:00–14:00, 16:00–18:00 (לפי האילוצים והבלוקים הנוכחיים)."
+                        }
+                    }
                 ]
             }
         ]

@@ -255,9 +255,9 @@
             background: #ffb347; /* Orange for soft constraints */
         }
 
-        /* Course/Study block styles - differentiate personal vs group vs semester work */
+        /* Course/Study block styles: personal = light pink, semester = blue, group = purple (study groups) */
         .course-badge.personal-work {
-            background: #4a9eff !important;  /* Blue for personal work */
+            background: #f472b6 !important;  /* Light pink - fits with blue and purple */
         }
         
         .course-badge.group-work {
@@ -265,12 +265,12 @@
         }
         
         .course-badge.semester-work {
-            background: #27ae60 !important;  /* Green for semester schedule items (lectures/tutorials) */
+            background: #2563eb !important;  /* Blue for semester (הרצאה/תרגול) */
         }
         
         /* Cell background colors for weekly view */
         .has-course.personal-work {
-            background-color: rgba(74, 158, 255, 0.2) !important;  /* Light blue for personal work */
+            background-color: rgba(244, 114, 182, 0.25) !important;  /* Light pink tint for personal work */
         }
         
         .has-course.group-work {
@@ -278,14 +278,14 @@
         }
         
         .has-course.semester-work {
-            background-color: rgba(39, 174, 96, 0.2) !important;  /* Light green for semester items */
+            background-color: rgba(37, 99, 235, 0.2) !important;  /* Light blue for semester items */
         }
 
         #weekly-schedule-body .schedule-cell.has-course {
             background: white !important;
         }
         
-        /* Semester schedule blocks - same look as weekly (colored blocks spanning hours) */
+        /* Semester schedule blocks - blue (מערכת סמסטרית + מערכת שבועית), same language as site */
         .schedule-cell.has-semester-item {
             background: white;
         }
@@ -310,9 +310,8 @@
             word-wrap: break-word;
             text-align: center;
             z-index: 5;
-            background: var(--course-bg, #6c757d) !important;
+            background: #2563eb !important;  /* Blue - semester (הרצאה/תרגול) in both views */
         }
-        /* Semester schedule item colors - different from personal/group work */
         
         
         /* Highlight for change request blocks */
@@ -1176,7 +1175,7 @@
 <body>
     <nav class="navbar">
         <div class="navbar-content">
-            <div class="logo">🎓 יועץ אקדמי חכם</div>
+            <div class="logo">🎓 SemesterOS</div>
             <ul class="nav-links">
                 <li><a href="/profile">פרופיל</a></li>
                 <li><a href="/schedule" style="color: #667eea; font-weight: bold;">בניית מערכת</a></li>
@@ -1212,7 +1211,7 @@
             </div>
             
             <div class="tabs">
-                <button class="tab active" onclick="switchTab('schedule', this)">📆 מערכת סמסטרית</button>
+                <button class="tab active" onclick="switchTab('schedule', this)">📆 מערכת סמסטריאלית</button>
                 <button class="tab" onclick="switchTab('weekly', this)">🗓️ מערכת שבועית</button>
                 <button class="tab" onclick="switchTab('constraints', this)">🚫 אילוצים קבועים</button>
             </div>
@@ -2203,15 +2202,23 @@
                         for (let r = 1; r < numHours && rowIndex + r < timeSlots.length; r++) { if (!skip[rowIndex + r]) skip[rowIndex + r] = {}; skip[rowIndex + r][day] = true; }
                         continue;
                     }
-                    const planBlock = weeklyPlanBlocks.find(b => {
+                    const matchingBlocks = weeklyPlanBlocks.filter(b => {
                         if (b.day_of_week !== day) return false;
                         if (b.start_time && b.end_time) return isTimeInRange(time, b.start_time, b.end_time);
                         return normTime(b.start_time) === normTime(time);
                     });
+                    // Prefer semester block (course meeting from מערכת סמסטרית) over group/personal so it shows without 👥/👤
+                    const planBlock = matchingBlocks.length === 0 ? null : (
+                        matchingBlocks.find(b => b.work_type === 'semester' || b.source === 'semester') || matchingBlocks[0]
+                    );
                     if (planBlock) {
                         const slotIndex = timeSlots.indexOf(time);
                         let startsHere;
                         let numHours = 1;
+                        // For semester blocks: do NOT merge הרצאה with תרגול — require same type (lecture/tutorial).
+                        const sameType = (a, b) => (a.work_type === 'semester' || a.source === 'semester')
+                            ? ((a.type || 'lecture') === (b.type || 'lecture'))
+                            : true;
                         if (planBlock.start_time && planBlock.end_time) {
                             if (slotIndex > 0) {
                                 const prevTime = timeSlots[slotIndex - 1];
@@ -2222,11 +2229,12 @@
                             const sh = (planBlock.start_time || '0:0').split(':').map(Number);
                             const eh = (planBlock.end_time || '0:0').split(':').map(Number);
                             numHours = Math.max(1, Math.ceil((eh[0] * 60 + (eh[1] || 0) - (sh[0] * 60 + (sh[1] || 0))) / 60));
-                            // Merge consecutive same-course blocks (backend may return 10-11, 11-12, 12-13 as separate blocks)
+                            // Merge consecutive same-course (and same lecture/tutorial type) blocks
                             while (slotIndex + numHours < timeSlots.length) {
                                 const nextTime = timeSlots[slotIndex + numHours];
                                 const nextBlock = weeklyPlanBlocks.find(b => {
                                     if (b.day_of_week !== day || b.course_number !== planBlock.course_number || b.work_type !== planBlock.work_type) return false;
+                                    if (!sameType(planBlock, b)) return false;
                                     if (b.start_time && b.end_time) return isTimeInRange(nextTime, b.start_time, b.end_time);
                                     return normTime(b.start_time) === normTime(nextTime);
                                 });
@@ -2241,18 +2249,19 @@
                             }
                         } else {
                             const prevTime = slotIndex > 0 ? timeSlots[slotIndex - 1] : null;
-                            const prevBlock = prevTime && weeklyPlanBlocks.find(b => b.day_of_week === day && normTime(b.start_time) === normTime(prevTime) && b.course_number === planBlock.course_number && b.work_type === planBlock.work_type);
+                            const prevBlock = prevTime && weeklyPlanBlocks.find(b => b.day_of_week === day && normTime(b.start_time) === normTime(prevTime) && b.course_number === planBlock.course_number && b.work_type === planBlock.work_type && sameType(planBlock, b));
                             startsHere = !prevBlock;
                             if (startsHere) {
                                 for (let h = 1; slotIndex + h < timeSlots.length; h++) {
                                     const nt = timeSlots[slotIndex + h];
-                                    if (weeklyPlanBlocks.find(b => b.day_of_week === day && normTime(b.start_time) === normTime(nt) && b.course_number === planBlock.course_number && b.work_type === planBlock.work_type)) numHours++;
+                                    if (weeklyPlanBlocks.find(b => b.day_of_week === day && normTime(b.start_time) === normTime(nt) && b.course_number === planBlock.course_number && b.work_type === planBlock.work_type && sameType(planBlock, b))) numHours++;
                                     else break;
                                 }
                             }
                         }
+                        const isSemesterBlock = planBlock.work_type === 'semester' || planBlock.source === 'semester';
                         const cell = document.createElement('td');
-                        cell.className = 'schedule-cell has-course' + (planBlock.work_type === 'semester' ? ' has-semester-item' : (planBlock.work_type === 'group' ? ' group-work' : ' personal-work'));
+                        cell.className = 'schedule-cell has-course' + (isSemesterBlock ? ' has-semester-item' : (planBlock.work_type === 'group' ? ' group-work' : ' personal-work'));
                         cell.dataset.day = day;
                         cell.dataset.time = time;
                         if (startsHere && numHours > 1) cell.rowSpan = numHours;
@@ -2260,11 +2269,11 @@
                             cell.dataset.blockCourse = planBlock.course_number;
                             cell.dataset.blockWorkType = planBlock.work_type;
                             cell.dataset.blockDuration = numHours;
-                            if (planBlock.work_type !== 'semester') cell.style.cursor = 'pointer'; else { cell.style.cursor = 'not-allowed'; cell.title = 'בלוק סמסטר - לא ניתן לערוך (אילוץ קשיח)'; }
+                            if (!isSemesterBlock) cell.style.cursor = 'pointer'; else { cell.style.cursor = 'not-allowed'; cell.title = 'בלוק סמסטר - לא ניתן לערוך (אילוץ קשיח)'; }
                             cell.onclick = null;
                             const cellHeight = 80;
                             const badgeHeight = (cellHeight * numHours) - 10;
-                            if (planBlock.work_type === 'semester') {
+                            if (isSemesterBlock) {
                                 const badge = document.createElement('span');
                                 const itemType = (planBlock.type || 'lecture').toLowerCase();
                                 badge.className = 'semester-item-badge ' + itemType;
@@ -5435,7 +5444,7 @@
         <button class="chat-toggle" onclick="toggleChat()">💬</button>
         <div class="chat-popup" id="chatPopup">
             <div class="chat-header">
-                <div class="chat-header-title">TechnionAI</div>
+                <div class="chat-header-title">SemesterOS Agent</div>
                 <button class="chat-close" onclick="toggleChat()">×</button>
             </div>
             <div class="chat-messages" id="chatMessages">
