@@ -477,10 +477,29 @@
             }
         }
         
-        // If already logged in, go to the app (schedule) — not back to landing, so "Go to the site" works
-        if (localStorage.getItem('auth_token')) {
-            window.location.href = '/schedule';
-        }
+        // Only redirect if we have a valid token (verify with API). Prevents skipping login when token is stale.
+        (function checkExistingSession() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) return;
+            fetch('/api/user/context', {
+                method: 'GET',
+                headers: { 'Authorization': 'Bearer ' + token }
+            })
+            .then(function(res) {
+                if (res.ok) {
+                    window.location.href = '/schedule';
+                } else {
+                    localStorage.removeItem('auth_token');
+                    localStorage.removeItem('user_id');
+                    localStorage.removeItem('user_email');
+                }
+            })
+            .catch(function() {
+                localStorage.removeItem('auth_token');
+                localStorage.removeItem('user_id');
+                localStorage.removeItem('user_email');
+            });
+        })();
     </script>
 </body>
 </html>
