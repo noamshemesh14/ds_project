@@ -4476,6 +4476,8 @@ async def execute_agent(
             else:
                 return obj
         
+        cleaned_result = clean_for_json(result)
+        
         # Normalize to exact spec: status, error, response, steps (error null on success)
         out = {
             "status": cleaned_result.get("status", "ok"),
@@ -10622,6 +10624,30 @@ async def accept_invitation(
             if user_id_str.lower() in ["null", "none", ""]:
                 logging.error(f"❌ Invalid user_id (string null): {user_id}")
                 raise HTTPException(status_code=400, detail="Invalid user_id")
+        
+        # Resolve course_id for this invitation (needed for "one group per course" check)
+        course_id_for_invitation = None
+        if not group_id_is_null and group_id:
+            group_row = client.table("study_groups").select("course_id").eq("id", group_id).limit(1).execute()
+            if group_row.data:
+                course_id_for_invitation = group_row.data[0].get("course_id")
+        if course_id_for_invitation is None and inviter_id:
+            pending = client.table("pending_group_creations").select("course_id").eq("inviter_id", inviter_id).order("created_at", desc=True).limit(1).execute()
+            if pending.data:
+                course_id_for_invitation = pending.data[0].get("course_id")
+        
+        # Each course may have only one group per user: reject if invitee is already in a group for this course
+        if course_id_for_invitation is not None:
+            user_approved = client.table("group_members").select("group_id").eq("user_id", user_id).eq("status", "approved").execute()
+            if user_approved.data:
+                group_ids_user = [r["group_id"] for r in user_approved.data]
+                groups_user = client.table("study_groups").select("id, course_id").in_("id", group_ids_user).execute()
+                for g in (groups_user.data or []):
+                    if str(g.get("course_id", "")) == str(course_id_for_invitation):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="You are already in a group for this course. Each course can have only one group. Leave the existing group first if you want to join another."
+                        )
         
         # Update invitation status FIRST
         update_result = client.table("group_invitations").update({
