@@ -82,6 +82,14 @@ class RequestHandler:
             
             logger.info(f"🔄 Handling request: request_id={request_id}, action={action}, group_name={group_name}, course_number={course_number}")
             
+            # Detect if user is asking about invitation vs change request
+            is_invitation_request = False
+            if user_prompt:
+                invitation_keywords = ["invitation", "הזמנה", "invite", "להצטרף", "join"]
+                is_invitation_request = any(keyword in user_prompt.lower() for keyword in invitation_keywords)
+                if is_invitation_request:
+                    logger.info(f"📝 Detected invitation request from user_prompt")
+            
             # Try to find invitation if request_id not provided
             invitation_id = None
             change_request_id = None
@@ -336,6 +344,11 @@ class RequestHandler:
                         # Skip to handling the invitation - don't search in existing groups
                         groups_result = None
                     else:
+                        # If user explicitly asked for invitation but we didn't find one, don't search for change requests
+                        if is_invitation_request:
+                            logger.warning(f"⚠️ User asked for invitation but no pending invitation found")
+                            raise HTTPException(status_code=404, detail=f"No pending invitation found for group '{group_name}'. The group may not exist yet or the invitation may have already been processed.")
+                        
                         # Find groups matching the criteria (existing groups)
                         group_query = client.table("study_groups").select("id, group_name, course_id, course_name")
                         if group_name:
@@ -356,6 +369,11 @@ class RequestHandler:
                         # #endregion
                         
                         if not groups_result.data:
+                            # If user explicitly asked for invitation but we didn't find one, don't search for change requests
+                            if is_invitation_request:
+                                logger.warning(f"⚠️ User asked for invitation but no pending invitation found")
+                                raise HTTPException(status_code=404, detail=f"No pending invitation found for group '{group_name}'. The group may not exist yet or the invitation may have already been processed.")
+                            
                             # #region agent log
                             try:
                                 with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
