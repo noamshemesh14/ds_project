@@ -86,58 +86,10 @@ scheduler = BackgroundScheduler(timezone="UTC", daemon=False)
 
 @app.on_event("startup")
 def _start_scheduler():
-    try:
-        now_utc = datetime.now(timezone.utc)
-        target_hour = 18
-        target_minute = 47
-        
-        # Check if today is Sunday and time hasn't passed yet
-        is_sunday = now_utc.weekday() == 6  # Sunday is 6
-        target_time_today = now_utc.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
-        time_has_passed = now_utc >= target_time_today
-        
-        # If today is Sunday and time hasn't passed, schedule for today
-        if is_sunday and not time_has_passed:
-            logging.info(f"📅 Today is Sunday and {target_hour}:{target_minute:02d} UTC hasn't passed yet - scheduling for today")
-            scheduler.add_job(
-                _run_weekly_auto_for_all_users_sync,
-                DateTrigger(run_date=target_time_today),
-                id="weekly_auto_plan_today",
-                replace_existing=True,
-                max_instances=1
-            )
-            # Also add recurring job for future Sundays
-            scheduler.add_job(
-                _run_weekly_auto_for_all_users_sync,
-                CronTrigger(day_of_week="sun", hour=target_hour, minute=target_minute, timezone="UTC"),
-                id="weekly_auto_plan",
-                replace_existing=True,
-                misfire_grace_time=3600,
-                max_instances=1
-            )
-        else:
-            # Normal case: schedule for next Sunday
-            scheduler.add_job(
-                _run_weekly_auto_for_all_users_sync,
-                CronTrigger(day_of_week="sun", hour=target_hour, minute=target_minute, timezone="UTC"),
-                id="weekly_auto_plan",
-                replace_existing=True,
-                misfire_grace_time=3600,  # 1 hour grace period
-                max_instances=1  # Only one instance can run at a time
-            )
-        
-        scheduler.start()
-        logging.info("Weekly scheduler started")
-        
-        # Get next run times after scheduler started
-        jobs = scheduler.get_jobs()
-        for job in jobs:
-            if job.next_run_time:
-                logging.info(f"   📅 Job '{job.id}': Next run at {job.next_run_time} UTC")
-        
-        logging.info(f"   📅 Current time: {now_utc} UTC")
-    except Exception as e:
-        logging.error(f"Failed to start scheduler: {e}")
+    # Scheduler disabled - weekly planning is now manual only
+    # Use POST /api/weekly-plan/run-immediately?week_start=YYYY-MM-DD to trigger manually
+    logging.info("Weekly scheduler disabled - use manual trigger via API endpoint /api/weekly-plan/run-immediately")
+    pass
 
 
 @app.on_event("shutdown")
