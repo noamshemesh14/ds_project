@@ -6427,7 +6427,11 @@ async def move_schedule_block(
             user_plan = client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).limit(1).execute()
             if user_plan.data:
                 user_plan_id = user_plan.data[0]["id"]
-                existing_blocks = client.table("weekly_plan_blocks").select("course_name, start_time, end_time").eq("plan_id", user_plan_id).eq("day_of_week", new_day).execute()
+                existing_blocks = client.table("weekly_plan_blocks").select("id, course_name, course_number, start_time, end_time").eq("plan_id", user_plan_id).eq("day_of_week", new_day).execute()
+                
+                # Convert blocks_to_move_ids to strings for comparison (IDs might be strings or UUIDs)
+                blocks_to_move_ids_str = [str(bid) for bid in blocks_to_move_ids] if blocks_to_move_ids else []
+                block_id_str = str(block_id) if block_id else None
                 
                 # Check conflicts for each hour that will be moved (time_slots and new_start_idx already calculated above)
                 for i in range(num_hours_to_move):
@@ -6437,12 +6441,17 @@ async def move_schedule_block(
                         
                         # Check if this time slot conflicts with existing blocks
                         for existing_block in (existing_blocks.data or []):
-                            # Skip if it's one of the blocks we're moving (check by ID if possible, or by time)
+                            # Skip if it's one of the blocks we're moving (check by ID)
                             existing_block_id = existing_block.get("id")
-                            if existing_block_id and existing_block_id in blocks_to_move_ids:
+                            existing_block_id_str = str(existing_block_id) if existing_block_id else None
+                            
+                            # CRITICAL: Skip the original block being moved (even if it's not in consecutive_blocks)
+                            if existing_block_id_str in blocks_to_move_ids_str or existing_block_id_str == block_id_str:
                                 continue
+                            
                             # Also skip if it's at the original location and same course (we're moving it)
-                            if existing_block.get("start_time") == original_start and existing_block.get("course_number") == course_number:
+                            # This is a safety check in case ID comparison fails
+                            if existing_block.get("start_time") == original_start and existing_block.get("course_number") == course_number and new_day == original_day:
                                 continue
                             
                             e_start = _time_to_minutes(existing_block.get("start_time", "00:00"))

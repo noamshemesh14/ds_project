@@ -461,7 +461,12 @@ class BlockMover:
             blocks_to_move_ids = [b["id"] for b in consecutive_blocks] if consecutive_blocks else [block_id_actual]
             num_hours_to_move = len(consecutive_blocks) if consecutive_blocks else 1
             
+            # CRITICAL: Always include the original block_id in blocks_to_exclude, even if it's not in consecutive_blocks
+            # This prevents false conflicts when moving a block to an overlapping time on the same day
+            blocks_to_exclude = list(set(blocks_to_move_ids + [block_id_actual]))
+            
             logger.info(f"📦 Found {num_hours_to_move} consecutive block(s) to move: {blocks_to_move_ids}")
+            logger.info(f"📦 Blocks to exclude from conflict check (including original): {blocks_to_exclude}")
             
             # Calculate the total duration of all consecutive blocks
             if consecutive_blocks:
@@ -478,11 +483,9 @@ class BlockMover:
             new_end_time = _minutes_to_time(new_start_minutes + total_duration_minutes)
             
             logger.info(f"🔍 Checking conflicts: moving {num_hours_to_move} block(s) from day {original_day} {block.get('start_time')} to day {new_day} {new_start_time}-{new_end_time}")
-            logger.info(f"🔍 Blocks to exclude from conflict check: {blocks_to_move_ids}")
             
             # Check conflicts for all blocks that will be moved
             # Pass all block IDs that will be moved so they can be excluded from conflict check
-            blocks_to_exclude = blocks_to_move_ids if blocks_to_move_ids else [block_id_actual]
             conflict_reasons = self._check_conflicts(client, user_id, week_start, new_day, new_start_time, new_end_time, blocks_to_exclude, course_number)
             
             if conflict_reasons:
@@ -677,8 +680,12 @@ class BlockMover:
                 for existing_block in (existing_blocks.data or []):
                     block_id = existing_block.get("id")
                     # Skip the blocks we're moving
-                    if block_id in blocks_to_exclude:
-                        logger.info(f"🔍 Skipping block {block_id} - it's being moved")
+                    # Convert block_id to string for comparison (IDs might be strings or UUIDs)
+                    block_id_str = str(block_id) if block_id else None
+                    blocks_to_exclude_str = [str(bid) for bid in blocks_to_exclude] if blocks_to_exclude else []
+                    
+                    if block_id_str in blocks_to_exclude_str:
+                        logger.info(f"🔍 Skipping block {block_id} - it's being moved (in blocks_to_exclude: {blocks_to_exclude_str})")
                         continue
                     
                     # DO NOT skip blocks of the same course - we need to check ALL blocks for conflicts
