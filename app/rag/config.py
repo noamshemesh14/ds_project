@@ -16,6 +16,15 @@ TEXT_FILES = [
     "unified_attachments.txt",
     "unified_course_description.txt",
 ]
+
+# ----- Incremental updates (new files only, no re-embedding of old ones) -----
+# Put new .txt files in this folder and run:  py -m app.rag.embed_and_upsert --incremental
+# All .txt files in RAG_ADDITIONAL_DIR are embedded and upserted to the same Pinecone index.
+# Hebrew/UTF-8 text is supported; save files as UTF-8.
+RAG_ADDITIONAL_DIR = os.getenv("RAG_ADDITIONAL_DIR", str(PROJECT_ROOT / "rag_data_additional"))
+# Optional: set RAG_ADDITIONAL_FILES (comma-separated names) to embed only those .txt files from this folder.
+# Example: RAG_ADDITIONAL_FILES="new_doc1.txt,new_doc2.txt"
+
 CSV_FILES = [
     "dds_courses_details.csv",
     "all_faculties_courses_details.csv",

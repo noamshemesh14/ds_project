@@ -43,6 +43,7 @@ from app.rag.config import (
     EMBEDDING_DIMENSIONS,
     EMBEDDING_MODEL,
     PINECONE_INDEX_NAME,
+    RAG_ADDITIONAL_DIR,
     RAG_DATA_DIR,
     TEXT_FILES,
     UPSERT_BATCH_SIZE,
@@ -52,7 +53,9 @@ OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or _read_key_from_env_file("OPENAI
 PINECONE_API_KEY = (os.getenv("PINECONE_API_KEY") or _read_key_from_env_file("PINECONE_API_KEY") or "").strip()
 
 
-def _source_type_from_filename(name: str) -> str:
+def _source_type_from_filename(name: str, additional: bool = False) -> str:
+    if additional:
+        return "additional"
     if "catalog" in name.lower():
         return "catalog"
     if "attachment" in name.lower():
@@ -81,8 +84,40 @@ def _sanitize_metadata(meta: dict) -> dict:
     return out
 
 
-def get_all_chunks():
-    """Yield (text, metadata) for every chunk from configured files."""
+def get_all_chunks(incremental: bool = False):
+    """Yield (text, metadata) for every chunk from configured files.
+    If incremental=True, only yield chunks from RAG_ADDITIONAL_DIR (new files only).
+    """
+    if incremental:
+        add_dir = Path(RAG_ADDITIONAL_DIR)
+        if not add_dir.exists():
+            raise FileNotFoundError(
+                f"RAG additional directory not found: {add_dir}\n"
+                f"Create it and put your new .txt files there, then run:\n  py -m app.rag.embed_and_upsert --incremental"
+            )
+        # Optional: explicit list from env RAG_ADDITIONAL_FILES (comma-separated)
+        env_files = (os.getenv("RAG_ADDITIONAL_FILES") or "").strip()
+        if env_files:
+            fnames = [f.strip() for f in env_files.split(",") if f.strip()]
+        else:
+            fnames = sorted(
+                p.name for p in add_dir.glob("*.txt")
+                if p.name.lower() != "readme.txt"
+            )
+        if not fnames:
+            raise FileNotFoundError(
+                f"No .txt files in {add_dir}. Add your new text files (UTF-8) there and run:\n  py -m app.rag.embed_and_upsert --incremental"
+            )
+        for fname in fnames:
+            path = add_dir / fname
+            if not path.is_file():
+                print(f"Skip (not found): {path}")
+                continue
+            stype = _source_type_from_filename(fname, additional=True)
+            for chunk_text, meta in load_and_chunk_text_file(path, source_type=stype):
+                yield chunk_text, meta
+        return
+
     data_dir = Path(RAG_DATA_DIR)
     if not data_dir.exists():
         raise FileNotFoundError(f"RAG data directory not found: {data_dir}")
@@ -112,7 +147,7 @@ def embed_batch(client, texts: list[str], model: str = EMBEDDING_MODEL):
     return [e.embedding for e in resp.data]
 
 
-def run():
+def run(incremental: bool = False):
     if not OPENAI_API_KEY:
         raise ValueError(
             "OPENAI_API_KEY is missing or empty in .env (the saved file on disk has no value after the =).\n"
@@ -145,8 +180,9 @@ def run():
         )
     index = pc.Index(index_name)
 
-    chunks = list(get_all_chunks())
-    print(f"Total chunks to embed: {len(chunks)}")
+    chunks = list(get_all_chunks(incremental=incremental))
+    mode = "incremental (new files only)" if incremental else "full"
+    print(f"Mode: {mode}. Total chunks to embed: {len(chunks)}")
 
     total_upserted = 0
     batch_texts = []
@@ -184,4 +220,6 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+    import sys
+    incremental = "--incremental" in sys.argv or (os.getenv("RAG_INCREMENTAL", "").strip().lower() in ("1", "true", "yes"))
+    run(incremental=incremental)
