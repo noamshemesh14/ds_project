@@ -284,7 +284,43 @@
         #weekly-schedule-body .schedule-cell.has-course {
             background: white !important;
         }
-        
+
+        /* Legend for weekly schedule block types */
+        .weekly-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            align-items: center;
+            margin-bottom: 1rem;
+            padding: 0.75rem 1rem;
+            background: #f8f9fa;
+            border-radius: 10px;
+            border: 1px solid #e9ecef;
+            font-size: 0.95em;
+        }
+        .weekly-legend-title {
+            margin-left: 0;
+            margin-right: 0.5rem;
+            font-weight: 600;
+            color: #495057;
+        }
+        .weekly-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+        .weekly-legend-swatch {
+            width: 18px;
+            height: 18px;
+            border-radius: 6px;
+            flex-shrink: 0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+        }
+        .weekly-legend-swatch.personal { background: #f472b6; }
+        .weekly-legend-swatch.group { background: #9b59b6; }
+        .weekly-legend-swatch.semester { background: #2563eb; }
+        .weekly-legend-swatch.constraint-hard { background: #ff6b6b; }
+
         /* Semester schedule blocks - blue (מערכת סמסטרית + מערכת שבועית), same language as site */
         .schedule-cell.has-semester-item {
             background: white;
@@ -1249,6 +1285,26 @@
                     <input type="date" id="weekStartDate">
                     <button class="btn btn-secondary" onclick="openAddBlockModal()">➕ הוסף בלוק חדש</button>
                     <button class="btn btn-secondary" onclick="openWeeklyConstraintModal()">➕ אילוץ שבועי</button>
+                </div>
+
+                <div class="weekly-legend" aria-label="מקרא סוגי בלוקים ואילוצים">
+                    <span class="weekly-legend-title">מקרא:</span>
+                    <span class="weekly-legend-item">
+                        <span class="weekly-legend-swatch personal" aria-hidden="true"></span>
+                        <span>👤 אישי</span>
+                    </span>
+                    <span class="weekly-legend-item">
+                        <span class="weekly-legend-swatch group" aria-hidden="true"></span>
+                        <span>👥 קבוצתי</span>
+                    </span>
+                    <span class="weekly-legend-item">
+                        <span class="weekly-legend-swatch semester" aria-hidden="true"></span>
+                        <span>📚 מערכת סמסטר</span>
+                    </span>
+                    <span class="weekly-legend-item">
+                        <span class="weekly-legend-swatch constraint-hard" aria-hidden="true"></span>
+                        <span>🔒 אילוץ קשיח</span>
+                    </span>
                 </div>
 
                 <div class="schedule-container">
@@ -3910,40 +3966,40 @@
                     const newDay = parseInt(cell.dataset.day);
                     const newTime = cell.dataset.time;
                     
-                    // Check if dropping on same location
-                    if (newDay === draggedBlockData.originalDay && newTime === draggedBlockData.originalTime) {
+                    // Check if dropping on same location (use normalized time for comparison)
+                    const normNew = normTime(newTime);
+                    const normOrig = normTime(draggedBlockData.originalTime);
+                    if (newDay === draggedBlockData.originalDay && normNew === normOrig) {
                         return;
                     }
                     
-                    // Check for conflicts - is there already a block at this time?
-                    const existingBlock = weeklyPlanBlocks.find(b => 
-                        b.day_of_week === newDay && 
-                        b.start_time === newTime &&
-                        !(b.course_number === draggedBlockData.course_number && b.work_type === draggedBlockData.work_type)
-                    );
+                    // Conflict: another block (not the one we're moving) occupies this slot.
+                    // A slot is occupied if a block starts there OR spans it [start, end) - exclusive end so "after block ended" is free.
+                    const existingBlock = weeklyPlanBlocks.find(b => {
+                        if (b.day_of_week !== newDay) return false;
+                        if (b.id && draggedBlockData.id && b.id === draggedBlockData.id) return false; // same block we're moving
+                        if (b.start_time && b.end_time) {
+                            if (isTimeInRange(newTime, b.start_time, b.end_time)) return true; // block spans this time
+                            return false;
+                        }
+                        return normTime(b.start_time) === normNew; // slot-based: block starts at this time
+                    });
                     
                     if (existingBlock) {
                         const workTypeLabel = existingBlock.work_type === 'group' ? 'קבוצתי' : 
                                              (existingBlock.work_type === 'semester' ? 'סמסטר' : 'אישי');
-                        alert(`❌ לא ניתן להזיז לשעה זו - כבר יש לוז קיים:\n${existingBlock.course_name} (${workTypeLabel})`);
+                        alert(`❌ לא ניתן להזיז לשעה זו - כבר יש בלוק קיים:\n${existingBlock.course_name} (${workTypeLabel})`);
                         return;
                     }
                     
-                    // Check for hard constraints (both weekly and permanent)
-                    const conflictingConstraint = weeklyConstraints.find(c => {
-                        if (!c.is_hard) return false;
-                        let daysArray = c.days;
-                        if (!Array.isArray(daysArray)) {
-                            try { daysArray = JSON.parse(daysArray); } catch { daysArray = []; }
-                        }
-                        if (!daysArray.includes(newDay)) return false;
-                        
-                        // Check time overlap
-                        const [newHour] = newTime.split(':').map(Number);
-                        const [cStartHour] = c.start_time.split(':').map(Number);
-                        const [cEndHour] = c.end_time.split(':').map(Number);
-                        return newHour >= cStartHour && newHour < cEndHour;
-                    });
+                    // Check for hard constraints (weekly and permanent) - use isTimeInRange [start, end) exclusive
+                    function dayInConstraint(c) {
+                        let daysArray = Array.isArray(c.days) ? c.days : (typeof c.days === 'string' ? (() => { try { return JSON.parse(c.days); } catch { return []; } })() : []);
+                        return daysArray.includes(newDay);
+                    }
+                    const conflictingWeekly = weeklyConstraints.find(c => c.is_hard !== false && dayInConstraint(c) && isTimeInRange(newTime, c.start_time || '00:00', c.end_time || '24:00'));
+                    const conflictingPermanent = (typeof constraints !== 'undefined' && constraints.length) ? constraints.find(c => c.is_hard !== false && dayInConstraint(c) && isTimeInRange(newTime, c.start_time || '00:00', c.end_time || '24:00')) : null;
+                    const conflictingConstraint = conflictingWeekly || conflictingPermanent;
                     
                     if (conflictingConstraint) {
                         const constraintType = conflictingConstraint.is_permanent ? 'קבוע' : 'שבועי';
@@ -4867,10 +4923,9 @@
                 if (response.ok) {
                     const result = await response.json();
                     closeBlockEditModal();
-                    updateWeeklyScheduleDisplay();
+                    await loadWeeklyPlan();
                     alert('✅ משך הבלוק עודכן בהצלחה!');
                     
-                    // If user provided explanation, show that preferences were updated
                     if (explanation && result.preferences_updated) {
                         console.log('User preferences updated based on schedule change');
                     }

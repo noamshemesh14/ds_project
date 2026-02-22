@@ -77,6 +77,22 @@ logging.basicConfig(
 # Global cache for LLM debug info (temporary for debugging)
 _llm_debug_cache = {}
 
+# Agent module names (must match supervisor.executors and /api/execute steps)
+_ARCH_EXECUTORS = [
+    "schedule_retriever",
+    "group_manager",
+    "notification_retriever",
+    "notification_cleaner",
+    "request_handler",
+    "preference_updater",
+    "block_mover",
+    "block_resizer",
+    "block_creator",
+    "constraint_manager",
+    "courses_retriever",
+    "rag_chat",
+]
+
 app = FastAPI(title="Student Planner System", description="סוכן חכם לתכנון מערכת קורסים ולימודים")
 
 # Background scheduler for weekly auto-planning (UTC to avoid local TZ misfires)
@@ -86,10 +102,58 @@ scheduler = BackgroundScheduler(timezone="UTC", daemon=False)
 
 @app.on_event("startup")
 def _start_scheduler():
-    # Scheduler disabled - weekly planning is now manual only
-    # Use POST /api/weekly-plan/run-immediately?week_start=YYYY-MM-DD to trigger manually
-    logging.info("Weekly scheduler disabled - use manual trigger via API endpoint /api/weekly-plan/run-immediately")
-    pass
+    try:
+        now_utc = datetime.now(timezone.utc)
+        target_hour = 18
+        target_minute = 47
+        
+        # Check if today is Sunday and time hasn't passed yet
+        is_sunday = now_utc.weekday() == 6  # Sunday is 6
+        target_time_today = now_utc.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+        time_has_passed = now_utc >= target_time_today
+        
+        # If today is Sunday and time hasn't passed, schedule for today
+        if is_sunday and not time_has_passed:
+            logging.info(f"📅 Today is Sunday and {target_hour}:{target_minute:02d} UTC hasn't passed yet - scheduling for today")
+            scheduler.add_job(
+                _run_weekly_auto_for_all_users_sync,
+                DateTrigger(run_date=target_time_today),
+                id="weekly_auto_plan_today",
+                replace_existing=True,
+                max_instances=1
+            )
+            # Also add recurring job for future Sundays
+            scheduler.add_job(
+                _run_weekly_auto_for_all_users_sync,
+                CronTrigger(day_of_week="sun", hour=target_hour, minute=target_minute, timezone="UTC"),
+                id="weekly_auto_plan",
+                replace_existing=True,
+                misfire_grace_time=3600,
+                max_instances=1
+            )
+        else:
+            # Normal case: schedule for next Sunday
+            scheduler.add_job(
+                _run_weekly_auto_for_all_users_sync,
+                CronTrigger(day_of_week="sun", hour=target_hour, minute=target_minute, timezone="UTC"),
+                id="weekly_auto_plan",
+                replace_existing=True,
+                misfire_grace_time=3600,  # 1 hour grace period
+                max_instances=1  # Only one instance can run at a time
+            )
+        
+        scheduler.start()
+        logging.info("Weekly scheduler started")
+        
+        # Get next run times after scheduler started
+        jobs = scheduler.get_jobs()
+        for job in jobs:
+            if job.next_run_time:
+                logging.info(f"   📅 Job '{job.id}': Next run at {job.next_run_time} UTC")
+        
+        logging.info(f"   📅 Current time: {now_utc} UTC")
+    except Exception as e:
+        logging.error(f"Failed to start scheduler: {e}")
 
 
 @app.on_event("shutdown")
@@ -4412,16 +4476,35 @@ async def execute_agent(
             else:
                 return obj
         
-        cleaned_result = clean_for_json(result)
-        
-        # Return pretty-printed JSON
+        # Normalize to exact spec: status, error, response, steps (error null on success)
+        out = {
+            "status": cleaned_result.get("status", "ok"),
+            "error": cleaned_result.get("error"),
+            "response": cleaned_result.get("response"),
+            "steps": cleaned_result.get("steps", []),
+        }
+        if out["status"] == "ok":
+            out["error"] = None
+
         return Response(
-            content=json.dumps(cleaned_result, indent=2, ensure_ascii=False),
+            content=json.dumps(out, indent=2, ensure_ascii=False),
             media_type="application/json"
         )
-        
-    except HTTPException:
-        raise
+
+    except HTTPException as he:
+        d = getattr(he, "detail", None)
+        detail = d if isinstance(d, str) else (str(d) if d is not None else "Request error")
+        body = {
+            "status": "error",
+            "error": detail,
+            "response": None,
+            "steps": [],
+        }
+        return Response(
+            status_code=200,
+            content=json.dumps(body, indent=2, ensure_ascii=False),
+            media_type="application/json",
+        )
     except Exception as e:
         chat_logger = logging.getLogger("CHAT")
         chat_logger.error(f"CHAT: ❌ Error executing agent: {e}")
@@ -4429,14 +4512,16 @@ async def execute_agent(
         chat_logger.error(f"CHAT: Traceback: {traceback.format_exc()}")
         logging.error(f"Error executing agent: {e}")
         logging.error(f"Traceback: {traceback.format_exc()}")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "status": "error",
-                "error": str(e),
-                "response": None,
-                "steps": []
-            }
+        body = {
+            "status": "error",
+            "error": str(e) if str(e) else "Unknown error occurred",
+            "response": None,
+            "steps": [],
+        }
+        return Response(
+            status_code=200,
+            content=json.dumps(body, indent=2, ensure_ascii=False),
+            media_type="application/json",
         )
 
 
@@ -6429,11 +6514,8 @@ async def move_schedule_block(
                 user_plan_id = user_plan.data[0]["id"]
                 existing_blocks = client.table("weekly_plan_blocks").select("id, course_name, course_number, start_time, end_time").eq("plan_id", user_plan_id).eq("day_of_week", new_day).execute()
                 
-                # Convert blocks_to_move_ids to strings for comparison (IDs might be strings or UUIDs)
-                blocks_to_move_ids_str = [str(bid) for bid in blocks_to_move_ids] if blocks_to_move_ids else []
-                block_id_str = str(block_id) if block_id else None
-                
                 # Check conflicts for each hour that will be moved (time_slots and new_start_idx already calculated above)
+                # Overlap is [start, end) - exclusive end, so a block 09:00-10:00 does not conflict with 10:00 start
                 for i in range(num_hours_to_move):
                     if new_start_idx + i < len(time_slots):
                         new_time = time_slots[new_start_idx + i]
@@ -6441,17 +6523,10 @@ async def move_schedule_block(
                         
                         # Check if this time slot conflicts with existing blocks
                         for existing_block in (existing_blocks.data or []):
-                            # Skip if it's one of the blocks we're moving (check by ID)
                             existing_block_id = existing_block.get("id")
-                            existing_block_id_str = str(existing_block_id) if existing_block_id else None
-                            
-                            # CRITICAL: Skip the original block being moved (even if it's not in consecutive_blocks)
-                            if existing_block_id_str in blocks_to_move_ids_str or existing_block_id_str == block_id_str:
+                            if existing_block_id and existing_block_id in blocks_to_move_ids:
                                 continue
-                            
-                            # Also skip if it's at the original location and same course (we're moving it)
-                            # This is a safety check in case ID comparison fails
-                            if existing_block.get("start_time") == original_start and existing_block.get("course_number") == course_number and new_day == original_day:
+                            if existing_block.get("start_time") == original_start and existing_block.get("course_number") == course_number:
                                 continue
                             
                             e_start = _time_to_minutes(existing_block.get("start_time", "00:00"))
@@ -11558,6 +11633,29 @@ async def get_group_members(
 
 # ==================== ASSIGNMENTS API ====================
 
+# Pre-generated architecture diagram: try static/ then app/static/
+_project_root = Path(__file__).resolve().parent.parent
+_ARCHITECTURE_PNG_CANDIDATES = [
+    _project_root / "static" / "semesteros_architecture.png",
+    _project_root / "app" / "static" / "semesteros_architecture.png",
+]
+
+
+@app.get("/api/model_architecture", response_class=Response)
+async def get_model_architecture():
+    """
+    Returns the agent architecture diagram as a PNG image (pre-generated static file).
+    Response: Content-Type image/png, body = PNG file.
+    """
+    for p in _ARCHITECTURE_PNG_CANDIDATES:
+        if p.exists():
+            return FileResponse(path=str(p), media_type="image/png")
+    raise HTTPException(
+        status_code=404,
+        detail=f"semesteros_architecture.png not found. Tried: {[str(x) for x in _ARCHITECTURE_PNG_CANDIDATES]}",
+    )
+
+
 @app.get("/api/team_info")
 async def get_team_info():
     """
@@ -11577,64 +11675,24 @@ async def get_team_info():
 @app.get("/api/agent_info")
 async def get_agent_info():
     """
-    Returns agent metadata: description, purpose, prompt template, and examples.
+    Returns agent metadata: description, purpose, prompt template, and examples (English only).
     Steps in examples match the structure returned by POST /api/execute (module, prompt, response).
     """
     return {
         "description": "Schedule and study-planning agent. Helps with courses, constraints, weekly plan, and group scheduling. Routes user requests to specialized executors (e.g. add block, move block, query schedule, RAG chat). Uses LLM for routing (with reasoning), RAG for academic Q&A, and LLM for preference summarization.",
         "purpose": "Allow students to manage their semester/weekly schedule via natural language: add or move study blocks, ask about free slots, view schedule and constraints, and coordinate with study groups. Also answers academic/informational questions via RAG.",
         "prompt_template": {
-            "template": "You can ask in Hebrew or English. Examples: 'הוסף לי 2 שעות אישיות לקורס X ביום שלישי אחרי 14:00'; 'הצג את המערכת שלי לשבוע שמתחיל 15/02/2026'; 'מתי יש לי חופשי ביום רביעי?'; 'הזז את התרגול של Y ליום חמישי 10:00'. The agent routes your request (LLM routing with reasoning) and runs the right executor (add block, move, resize, constraints, schedule, or RAG chat)."
+            "template": "Ask in English. Examples: 'Show my schedule for the week starting 15/02/2026'; 'Add a one-time constraint for a wedding on 15/03/2026 from 20:00 to 23:00'; 'Add 2 personal hours for Introduction to Computer Science on Tuesday after 14:00'; 'When am I free on Wednesday?'. The agent routes your request (LLM with reasoning) and runs the right executor (schedule, constraints, block_creator, RAG chat, etc.)."
         },
         "prompt_examples": [
             {
-                "prompt": "הוסף 2 שעות אישיות לקורס מבוא למדעי המחשב ביום שלישי אחרי 14:00",
-                "full_response": "נוספו 2 שעות אישיות לקורס 'מבוא למדעי המחשב' ביום שלישי מ-14:00. הן מופיעות במערכת השבועית שלך.",
+                "prompt": "Show my schedule for the week starting 15/02/2026",
+                "full_response": "Your weekly schedule (2026-02-15):\n\nSunday: (none)\nMonday: 08:00-10:00 | Lecture (10403) - Semester; 14:00-16:00 | Training (Constraint)\nTuesday: 10:00-12:00 | Tutorial (10403) - Semester; 14:00-16:00 | Introduction to CS (10403) - Personal\nWednesday: ...\n(Full week with semester, personal, and constraint blocks.)",
                 "steps": [
                     {
                         "module": "supervisor",
                         "prompt": {
-                            "user_prompt": "הוסף 2 שעות אישיות לקורס מבוא למדעי המחשב ביום שלישי אחרי 14:00",
-                            "routing_type": "llm"
-                        },
-                        "response": {
-                            "executor": "block_creator",
-                            "params": {
-                                "course_name": "מבוא למדעי המחשב",
-                                "day_of_week": 2,
-                                "start_time": "14:00",
-                                "duration": 2,
-                                "work_type": "personal"
-                            },
-                            "reasoning": "User asked to add 2 personal hours for a course on Tuesday after 14:00. block_creator is the appropriate executor for creating new study blocks."
-                        }
-                    },
-                    {
-                        "module": "block_creator",
-                        "prompt": {
-                            "user_prompt": "הוסף 2 שעות אישיות לקורס מבוא למדעי המחשב ביום שלישי אחרי 14:00",
-                            "course_name": "מבוא למדעי המחשב",
-                            "day_of_week": 2,
-                            "start_time": "14:00",
-                            "duration": 2,
-                            "work_type": "personal"
-                        },
-                        "response": {
-                            "status": "success",
-                            "message": "נוספו 2 שעות אישיות לקורס 'מבוא למדעי המחשב' ביום שלישי מ-14:00. הן מופיעות במערכת השבועית שלך.",
-                            "blocks_created": 2
-                        }
-                    }
-                ]
-            },
-            {
-                "prompt": "הצג את המערכת שלי לשבוע שמתחיל 15/02/2026",
-                "full_response": "המערכת השבועית שלך (15/02/2026):\n\nראשון: אין.\nשני: 08:00-10:00 | הרצאה (10403) - Semester; 14:00-16:00 | אימון (אילוץ).\nשלישי: 10:00-12:00 | תרגול (10403) - Semester...\n(המשך לפי הבלוקים והאילוצים שלך.)",
-                "steps": [
-                    {
-                        "module": "supervisor",
-                        "prompt": {
-                            "user_prompt": "הצג את המערכת שלי לשבוע שמתחיל 15/02/2026",
+                            "user_prompt": "Show my schedule for the week starting 15/02/2026",
                             "routing_type": "llm"
                         },
                         "response": {
@@ -11646,43 +11704,124 @@ async def get_agent_info():
                     {
                         "module": "schedule_retriever",
                         "prompt": {
-                            "user_prompt": "הצג את המערכת שלי לשבוע שמתחיל 15/02/2026",
+                            "user_prompt": "Show my schedule for the week starting 15/02/2026",
                             "date": "2026-02-15"
                         },
                         "response": {
                             "status": "success",
                             "week_start": "2026-02-15",
-                            "schedule_display": "המערכת השבועית שלך (2026-02-15):\n\nראשון: ...\nשני: ...",
+                            "schedule_display": "Your weekly schedule (2026-02-15):\n\nSunday: ...\nMonday: ...",
                             "total_blocks": 12
                         }
                     }
                 ]
             },
             {
-                "prompt": "מתי יש לי חופשי ביום רביעי?",
-                "full_response": "ביום רביעי יש לך חופשי בשעות: 8:00–10:00, 12:00–14:00, 16:00–18:00 (לפי האילוצים והבלוקים הנוכחיים).",
+                "prompt": "Add a one-time constraint for a wedding on 15/03/2026 from 20:00 to 23:00",
+                "full_response": "One-time constraint 'Wedding' added for 15/03/2026 (Sunday) from 20:00 to 23:00. It appears in your weekly constraints for that week.",
                 "steps": [
                     {
                         "module": "supervisor",
                         "prompt": {
-                            "user_prompt": "מתי יש לי חופשי ביום רביעי?",
+                            "user_prompt": "Add a one-time constraint for a wedding on 15/03/2026 from 20:00 to 23:00",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "constraint_manager",
+                            "params": {
+                                "action": "add",
+                                "title": "Wedding",
+                                "date": "2026-03-15",
+                                "start_time": "20:00",
+                                "end_time": "23:00",
+                                "is_permanent": False
+                            },
+                            "reasoning": "User asked to add a one-time constraint for a wedding on a specific date and time. constraint_manager handles adding weekly (one-time) constraints."
+                        }
+                    },
+                    {
+                        "module": "constraint_manager",
+                        "prompt": {
+                            "user_prompt": "Add a one-time constraint for a wedding on 15/03/2026 from 20:00 to 23:00",
+                            "action": "add",
+                            "title": "Wedding",
+                            "start_time": "20:00",
+                            "end_time": "23:00",
+                            "week_start": "2026-03-15",
+                            "days": [0]
+                        },
+                        "response": {
+                            "status": "success",
+                            "message": "One-time constraint 'Wedding' added for 15/03/2026 (Sunday) from 20:00 to 23:00."
+                        }
+                    }
+                ]
+            },
+            {
+                "prompt": "Add 2 personal hours for Introduction to Computer Science on Tuesday after 14:00",
+                "full_response": "Added 2 personal hours for 'Introduction to Computer Science' on Tuesday from 14:00. They appear in your weekly schedule.",
+                "steps": [
+                    {
+                        "module": "supervisor",
+                        "prompt": {
+                            "user_prompt": "Add 2 personal hours for Introduction to Computer Science on Tuesday after 14:00",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "block_creator",
+                            "params": {
+                                "course_name": "Introduction to Computer Science",
+                                "day_of_week": 2,
+                                "start_time": "14:00",
+                                "duration": 2,
+                                "work_type": "personal"
+                            },
+                            "reasoning": "User asked to add 2 personal study hours for a course on Tuesday after 14:00. block_creator creates new study blocks."
+                        }
+                    },
+                    {
+                        "module": "block_creator",
+                        "prompt": {
+                            "user_prompt": "Add 2 personal hours for Introduction to Computer Science on Tuesday after 14:00",
+                            "course_name": "Introduction to Computer Science",
+                            "day_of_week": 2,
+                            "start_time": "14:00",
+                            "duration": 2,
+                            "work_type": "personal"
+                        },
+                        "response": {
+                            "status": "success",
+                            "message": "Added 2 personal hours for 'Introduction to Computer Science' on Tuesday from 14:00. They appear in your weekly schedule.",
+                            "blocks_created": 2
+                        }
+                    }
+                ]
+            },
+            {
+                "prompt": "When am I free on Wednesday?",
+                "full_response": "On Wednesday you have free slots at: 08:00-10:00, 12:00-14:00, 16:00-18:00 (based on your current blocks and constraints).",
+                "steps": [
+                    {
+                        "module": "supervisor",
+                        "prompt": {
+                            "user_prompt": "When am I free on Wednesday?",
                             "routing_type": "llm"
                         },
                         "response": {
                             "executor": "schedule_retriever",
                             "params": {},
-                            "reasoning": "User asked for free slots on Wednesday. schedule_retriever returns the full schedule; free slots can be derived from the schedule display or a dedicated flow."
+                            "reasoning": "User asked for free slots on Wednesday. schedule_retriever returns the full schedule; free slots can be derived from the schedule display."
                         }
                     },
                     {
                         "module": "schedule_retriever",
                         "prompt": {
-                            "user_prompt": "מתי יש לי חופשי ביום רביעי?"
+                            "user_prompt": "When am I free on Wednesday?"
                         },
                         "response": {
                             "status": "success",
                             "schedule_display": "...",
-                            "message": "ביום רביעי יש לך חופשי בשעות: 8:00–10:00, 12:00–14:00, 16:00–18:00 (לפי האילוצים והבלוקים הנוכחיים)."
+                            "message": "On Wednesday you have free slots at: 08:00-10:00, 12:00-14:00, 16:00-18:00 (based on your current blocks and constraints)."
                         }
                     }
                 ]

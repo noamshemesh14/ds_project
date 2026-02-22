@@ -38,7 +38,8 @@ Thumbs.db
 
 # RAG data (keep rag_data/.gitkeep; do not commit large data files)
 rag_data/*.txt
-rag_data_additional/*.txt
+rag_data_additional/*
+!rag_data_additional/README.txt
 rag_data/*.csv
 
 # Logs
