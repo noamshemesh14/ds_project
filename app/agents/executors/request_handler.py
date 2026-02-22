@@ -125,6 +125,10 @@ class RequestHandler:
                     # These are invitations where the group hasn't been created yet
                     pending_invitations = []
                     pending_group_info_list = []  # Store pending_group_creations info for later use
+                    
+                    # STRATEGY: First, try to find invitations directly (with NULL group_id)
+                    # Then, if we have group_name/course_number, also check pending_group_creations
+                    
                     if group_name or course_number:
                         try:
                             # Find pending_group_creations matching the criteria
@@ -145,8 +149,10 @@ class RequestHandler:
                             
                             if pending_result.data:
                                 # For each pending group creation, find invitations with NULL group_id
+                                logger.info(f"✅ Found {len(pending_result.data)} pending_group_creations matching criteria")
                                 for pending_group in pending_result.data:
                                     inviter_id = pending_group.get("inviter_id")
+                                    logger.info(f"   🔍 Checking inviter {inviter_id} for pending_group '{pending_group.get('group_name')}'...")
                                     
                                     # #region agent log
                                     # First, check ALL invitations from this inviter (with and without NULL group_id)
@@ -170,8 +176,10 @@ class RequestHandler:
                                     
                                     # CRITICAL: First try to find invitations with NULL group_id
                                     # Check both pending AND accepted invitations (accepted might mean group not created yet)
-                                    inv_result_pending = client.table("group_invitations").select("id, status").eq("inviter_id", inviter_id).is_("group_id", "null").eq("invitee_user_id", user_id).eq("status", "pending").execute()
-                                    inv_result_accepted = client.table("group_invitations").select("id, status").eq("inviter_id", inviter_id).is_("group_id", "null").eq("invitee_user_id", user_id).eq("status", "accepted").execute()
+                                    # IMPORTANT: We need to get the MOST RECENT invitation, not all of them
+                                    # Use order by created_at desc and limit 1 to get only the latest
+                                    inv_result_pending = client.table("group_invitations").select("id, status").eq("inviter_id", inviter_id).is_("group_id", "null").eq("invitee_user_id", user_id).eq("status", "pending").order("created_at", desc=True).limit(1).execute()
+                                    inv_result_accepted = client.table("group_invitations").select("id, status").eq("inviter_id", inviter_id).is_("group_id", "null").eq("invitee_user_id", user_id).eq("status", "accepted").order("created_at", desc=True).limit(1).execute()
                                     
                                     # #region agent log
                                     try:
@@ -262,6 +270,7 @@ class RequestHandler:
                             # #endregion
                     
                     # Also try direct search in group_invitations with NULL group_id
+                    # IMPORTANT: Check BOTH pending AND accepted invitations (in case user already accepted via UI)
                     try:
                         # #region agent log
                         try:
@@ -270,8 +279,9 @@ class RequestHandler:
                         except: pass
                         # #endregion
                         
-                        # Get all pending invitations for this user with NULL group_id
-                        direct_inv_query = client.table("group_invitations").select("id, inviter_id, group_id").eq("invitee_user_id", user_id).is_("group_id", "null").eq("status", "pending").execute()
+                        # Get all pending OR accepted invitations for this user with NULL group_id
+                        # (accepted means user already approved but group not created yet)
+                        direct_inv_query = client.table("group_invitations").select("id, inviter_id, group_id, status").eq("invitee_user_id", user_id).is_("group_id", "null").in_("status", ["pending", "accepted"]).order("created_at", desc=True).execute()
                         
                         # #region agent log
                         try:
@@ -913,12 +923,53 @@ class RequestHandler:
                             logger.info(f"   ℹ️ Invitation already accepted but group not created yet. Checking if all invitees accepted...")
                             inviter_id = invitation.get("inviter_id")
                             
+                            # CRITICAL: Get course_id from pending_group_creations to filter invitations
+                            # This ensures we only count invitations for THIS specific course
+                            pending_creation = None
+                            course_id_for_batch = None
+                            try:
+                                pending_result = client.table("pending_group_creations").select("*").eq("inviter_id", inviter_id).order("created_at", desc=True).limit(1).execute()
+                                if pending_result.data:
+                                    pending_creation = pending_result.data[0]
+                                    course_id_for_batch = pending_creation.get("course_id")
+                                    logger.info(f"   ✅ Found pending group creation with course_id={course_id_for_batch}")
+                                else:
+                                    logger.warning(f"   ⚠️ No pending_group_creations found for inviter {inviter_id}")
+                            except Exception as pending_err:
+                                logger.warning(f"   ⚠️ Could not get pending group creation: {pending_err}")
+                            
                             # Get all invitations from the same inviter with NULL group_id
                             all_invitations = client.table("group_invitations").select("*").eq("inviter_id", inviter_id).is_("group_id", "null").execute()
                             
                             if all_invitations.data:
-                                # Check if all are accepted
-                                all_accepted = all(inv.get("status") == "accepted" for inv in all_invitations.data)
+                                # Filter by course_id AND exclude rejected invitations
+                                active_invitations = []
+                                for inv in all_invitations.data:
+                                    inv_status = inv.get("status")
+                                    
+                                    # Skip rejected invitations
+                                    if inv_status == "rejected":
+                                        logger.info(f"      ⏭️ Invitation {inv.get('id')} is rejected - SKIPPING")
+                                        continue
+                                    
+                                    # If we have course_id, check if invitee has this course
+                                    if course_id_for_batch:
+                                        invitee_id = inv.get("invitee_user_id")
+                                        if invitee_id:
+                                            invitee_course = client.table("courses").select("course_number").eq("user_id", invitee_id).eq("course_number", course_id_for_batch).execute()
+                                            if invitee_course.data:
+                                                active_invitations.append(inv)
+                                                logger.info(f"      ✅ Invitation {inv.get('id')} matches course {course_id_for_batch} (status: {inv_status})")
+                                            else:
+                                                logger.info(f"      ⏭️ Invitation {inv.get('id')} is for a different course - SKIPPING")
+                                    else:
+                                        # No course_id filter, include all non-rejected
+                                        active_invitations.append(inv)
+                                
+                                logger.info(f"   📊 Found {len(all_invitations.data)} total invitations, {len(active_invitations)} active (excluding rejected and other courses)")
+                                
+                                # Check if all ACTIVE invitations are accepted
+                                all_accepted = all(inv.get("status") == "accepted" for inv in active_invitations)
                                 
                                 if all_accepted:
                                     # All accepted! Create the group now (same logic as accept_invitation endpoint)
@@ -1012,8 +1063,8 @@ class RequestHandler:
                                         "group_id": new_group_id
                                     }).eq("inviter_id", inviter_id).is_("group_id", "null").execute()
                                     
-                                    # Add all accepted invitees as members
-                                    for inv in all_invitations.data:
+                                    # Add all accepted invitees as members (excluding rejected)
+                                    for inv in active_invitations:
                                         invitee_id = inv.get("invitee_user_id")
                                         if invitee_id and invitee_id != inviter_id:
                                             try:
@@ -1040,11 +1091,15 @@ class RequestHandler:
                                     }
                                 else:
                                     # Not all accepted yet - return message like UI does
-                                    logger.info(f"   ⏳ Not all invitees accepted yet. Waiting for others...")
+                                    accepted_count = len([inv for inv in active_invitations if inv.get("status") == "accepted"])
+                                    total_count = len(active_invitations)
+                                    logger.info(f"   ⏳ Not all invitees accepted yet. Waiting for others... ({accepted_count}/{total_count})")
                                     return {
                                         "status": "success",
-                                        "message": "Invitation accepted. Group will be created when all invitees accept.",
-                                        "group_created": False
+                                        "message": f"Invitation accepted. Waiting for other members ({accepted_count}/{total_count} approved).",
+                                        "group_created": False,
+                                        "approved_count": accepted_count,
+                                        "total_needed": total_count
                                     }
                             else:
                                 raise HTTPException(status_code=400, detail="Could not find related invitations")
@@ -1067,12 +1122,53 @@ class RequestHandler:
                         
                         inviter_id = invitation.get("inviter_id")
                         
+                        # CRITICAL: Get course_id from pending_group_creations to filter invitations
+                        # This ensures we only count invitations for THIS specific course
+                        pending_creation = None
+                        course_id_for_batch = None
+                        try:
+                            pending_result = client.table("pending_group_creations").select("*").eq("inviter_id", inviter_id).order("created_at", desc=True).limit(1).execute()
+                            if pending_result.data:
+                                pending_creation = pending_result.data[0]
+                                course_id_for_batch = pending_creation.get("course_id")
+                                logger.info(f"   ✅ Found pending group creation with course_id={course_id_for_batch}")
+                            else:
+                                logger.warning(f"   ⚠️ No pending_group_creations found for inviter {inviter_id}")
+                        except Exception as pending_err:
+                            logger.warning(f"   ⚠️ Could not get pending group creation: {pending_err}")
+                        
                         # Get all invitations from the same inviter with NULL group_id
                         all_invitations = client.table("group_invitations").select("*").eq("inviter_id", inviter_id).is_("group_id", "null").execute()
                         
                         if all_invitations.data:
-                            # Check if all are accepted (now including the one we just accepted)
-                            all_accepted = all(inv.get("status") == "accepted" for inv in all_invitations.data)
+                            # Filter by course_id AND exclude rejected invitations
+                            active_invitations = []
+                            for inv in all_invitations.data:
+                                inv_status = inv.get("status")
+                                
+                                # Skip rejected invitations
+                                if inv_status == "rejected":
+                                    logger.info(f"      ⏭️ Invitation {inv.get('id')} is rejected - SKIPPING")
+                                    continue
+                                
+                                # If we have course_id, check if invitee has this course
+                                if course_id_for_batch:
+                                    invitee_id = inv.get("invitee_user_id")
+                                    if invitee_id:
+                                        invitee_course = client.table("courses").select("course_number").eq("user_id", invitee_id).eq("course_number", course_id_for_batch).execute()
+                                        if invitee_course.data:
+                                            active_invitations.append(inv)
+                                            logger.info(f"      ✅ Invitation {inv.get('id')} matches course {course_id_for_batch} (status: {inv_status})")
+                                        else:
+                                            logger.info(f"      ⏭️ Invitation {inv.get('id')} is for a different course - SKIPPING")
+                                else:
+                                    # No course_id filter, include all non-rejected
+                                    active_invitations.append(inv)
+                            
+                            logger.info(f"   📊 Found {len(all_invitations.data)} total invitations, {len(active_invitations)} active (excluding rejected and other courses)")
+                            
+                            # Check if all ACTIVE invitations are accepted (now including the one we just accepted)
+                            all_accepted = all(inv.get("status") == "accepted" for inv in active_invitations)
                             
                             if all_accepted:
                                 # All accepted! Create the group now (same logic as above)
@@ -1088,6 +1184,7 @@ class RequestHandler:
                                 except Exception as pending_err:
                                     logger.warning(f"   ⚠️ Could not get pending group creation: {pending_err}")
                                 
+                                # Use pending_creation info (we already fetched it above)
                                 if pending_creation:
                                     # Use the stored group info
                                     group_name = pending_creation.get("group_name") or "Study Group"
@@ -1096,7 +1193,7 @@ class RequestHandler:
                                     description = pending_creation.get("description")
                                 else:
                                     # Fallback: Get group info by finding the common course
-                                    accepted_invitee_ids = [inv.get("invitee_user_id") for inv in all_invitations.data if inv.get("invitee_user_id")]
+                                    accepted_invitee_ids = [inv.get("invitee_user_id") for inv in active_invitations if inv.get("invitee_user_id")]
                                     
                                     inviter_courses = client.table("courses").select("course_number, course_name").eq("user_id", inviter_id).execute()
                                     inviter_course_numbers = {c.get("course_number"): c.get("course_name") for c in (inviter_courses.data or [])}
@@ -1166,8 +1263,8 @@ class RequestHandler:
                                     "group_id": new_group_id
                                 }).eq("inviter_id", inviter_id).is_("group_id", "null").execute()
                                 
-                                # Add all accepted invitees as members
-                                for inv in all_invitations.data:
+                                # Add all accepted invitees as members (excluding rejected)
+                                for inv in active_invitations:
                                     invitee_id = inv.get("invitee_user_id")
                                     if invitee_id and invitee_id != inviter_id:
                                         try:
@@ -1194,11 +1291,15 @@ class RequestHandler:
                                 }
                             else:
                                 # Not all accepted yet - return message like UI does
-                                logger.info(f"   ⏳ Not all invitees accepted yet. Waiting for others...")
+                                accepted_count = len([inv for inv in active_invitations if inv.get("status") == "accepted"])
+                                total_count = len(active_invitations)
+                                logger.info(f"   ⏳ Not all invitees accepted yet. Waiting for others... ({accepted_count}/{total_count})")
                                 return {
                                     "status": "success",
-                                    "message": "Invitation accepted. Group will be created when all invitees accept.",
-                                    "group_created": False
+                                    "message": f"Invitation accepted. Waiting for other members ({accepted_count}/{total_count} approved).",
+                                    "group_created": False,
+                                    "approved_count": accepted_count,
+                                    "total_needed": total_count
                                 }
                         else:
                             raise HTTPException(status_code=400, detail="Could not find related invitations")

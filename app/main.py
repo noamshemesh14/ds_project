@@ -10015,19 +10015,27 @@ async def create_study_group(
         
             # Check 3: Pending invitations where user is the inviter (creator) for the same course
             # Since group_id might be NULL, we need to check invitations with NULL group_id
-            # and match by checking if the inviter has other pending invitations
+            # and match by checking if the inviter has other pending invitations FOR THE SAME COURSE
             pending_invitations_as_inviter = client.table("group_invitations").select("id, group_id").eq("inviter_id", user_id).eq("status", "pending").execute()
             if pending_invitations_as_inviter.data:
                 # Check if any of these invitations have NULL group_id (meaning group not created yet)
                 # This indicates there's a pending group creation for this inviter
                 has_null_group_id = any(inv.get("group_id") is None or str(inv.get("group_id", "")).strip().lower() in ["null", "none", ""] for inv in pending_invitations_as_inviter.data)
                 if has_null_group_id:
-                    error_msg = f"You already have a pending group invitation. Please wait for responses or cancel the existing invitation before creating a new group."
-                    logging.error(f"   ❌ {error_msg}")
-                    raise HTTPException(
-                        status_code=400,
-                        detail=error_msg
-                    )
+                    # Check if the pending group is for the same course
+                    try:
+                        pending_creation = client.table("pending_group_creations").select("course_id").eq("inviter_id", user_id).eq("course_id", course_number).execute()
+                        if pending_creation.data:
+                            error_msg = f"You already have a pending group invitation for this course. Please wait for responses or cancel the existing invitation before creating a new group."
+                            logging.error(f"   ❌ {error_msg}")
+                            raise HTTPException(
+                                status_code=400,
+                                detail=error_msg
+                            )
+                    except Exception as pending_check_err:
+                        # If table doesn't exist or query fails, allow creation (fallback behavior)
+                        logging.warning(f"⚠️ Could not check pending_group_creations for course {course_number}: {pending_check_err}")
+                        # Don't block creation if we can't check - allow it to proceed
         
         # CRITICAL: Group should only be created AFTER all invitees accept
         # We always have at least one eligible invitee (validated above)
@@ -10076,19 +10084,6 @@ async def create_study_group(
                     "status": "pending"
                 }
                 
-                # Create notification immediately for registered users
-                try:
-                    client.table("notifications").insert({
-                        "user_id": user_check.id,
-                        "type": "group_invitation",
-                        "title": f"Study group invitation: {group_data.group_name}",
-                        "message": f"{user_email} invited you to join a study group for course {group_data.course_name}",
-                        "link": f"/my-courses?group={group_id}",
-                        "read": False
-                    }).execute()
-                except Exception as notif_error:
-                    logging.warning(f"Failed to create notification for {email}: {notif_error}")
-                
                 invitation_result = client.table("group_invitations").insert(invitation_data).execute()
                 
                 if invitation_result.data:
@@ -10096,13 +10091,25 @@ async def create_study_group(
                     invitations_created.append(email)
                     logging.info(f"✅ Created invitation for registered user: {email}")
                     
-                    # Update notification with invitation_id if it was created
+                    # Create notification with invitation_id in link (AFTER invitation is created)
                     try:
-                        client.table("notifications").update({
-                            "link": f"/my-courses?group={group_id}&invitation={invitation_id}"
-                        }).eq("user_id", user_check.id).eq("type", "group_invitation").eq("link", f"/my-courses?group={group_id}").order("created_at", desc=True).limit(1).execute()
-                    except Exception as update_error:
-                        logging.warning(f"Failed to update notification with invitation_id: {update_error}")
+                        # Build link with invitation_id (group_id might be None, that's OK)
+                        if group_id:
+                            link = f"/my-courses?group={group_id}&invitation={invitation_id}"
+                        else:
+                            link = f"/my-courses?invitation={invitation_id}"
+                        
+                        client.table("notifications").insert({
+                            "user_id": user_check.id,
+                            "type": "group_invitation",
+                            "title": f"Study group invitation: {group_data.group_name}",
+                            "message": f"{user_email} invited you to join a study group for course {group_data.course_name}",
+                            "link": link,
+                            "read": False
+                        }).execute()
+                        logging.info(f"✅ Created notification with invitation_id for {email}")
+                    except Exception as notif_error:
+                        logging.warning(f"Failed to create notification for {email}: {notif_error}")
                 else:
                     invitations_failed.append(email)
                     logging.error(f"❌ Failed to create invitation for {email}")
@@ -10376,25 +10383,55 @@ async def get_invitation_by_notification(
             group_id = group_match.group(1)
             logging.info(f"🔍 Looking for invitation by group_id={group_id}")
             
-            # Find invitation by group and user - try user_id first
-            result = supabase.table("group_invitations").select("*").eq("group_id", group_id).eq("invitee_user_id", user_id).eq("status", "pending").execute()
+            # Check if group_id is "None" or "null" (meaning group not created yet)
+            group_id_is_null = group_id.lower() in ["none", "null", ""]
             
-            logging.info(f"📊 Search by user_id: found {len(result.data) if result.data else 0} invitations")
-            
-            if not result.data or len(result.data) == 0:
-                # Try by email
-                if user_email:
-                    logging.info(f"🔍 Trying to find by email: {user_email}")
-                    result = supabase.table("group_invitations").select("*").eq("group_id", group_id).eq("invitee_email", user_email).eq("status", "pending").execute()
-                    logging.info(f"📊 Search by email: found {len(result.data) if result.data else 0} invitations")
-            
-            # If still not found, try without status filter (maybe it's not pending?)
-            if not result.data or len(result.data) == 0:
-                logging.info(f"🔍 Trying without status filter")
-                result = supabase.table("group_invitations").select("*").eq("group_id", group_id).eq("invitee_user_id", user_id).execute()
+            if group_id_is_null:
+                # Group not created yet - find invitation with NULL group_id
+                logging.info(f"🔍 Group not created yet, searching for invitation with NULL group_id")
+                # Use admin client to bypass RLS if needed
+                client = supabase_admin if supabase_admin else supabase
+                result = client.table("group_invitations").select("*").is_("group_id", "null").eq("invitee_user_id", user_id).eq("status", "pending").order("created_at", desc=True).execute()
+                
+                logging.info(f"📊 Search by user_id with NULL group_id: found {len(result.data) if result.data else 0} invitations")
+                
                 if not result.data or len(result.data) == 0:
-                    result = supabase.table("group_invitations").select("*").eq("group_id", group_id).eq("invitee_email", user_email).execute()
-                logging.info(f"📊 Search without status: found {len(result.data) if result.data else 0} invitations")
+                    # Try by email
+                    if user_email:
+                        logging.info(f"🔍 Trying to find by email: {user_email}")
+                        result = client.table("group_invitations").select("*").is_("group_id", "null").eq("invitee_email", user_email).eq("status", "pending").order("created_at", desc=True).execute()
+                        logging.info(f"📊 Search by email with NULL group_id: found {len(result.data) if result.data else 0} invitations")
+            else:
+                # Group exists - find invitation by group_id
+                result = supabase.table("group_invitations").select("*").eq("group_id", group_id).eq("invitee_user_id", user_id).eq("status", "pending").execute()
+                
+                logging.info(f"📊 Search by user_id: found {len(result.data) if result.data else 0} invitations")
+                
+                if not result.data or len(result.data) == 0:
+                    # Try by email
+                    if user_email:
+                        logging.info(f"🔍 Trying to find by email: {user_email}")
+                        result = supabase.table("group_invitations").select("*").eq("group_id", group_id).eq("invitee_email", user_email).eq("status", "pending").execute()
+                        logging.info(f"📊 Search by email: found {len(result.data) if result.data else 0} invitations")
+                
+                # If still not found, try without status filter (maybe it's not pending?)
+                if not result.data or len(result.data) == 0:
+                    logging.info(f"🔍 Trying without status filter")
+                    result = supabase.table("group_invitations").select("*").eq("group_id", group_id).eq("invitee_user_id", user_id).execute()
+                    if not result.data or len(result.data) == 0:
+                        result = supabase.table("group_invitations").select("*").eq("group_id", group_id).eq("invitee_email", user_email).execute()
+                    logging.info(f"📊 Search without status: found {len(result.data) if result.data else 0} invitations")
+            
+            if result.data and len(result.data) > 0:
+                # Get the most recent one
+                invitation = result.data[0]
+                logging.info(f"✅ Found invitation: id={invitation['id']}, status={invitation.get('status')}")
+                return JSONResponse(content={"invitation_id": invitation['id']})
+        else:
+            # No group_id in link - might be invitation_id only, or need to search by NULL group_id
+            logging.info(f"🔍 No group_id in link, searching for invitation with NULL group_id")
+            client = supabase_admin if supabase_admin else supabase
+            result = client.table("group_invitations").select("*").is_("group_id", "null").eq("invitee_user_id", user_id).eq("status", "pending").order("created_at", desc=True).execute()
             
             if result.data and len(result.data) > 0:
                 # Get the most recent one
@@ -10442,7 +10479,20 @@ async def accept_invitation(
             raise HTTPException(status_code=400, detail="Invalid invitation ID")
         
         # Get invitation (using the selected client)
+        # First try with status filter
         invitation_result = client.table("group_invitations").select("*").eq("id", invitation_id).eq("invitee_user_id", user_id).eq("status", "pending").execute()
+        
+        # If not found, try without status filter (maybe it was already processed but we need to check)
+        if not invitation_result.data:
+            logging.info(f"🔍 Invitation not found with status=pending, trying without status filter")
+            invitation_result = client.table("group_invitations").select("*").eq("id", invitation_id).eq("invitee_user_id", user_id).execute()
+        
+        # If still not found, try by email (in case user_id doesn't match)
+        if not invitation_result.data:
+            user_email = current_user.get('email')
+            if user_email:
+                logging.info(f"🔍 Invitation not found by user_id, trying by email: {user_email}")
+                invitation_result = client.table("group_invitations").select("*").eq("id", invitation_id).eq("invitee_email", user_email).eq("status", "pending").execute()
         
         if not invitation_result.data:
             logging.warning(f"❌ Invitation {invitation_id} not found for user {user_id} or already processed.")
@@ -10496,16 +10546,21 @@ async def accept_invitation(
             user_id_str = str(user_id).strip()
             if user_id_str.lower() in ["null", "none", ""]:
                 logging.error(f"❌ Invalid user_id (string null): {user_id}")
-            raise HTTPException(status_code=400, detail="Invalid user_id")
+                raise HTTPException(status_code=400, detail="Invalid user_id")
         
         # Update invitation status FIRST
-        client.table("group_invitations").update({
+        update_result = client.table("group_invitations").update({
             "status": "accepted",
             "responded_at": "now()"
         }).eq("id", invitation_id).execute()
-        logging.info(f"✅ Updated invitation status to accepted")
+        logging.info(f"✅ Updated invitation {invitation_id} status to accepted")
+        if update_result.data:
+            logging.info(f"   ✅ Update confirmed: {update_result.data[0].get('status')}")
+        else:
+            logging.warning(f"   ⚠️ Update result has no data")
         
         # CRITICAL: If group_id is NULL, check if all invitees accepted and create group
+        group_was_created = False  # Flag to track if we created the group
         if group_id_is_null:
             logging.info(f"   🔍 Group not created yet. Checking if all invitees accepted...")
             
@@ -10517,16 +10572,149 @@ async def accept_invitation(
             inv_info = invitation_info.data[0]
             inviter_id_from_inv = inv_info.get("inviter_id")
             
-            # Find all invitations from the same inviter with NULL group_id (same batch)
-            all_invitations = client.table("group_invitations").select("*").eq("inviter_id", inviter_id_from_inv).is_("group_id", "null").execute()
+            # Get pending_group_creation to find the course_id for this batch
+            pending_creation = None
+            course_id_for_batch = None
+            try:
+                pending_result = client.table("pending_group_creations").select("*").eq("inviter_id", inviter_id_from_inv).order("created_at", desc=True).limit(1).execute()
+                if pending_result.data:
+                    pending_creation = pending_result.data[0]
+                    course_id_for_batch = pending_creation.get("course_id")
+                    logging.info(f"   ✅ Found pending group creation with course_id={course_id_for_batch}")
+                else:
+                    logging.warning(f"   ⚠️ No pending_group_creations found for inviter {inviter_id_from_inv}")
+            except Exception as pending_err:
+                logging.warning(f"   ⚠️ Could not get pending group creation: {pending_err}")
+            
+            # If no course_id from pending_group_creations, try to determine from common courses
+            if not course_id_for_batch:
+                logging.info(f"   🔍 No course_id in pending_group_creations, determining from common courses...")
+                
+                # Get all invitations from this inviter with NULL group_id
+                temp_invitations = client.table("group_invitations").select("*").eq("inviter_id", inviter_id_from_inv).is_("group_id", "null").execute()
+                
+                if temp_invitations.data:
+                    # Get inviter's courses
+                    inviter_courses = client.table("courses").select("course_number, course_name").eq("user_id", inviter_id_from_inv).execute()
+                    inviter_course_numbers = {c.get("course_number"): c.get("course_name") for c in (inviter_courses.data or [])}
+                    
+                    logging.info(f"   📚 Inviter has {len(inviter_course_numbers)} courses")
+                    
+                    # Find common course between inviter and ALL invitees
+                    for course_num, course_name in inviter_course_numbers.items():
+                        all_invitees_have_course = True
+                        for inv in temp_invitations.data:
+                            invitee_id = inv.get("invitee_user_id")
+                            if invitee_id:
+                                invitee_courses = client.table("courses").select("course_number").eq("user_id", invitee_id).eq("course_number", course_num).execute()
+                                if not invitee_courses.data:
+                                    all_invitees_have_course = False
+                                    break
+                        
+                        if all_invitees_have_course:
+                            course_id_for_batch = course_num
+                            logging.info(f"   ✅ Found common course: {course_num} ({course_name})")
+                            break
+            
+            # If still no course_id, we can't proceed
+            if not course_id_for_batch:
+                logging.error(f"   ❌ Could not determine course_id for inviter {inviter_id_from_inv}")
+                raise HTTPException(status_code=500, detail="Could not determine course for this invitation. Please contact support.")
+            
+            logging.info(f"   🔍 Finding all invitations for inviter={inviter_id_from_inv}, course={course_id_for_batch}, group_id=NULL")
+            
+            # Get ALL invitations from this inviter with NULL group_id
+            all_invitations_result = client.table("group_invitations").select("*").eq("inviter_id", inviter_id_from_inv).is_("group_id", "null").execute()
+            
+            logging.info(f"   📊 Found {len(all_invitations_result.data) if all_invitations_result.data else 0} invitations with NULL group_id from this inviter")
+            
+            # Filter to only invitations for THIS specific course (from pending_group_creations)
+            # IMPORTANT: Exclude rejected invitations - they should not block group creation
+            filtered_invitations = []
+            if all_invitations_result.data and course_id_for_batch:
+                # For each invitation, check if the invitee has the course
+                # and EXCLUDE rejected invitations (old invitations that were declined)
+                for inv in all_invitations_result.data:
+                    inv_status = inv.get("status")
+                    
+                    # Skip rejected invitations - they are old and should not block group creation
+                    if inv_status == "rejected":
+                        logging.info(f"      ⏭️ Invitation {inv.get('id')} is rejected - SKIPPING")
+                        continue
+                    
+                    invitee_id = inv.get("invitee_user_id")
+                    if invitee_id:
+                        # Check if invitee has this specific course
+                        invitee_course = client.table("courses").select("course_number").eq("user_id", invitee_id).eq("course_number", course_id_for_batch).execute()
+                        if invitee_course.data:
+                            filtered_invitations.append(inv)
+                            logging.info(f"      ✅ Invitation {inv.get('id')} matches course {course_id_for_batch} (status: {inv_status})")
+                        else:
+                            logging.info(f"      ⏭️ Invitation {inv.get('id')} is for a different course (invitee doesn't have {course_id_for_batch})")
+                    else:
+                        logging.warning(f"      ⚠️ Invitation {inv.get('id')} has no invitee_user_id")
+            else:
+                # No course_id or no invitations - use all (but still exclude rejected)
+                if all_invitations_result.data:
+                    filtered_invitations = [inv for inv in all_invitations_result.data if inv.get("status") != "rejected"]
+                else:
+                    filtered_invitations = []
+            
+            logging.info(f"   📊 Filtered to {len(filtered_invitations)} active invitations for course {course_id_for_batch} (excluded rejected)")
+            
+            logging.info(f"   📊 Total invitations found: {len(filtered_invitations)}")
+            if filtered_invitations:
+                for inv in filtered_invitations:
+                    inv_id = inv.get("id")
+                    invitee_id = inv.get("invitee_user_id")
+                    invitee_email = inv.get("invitee_email")
+                    inv_status = inv.get("status")
+                    logging.info(f"      📋 Invitation {inv_id}: invitee_id={invitee_id}, email={invitee_email}, status='{inv_status}'")
+            else:
+                logging.error(f"   ❌❌❌ NO INVITATIONS FOUND! This should not happen! ❌❌❌")
+            
+            all_invitations = type('obj', (object,), {'data': filtered_invitations})()
+            logging.info(f"   📊 Total invitations to check for acceptance: {len(filtered_invitations)}")
+            
+            # CRITICAL: If no invitations found, this is a problem!
+            if not filtered_invitations or len(filtered_invitations) == 0:
+                logging.error(f"   ❌❌❌ CRITICAL ERROR: No invitations found for this course! ❌❌❌")
+                logging.error(f"   📊 Debug info:")
+                logging.error(f"      - inviter_id: {inviter_id_from_inv}")
+                logging.error(f"      - course_id: {course_id_for_batch}")
+                logging.error(f"      - Total invitations with NULL group_id: {len(all_invitations_result.data) if all_invitations_result.data else 0}")
+                # This means the invitee is not registered for this course, or there's a data issue
+                # We should still mark the invitation as accepted, but not create the group
+                return JSONResponse(content={
+                    "success": True,
+                    "message": "Invitation accepted, but there was an issue determining the group members. Please contact support.",
+                    "group_created": False,
+                    "error": "No invitations found for this course"
+                })
             
             if all_invitations.data:
                 # Check if all are accepted
+                logging.info(f"   🔍 Checking if all {len(all_invitations.data)} invitations are accepted...")
+                
+                # Log each invitation status for debugging
+                accepted_count = 0
+                pending_count = 0
+                for inv in all_invitations.data:
+                    inv_status = inv.get('status')
+                    logging.info(f"      📋 Invitation {inv.get('id')}: status='{inv_status}', invitee={inv.get('invitee_user_id')}")
+                    if inv_status == "accepted":
+                        accepted_count += 1
+                    elif inv_status == "pending":
+                        pending_count += 1
+                
                 all_accepted = all(inv.get("status") == "accepted" for inv in all_invitations.data)
+                logging.info(f"   📊 Summary: {accepted_count} accepted, {pending_count} pending out of {len(all_invitations.data)} total")
+                logging.info(f"   📊 All accepted? {all_accepted}")
                 
                 if all_accepted:
+                    logging.info(f"   🎉🎉🎉 ALL {len(all_invitations.data)} INVITATIONS ACCEPTED - CREATING GROUP! 🎉🎉🎉")
                     # All accepted! Create the group now
-                    logging.info(f"   ✅ All invitees accepted! Creating group...")
+                    logging.info(f"   ✅✅✅ ALL INVITEES ACCEPTED! CREATING GROUP NOW... ✅✅✅")
                     
                     # Get group info from pending_group_creations table
                     pending_creation = None
@@ -10627,9 +10815,17 @@ async def accept_invitation(
                     logging.info(f"   ✅ Group {new_group_id} created and all invitations updated")
                 else:
                     # Not all accepted yet - wait
-                    logging.info(f"   ⏳ Not all invitees accepted yet. Waiting for others...")
+                    logging.warning(f"   ⏳⏳⏳ NOT ALL INVITEES ACCEPTED YET - WAITING ⏳⏳⏳")
+                    logging.warning(f"   📊 Breakdown:")
+                    for inv in all_invitations.data:
+                        logging.warning(f"      - Invitation {inv.get('id')}: status='{inv.get('status')}'")
                     # Don't add member yet - wait for all to accept
-                    return JSONResponse(content={"success": True, "message": "Invitation accepted. Group will be created when all invitees accept."})
+                    return JSONResponse(content={
+                        "success": True, 
+                        "message": "Invitation accepted. Waiting for other members to accept before creating the group.",
+                        "group_created": False,
+                        "pending_acceptances": len([inv for inv in all_invitations.data if inv.get("status") != "accepted"])
+                    })
         
         # Now add user to group members (group exists or was just created)
         import re
@@ -10768,7 +10964,20 @@ async def accept_invitation(
         except Exception as notif_update_err:
             logging.warning(f"⚠️ Could not update notification: {notif_update_err}")
         
-        return JSONResponse(content={"success": True, "message": "Invitation accepted"})
+        # Return appropriate message based on whether group was created
+        if group_was_created:
+            return JSONResponse(content={
+                "success": True, 
+                "message": "Invitation accepted successfully! The study group has been created.",
+                "group_created": True,
+                "group_id": group_id_str
+            })
+        else:
+            return JSONResponse(content={
+                "success": True, 
+                "message": "Invitation accepted successfully! You have been added to the study group.",
+                "group_created": False
+            })
         
     except HTTPException:
         raise
