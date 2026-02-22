@@ -80,21 +80,62 @@ _llm_debug_cache = {}
 app = FastAPI(title="Student Planner System", description="סוכן חכם לתכנון מערכת קורסים ולימודים")
 
 # Background scheduler for weekly auto-planning (UTC to avoid local TZ misfires)
-scheduler = BackgroundScheduler(timezone="UTC")
+# daemon=False ensures scheduler keeps running even if main thread is busy
+scheduler = BackgroundScheduler(timezone="UTC", daemon=False)
 
 
 @app.on_event("startup")
 def _start_scheduler():
     try:
-        # Run every Friday at 12:43 (3 minutes from now)
-        scheduler.add_job(
-            _run_weekly_auto_for_all_users_sync,
-            CronTrigger(day_of_week="fri", hour=12, minute=43),
-            id="weekly_auto_plan",
-            replace_existing=True,
-        )
+        now_utc = datetime.now(timezone.utc)
+        target_hour = 18
+        target_minute = 47
+        
+        # Check if today is Sunday and time hasn't passed yet
+        is_sunday = now_utc.weekday() == 6  # Sunday is 6
+        target_time_today = now_utc.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+        time_has_passed = now_utc >= target_time_today
+        
+        # If today is Sunday and time hasn't passed, schedule for today
+        if is_sunday and not time_has_passed:
+            logging.info(f"📅 Today is Sunday and {target_hour}:{target_minute:02d} UTC hasn't passed yet - scheduling for today")
+            scheduler.add_job(
+                _run_weekly_auto_for_all_users_sync,
+                DateTrigger(run_date=target_time_today),
+                id="weekly_auto_plan_today",
+                replace_existing=True,
+                max_instances=1
+            )
+            # Also add recurring job for future Sundays
+            scheduler.add_job(
+                _run_weekly_auto_for_all_users_sync,
+                CronTrigger(day_of_week="sun", hour=target_hour, minute=target_minute, timezone="UTC"),
+                id="weekly_auto_plan",
+                replace_existing=True,
+                misfire_grace_time=3600,
+                max_instances=1
+            )
+        else:
+            # Normal case: schedule for next Sunday
+            scheduler.add_job(
+                _run_weekly_auto_for_all_users_sync,
+                CronTrigger(day_of_week="sun", hour=target_hour, minute=target_minute, timezone="UTC"),
+                id="weekly_auto_plan",
+                replace_existing=True,
+                misfire_grace_time=3600,  # 1 hour grace period
+                max_instances=1  # Only one instance can run at a time
+            )
+        
         scheduler.start()
         logging.info("Weekly scheduler started")
+        
+        # Get next run times after scheduler started
+        jobs = scheduler.get_jobs()
+        for job in jobs:
+            if job.next_run_time:
+                logging.info(f"   📅 Job '{job.id}': Next run at {job.next_run_time} UTC")
+        
+        logging.info(f"   📅 Current time: {now_utc} UTC")
     except Exception as e:
         logging.error(f"Failed to start scheduler: {e}")
 
@@ -2655,8 +2696,24 @@ Extract structured preferences as JSON."""
 def _run_weekly_auto_for_all_users_sync():
     """
     Sync wrapper for APScheduler (APScheduler can't call async functions directly).
+    Creates a new event loop in the scheduler thread to avoid conflicts with FastAPI.
     """
-    asyncio.run(_run_weekly_auto_for_all_users())
+    logging.info("=" * 60)
+    logging.info("🔄 [SCHEDULER] Weekly auto-plan triggered by scheduler")
+    logging.info(f"   Time: {datetime.utcnow().isoformat()} UTC")
+    logging.info("=" * 60)
+    try:
+        # Create a new event loop in this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(_run_weekly_auto_for_all_users())
+        finally:
+            loop.close()
+    except Exception as e:
+        logging.error(f"❌ [SCHEDULER] Error in weekly auto-plan: {e}")
+        import traceback
+        logging.error(f"   Traceback: {traceback.format_exc()}")
 
 
 async def _run_weekly_auto_for_all_users(week_start_override: Optional[str] = None):
@@ -3944,9 +4001,10 @@ async def get_weekly_plan(
                     blocks = all_blocks
                 else:
                     logging.warning(f"   ❌ Alternative method also found 0 blocks. Blocks may not exist or RLS is blocking.")
-                    # Initialize blocks as empty list if no blocks found
-                    if blocks is None:
-                        blocks = []
+            
+            # Initialize blocks as empty list if no blocks found
+            if blocks is None:
+                blocks = []
             
             # #region agent log
             try:
@@ -3980,7 +4038,7 @@ async def get_weekly_plan(
                 if direct_blocks_for_week:
                     blocks = direct_blocks_for_week
                     logging.info(f"✅ [GET_WEEKLY_PLAN] Fallback method found {len(blocks)} blocks")
-                else:
+            else:
                     logging.warning(f"⚠️ [GET_WEEKLY_PLAN] Fallback method found blocks but none matched plan_ids {plan_ids_for_week}")
         
         # CRITICAL: Initialize blocks list if it doesn't exist (for cases where no plan exists yet)
@@ -5224,7 +5282,7 @@ async def generate_weekly_plan(
                     else:
                         # This group block already exists in weekly_plan_blocks
                         logging.info(f"   ✅ Group block already in weekly_plan_blocks: {gpb.get('course_number')}, day={gpb.get('day_of_week')}, time={gpb.get('start_time')}")
-        
+
         # Add synchronized group blocks to plan_blocks for this user
         plan_blocks = []
         for gb in synchronized_group_blocks:
@@ -5553,19 +5611,19 @@ async def generate_weekly_plan(
                         
                         if not slot_conflict:
                             plan_blocks.append({
-                                "plan_id": plan_id,
-                                "user_id": user_id,
-                                "course_number": course_number,
-                                "course_name": course_name,
-                                "work_type": "personal",
-                                "day_of_week": d,
-                                "start_time": t,
-                                "end_time": _minutes_to_time(_time_to_minutes(t) + 60),
-                                "source": "auto_fallback"
-                            })
-                            if (d, t) in available_slots:
-                                available_slots.remove((d, t))
-                            allocated_personal += 1
+                            "plan_id": plan_id,
+                            "user_id": user_id,
+                            "course_number": course_number,
+                            "course_name": course_name,
+                            "work_type": "personal",
+                            "day_of_week": d,
+                            "start_time": t,
+                            "end_time": _minutes_to_time(_time_to_minutes(t) + 60),
+                            "source": "auto_fallback"
+                        })
+                        if (d, t) in available_slots:
+                            available_slots.remove((d, t))
+                        allocated_personal += 1
                 logging.info(f"Filled {allocated_personal} personal blocks for {course_name} (grouped in {best_block_length if best_block else 1}-hour blocks)")
         else:
             # FALLBACK: Use deterministic placement if LLM fails
@@ -5968,6 +6026,28 @@ async def run_weekly_plan_immediately(week_start: Optional[str] = None):
     except Exception as e:
         logging.error(f"Error running weekly plan immediately: {e}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/api/system/scheduler/status")
+async def get_scheduler_status():
+    """Check scheduler status and next run time"""
+    try:
+        jobs = scheduler.get_jobs()
+        job_info = []
+        for job in jobs:
+            job_info.append({
+                "id": job.id,
+                "name": job.name,
+                "next_run_time": str(job.next_run_time) if job.next_run_time else None,
+                "trigger": str(job.trigger)
+            })
+        return {
+            "scheduler_running": scheduler.running,
+            "current_time_utc": datetime.utcnow().isoformat(),
+            "jobs": job_info
+        }
+    except Exception as e:
+        return {"error": str(e), "scheduler_running": False}
 
 
 @app.get("/api/llm/health")
@@ -10009,7 +10089,7 @@ async def create_study_group(
                     "course_name": group_data.course_name,
                     "group_name": group_data.group_name,
                     "description": group_data.description
-                }).execute()
+            }).execute()
                 if pending_creation_result.data:
                     pending_group_creation_id = pending_creation_result.data[0]['id']
                     logging.info(f"✅ Stored pending group creation metadata: {pending_group_creation_id}")
@@ -10074,11 +10154,11 @@ async def create_study_group(
         
         if group:
             result = {
-                "group": group,
-                "invitations_created": invitations_created,
-                "invitations_failed": invitations_failed,
-                "message": f"Group created successfully. {len(invitations_created)} invitations sent."
-            }
+            "group": group,
+            "invitations_created": invitations_created,
+            "invitations_failed": invitations_failed,
+            "message": f"Group created successfully. {len(invitations_created)} invitations sent."
+        }
         else:
             result = {
                 "invitations_created": invitations_created,
@@ -10446,15 +10526,15 @@ async def accept_invitation(
             if group_id_str.lower() in ["null", "none", ""]:
                 logging.error(f"❌ Invalid group_id (string null): {group_id}")
                 raise HTTPException(status_code=400, detail="Invalid invitation: missing or invalid group_id")
-        
-        if not user_id or user_id is None:
-            logging.error(f"❌ Invalid user_id: {user_id}")
-            raise HTTPException(status_code=400, detail="Invalid user_id")
-        
-        # Check if user_id is a string "null"
-        user_id_str = str(user_id).strip()
-        if user_id_str.lower() in ["null", "none", ""]:
-            logging.error(f"❌ Invalid user_id (string null): {user_id}")
+            
+            if not user_id or user_id is None:
+                logging.error(f"❌ Invalid user_id: {user_id}")
+                raise HTTPException(status_code=400, detail="Invalid user_id")
+            
+            # Check if user_id is a string "null"
+            user_id_str = str(user_id).strip()
+            if user_id_str.lower() in ["null", "none", ""]:
+                logging.error(f"❌ Invalid user_id (string null): {user_id}")
             raise HTTPException(status_code=400, detail="Invalid user_id")
         
         # Update invitation status FIRST
