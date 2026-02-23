@@ -20,6 +20,13 @@ uploads/
 *.jpg
 *.jpeg
 *.png
+# Allow images in static folder
+!static/*.png
+!static/*.jpg
+!static/*.jpeg
+!static/*.gif
+!static/*.svg
+!static/*.ico
 
 # IDE
 .vscode/
