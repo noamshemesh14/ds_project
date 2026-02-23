@@ -2,12 +2,28 @@
 Request Handler Executor
 Handles approval/rejection of requests (group invitations and change requests)
 """
+import asyncio
 import logging
 from typing import Dict, Any, Optional
 from app.supabase_client import supabase, supabase_admin
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
+
+
+def _is_supabase_html_error(e: Exception) -> bool:
+    """True if the exception is due to Supabase/Cloudflare returning HTML instead of JSON."""
+    err_str = str(e).lower()
+    err_details = getattr(e, "details", None) or getattr(e, "message", None) or ""
+    if isinstance(err_details, bytes):
+        err_details = err_details.decode("utf-8", errors="replace")
+    details_str = (err_details if isinstance(err_details, str) else str(err_details)).lower()
+    return (
+        "json could not be generated" in err_str
+        or "worker threw exception" in details_str
+        or "cloudflare" in details_str
+        or "<!doctype html>" in details_str
+    )
 
 
 class RequestHandler:
@@ -1472,14 +1488,27 @@ class RequestHandler:
                         # Import the internal function from main.py
                         from app.main import _apply_group_change_request
                         
-                        # Call the function to apply the change
-                        await _apply_group_change_request(change_request_id, client, change_request, group_id, member_ids, requester_id)
-                        
-                        return {
-                            "status": "success",
-                            "message": "All members approved! Change has been applied.",
-                            "applied": True
-                        }
+                        # Retry apply up to 3 times on Supabase/Cloudflare transient errors
+                        last_apply_err = None
+                        for apply_attempt in range(3):
+                            try:
+                                await _apply_group_change_request(change_request_id, client, change_request, group_id, member_ids, requester_id)
+                                return {
+                                    "status": "success",
+                                    "message": "All members approved! Change has been applied.",
+                                    "applied": True
+                                }
+                            except Exception as apply_err:
+                                last_apply_err = apply_err
+                                if _is_supabase_html_error(apply_err) and apply_attempt < 2:
+                                    logger.warning(f"Supabase transient error on apply (attempt {apply_attempt + 1}/3), retrying in 2s: {apply_err}")
+                                    await asyncio.sleep(2)
+                                    continue
+                                raise
+                        raise HTTPException(
+                            status_code=503,
+                            detail="שירות מסד הנתונים לא זמין כרגע (שגיאת שרת). נסה שוב בעוד דקה."
+                        )
                     else:
                         # Not all members approved yet
                         approved_count = len([a for a in approval_map.values() if a])
@@ -1543,6 +1572,11 @@ class RequestHandler:
             logger.error(f"❌ Error handling request: {e}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
+            if _is_supabase_html_error(e):
+                raise HTTPException(
+                    status_code=503,
+                    detail="שירות מסד הנתונים לא זמין כרגע (שגיאת שרת). נסה שוב בעוד דקה."
+                )
             raise HTTPException(status_code=500, detail=f"Error handling request: {str(e)}")
 
     def get_step_log(

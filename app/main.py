@@ -7156,7 +7156,9 @@ async def create_group_change_request(
         
         body = await request.json()
         group_id = body.get("group_id")
-        week_start = body.get("week_start")
+        week_start_raw = body.get("week_start")
+        # Normalize to YYYY-MM-DD so DB comparison works (frontend may send date with time)
+        week_start = str(week_start_raw).strip()[:10] if week_start_raw else None
         request_type = body.get("request_type", "move")  # 'move' or 'resize'
         original_day = body.get("original_day_of_week")
         original_start = body.get("original_start_time")
@@ -7267,50 +7269,138 @@ async def create_group_change_request(
             )
         
         # Validate that the selected time range contains only consecutive blocks of the same course/group
+        blocks_in_range_from_wp = False
         if request_type == "move" and original_day is not None and original_start and original_duration:
-            # Get all group blocks for this group/day/week
-            all_group_blocks = client.table("group_plan_blocks").select("id, start_time, end_time, course_number").eq("group_id", group_id).eq("week_start", week_start).eq("day_of_week", original_day).order("start_time").execute()
+            # Normalize time for comparison (DB may store "21:00:00", frontend sends "21:00")
+            def _norm_start(t):
+                if t is None:
+                    return None
+                s = str(t).strip()
+                if len(s) > 5:
+                    s = s[:5]
+                return _time_to_minutes(s)
+            original_start_mins = _norm_start(original_start)
+            original_day_int = int(original_day) if original_day is not None else None
             
-            # Find the starting block
+            # Get all group blocks for this group/week (then filter by day in Python for flexible day comparison)
+            all_group_blocks_res = client.table("group_plan_blocks").select("id, start_time, end_time, course_number, day_of_week").eq("group_id", group_id).eq("week_start", week_start).order("day_of_week").order("start_time").execute()
+            all_group_blocks_data = all_group_blocks_res.data or []
+            all_group_blocks = [b for b in all_group_blocks_data if (int(b.get("day_of_week")) if b.get("day_of_week") is not None else None) == original_day_int]
+            
+            # Find the starting block: exact start match, or block that spans original_start
             starting_block = None
-            for block in (all_group_blocks.data or []):
-                if block.get("start_time") == original_start:
+            for block in all_group_blocks:
+                b_start = block.get("start_time")
+                b_end = block.get("end_time")
+                if b_start is None:
+                    continue
+                start_mins = _norm_start(b_start)
+                end_mins = _norm_start(b_end) if b_end else (start_mins + 60)
+                if start_mins == original_start_mins:
+                    starting_block = block
+                    break
+                if original_start_mins is not None and start_mins <= original_start_mins < end_mins:
                     starting_block = block
                     break
             
+            # Fallback: block might exist only in weekly_plan_blocks (user's copy). Sync to group_plan_blocks and re-find.
+            matching_wb = None
+            wp_same_course = []
             if not starting_block:
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"לא נמצא בלוק שמתחיל ב-{original_start}. אנא בדוק את הזמן הנבחר."
-                )
-            
-            # Verify all blocks in the range are consecutive and belong to the same course/group
-            blocks_in_range = [starting_block]
-            current_end_time = starting_block.get("end_time")
-            expected_course_number = starting_block.get("course_number")
-            
-            # Find consecutive blocks
-            for block in (all_group_blocks.data or []):
-                if block["id"] == starting_block["id"]:
-                    continue  # Skip the starting block
+                group_info = client.table("study_groups").select("course_id").eq("id", group_id).limit(1).execute()
+                course_number = group_info.data[0].get("course_id") if group_info.data else None
+                plan_res = client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).limit(1).execute()
+                plan_id = plan_res.data[0]["id"] if plan_res.data else None
+                if plan_id and course_number is not None:
+                    wp_blocks = client.table("weekly_plan_blocks").select("id, start_time, end_time, course_number, day_of_week").eq("plan_id", plan_id).eq("work_type", "group").eq("day_of_week", original_day_int).order("start_time").execute()
+                    wp_same_course = [b for b in (wp_blocks.data or []) if str(b.get("course_number")) == str(course_number)]
+                    for wb in wp_same_course:
+                        start_mins = _norm_start(wb.get("start_time"))
+                        end_mins = _norm_start(wb.get("end_time")) if wb.get("end_time") else (start_mins + 60)
+                        if start_mins == original_start_mins or (original_start_mins is not None and start_mins <= original_start_mins < end_mins):
+                            matching_wb = wb
+                            break
+                    if matching_wb:
+                        # Sync consecutive same-course blocks that are not already in group_plan_blocks
+                        existing_starts = {_norm_start(b.get("start_time")) for b in all_group_blocks_data if (int(b.get("day_of_week")) if b.get("day_of_week") is not None else None) == original_day_int}
+                        to_sync = []
+                        for wb in wp_same_course:
+                            if _norm_start(wb.get("start_time")) in existing_starts:
+                                continue
+                            to_sync.append({
+                                "group_id": group_id,
+                                "week_start": week_start,
+                                "day_of_week": original_day_int,
+                                "start_time": wb.get("start_time"),
+                                "end_time": wb.get("end_time"),
+                                "course_number": wb.get("course_number"),
+                            })
+                        if to_sync:
+                            try:
+                                client.table("group_plan_blocks").insert(to_sync).execute()
+                                logging.info(f"Synced {len(to_sync)} group block(s) from weekly_plan_blocks to group_plan_blocks: day={original_day_int}")
+                            except Exception as ins_err:
+                                logging.warning(f"Could not sync blocks to group_plan_blocks: {ins_err}")
+                        # Re-fetch and find starting_block
+                        all_group_blocks_res = client.table("group_plan_blocks").select("id, start_time, end_time, course_number, day_of_week").eq("group_id", group_id).eq("week_start", week_start).order("day_of_week").order("start_time").execute()
+                        all_group_blocks_data = all_group_blocks_res.data or []
+                        all_group_blocks = [b for b in all_group_blocks_data if (int(b.get("day_of_week")) if b.get("day_of_week") is not None else None) == original_day_int]
+                        for block in all_group_blocks:
+                            b_start = block.get("start_time")
+                            b_end = block.get("end_time")
+                            if b_start is None:
+                                continue
+                            start_mins_b = _norm_start(b_start)
+                            end_mins_b = _norm_start(b_end) if b_end else (start_mins_b + 60)
+                            if start_mins_b == original_start_mins or (original_start_mins is not None and start_mins_b <= original_start_mins < end_mins_b):
+                                starting_block = block
+                                break
                 
-                block_start = block.get("start_time")
-                block_course = block.get("course_number")
+                # If block exists only in weekly_plan_blocks (e.g. 21:00 not in group_plan_blocks), accept using wp data
+                if not starting_block and matching_wb and wp_same_course:
+                    blocks_in_range_wp = [matching_wb]
+                    current_end = matching_wb.get("end_time")
+                    for wb in wp_same_course:
+                        if wb.get("id") == matching_wb.get("id"):
+                            continue
+                        if _norm_start(wb.get("start_time")) == _norm_start(current_end) and str(wb.get("course_number")) == str(matching_wb.get("course_number")):
+                            blocks_in_range_wp.append(wb)
+                            current_end = wb.get("end_time")
+                            if len(blocks_in_range_wp) >= original_duration:
+                                break
+                    if len(blocks_in_range_wp) >= original_duration:
+                        starting_block = matching_wb
+                        blocks_in_range = blocks_in_range_wp[: int(original_duration)]
+                        blocks_in_range_from_wp = True
+                    else:
+                        starting_block = None
                 
-                # Check if this block is consecutive (its start_time equals the current end_time)
-                if block_start == current_end_time:
-                    # Verify it's the same course/group
-                    if block_course != expected_course_number:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"הטווח הנבחר מכיל בלוקים של קורסים שונים. לא ניתן להזיז בלוקים של קורסים שונים יחד."
-                        )
-                    blocks_in_range.append(block)
-                    current_end_time = block.get("end_time")
-                # Stop if we've found enough blocks or if there's a gap
-                elif _time_to_minutes(block_start) > _time_to_minutes(current_end_time):
-                    # There's a gap, stop looking
-                    break
+                if not starting_block:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"לא נמצא בלוק שמתחיל ב-{original_start}. אנא בדוק את הזמן הנבחר. אם הבלוק מוצג במערכת, נסה לרענן את הדף."
+                    )
+            
+            # Build blocks_in_range from group_plan_blocks unless we already built it from weekly_plan_blocks
+            if not blocks_in_range_from_wp:
+                blocks_in_range = [starting_block]
+                current_end_time = starting_block.get("end_time")
+                expected_course_number = starting_block.get("course_number")
+                for block in all_group_blocks:
+                    if block.get("id") == starting_block.get("id"):
+                        continue
+                    block_start = block.get("start_time")
+                    block_course = block.get("course_number")
+                    if _norm_start(block_start) == _norm_start(current_end_time):
+                        if block_course != expected_course_number:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"הטווח הנבחר מכיל בלוקים של קורסים שונים. לא ניתן להזיז בלוקים של קורסים שונים יחד."
+                            )
+                        blocks_in_range.append(block)
+                        current_end_time = block.get("end_time")
+                    elif _time_to_minutes(str(block_start or "")) > _time_to_minutes(str(current_end_time or "")):
+                        break
             
             # Verify we found the right number of blocks
             if len(blocks_in_range) < original_duration:
@@ -7319,7 +7409,6 @@ async def create_group_change_request(
                     detail=f"הטווח הנבחר ({original_duration} שעות) מכיל רק {len(blocks_in_range)} בלוקים רצופים. לא ניתן להזיז חלק מבלוק לא רצוף."
                 )
             elif len(blocks_in_range) > original_duration:
-                # This shouldn't happen, but log it
                 logging.warning(f"Found {len(blocks_in_range)} consecutive blocks but only {original_duration} requested. Using requested duration.")
             
             logging.info(f"✅ Validated {original_duration} consecutive blocks starting at {original_start} for group {group_id}")
@@ -7421,11 +7510,22 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
     """
     Internal function to apply a group change request after all members approve.
     This is extracted from approve_group_change_request to be reusable.
+    Idempotent: if request is already approved, returns without doing anything (safe for retries).
     """
     from app.agents.executors.block_creator import _time_to_minutes, _minutes_to_time
     from datetime import datetime, timedelta
     import json
-    
+
+    # Idempotency: if already applied, skip (avoids double-apply on retry after transient error)
+    try:
+        status_check = client.table("group_meeting_change_requests").select("status").eq("id", request_id).limit(1).execute()
+        if status_check.data and status_check.data[0].get("status") == "approved":
+            logging.info(f"Request {request_id} already approved, skipping apply")
+            return
+    except Exception as status_err:
+        logging.warning(f"Could not check request status for idempotency: {status_err}")
+        # Continue with apply; non-fatal
+
     # #region agent log
     try:
         with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
@@ -9477,6 +9577,14 @@ async def approve_group_change_request(
         logging.error(f"Error approving change request: {e}")
         import traceback
         logging.error(traceback.format_exc())
+        # Supabase/Cloudflare may return HTML instead of JSON (e.g. Worker threw exception)
+        err_str = str(e).lower()
+        err_details = getattr(e, "details", None) or getattr(e, "message", None) or ""
+        if isinstance(err_details, bytes):
+            err_details = err_details.decode("utf-8", errors="replace")
+        details_str = (err_details if isinstance(err_details, str) else str(err_details)).lower()
+        if "json could not be generated" in err_str or "worker threw exception" in details_str or "cloudflare" in details_str or "<!doctype html>" in details_str:
+            raise HTTPException(status_code=503, detail="שירות מסד הנתונים לא זמין כרגע (שגיאת שרת). נסה שוב בעוד דקה.")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
