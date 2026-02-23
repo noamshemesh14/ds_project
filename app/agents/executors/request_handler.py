@@ -130,6 +130,18 @@ class RequestHandler:
                 is_invitation_request = any(keyword in user_prompt.lower() for keyword in invitation_keywords)
                 if is_invitation_request:
                     logger.info(f"📝 Detected invitation request from user_prompt")
+
+            # IMPORTANT: For APPROVING/REJECTING resize requests, the user often references the block time window
+            # (e.g. "Saturday 13-15") which the LLM may convert into proposed_duration=2.
+            # That duration is NOT reliable as an identifier for the pending request and can wrongly filter out
+            # the correct request (e.g. extend from 2h to 3h). Only use durations for matching when the user
+            # explicitly mentions hours/duration.
+            if request_type == "resize" and user_prompt:
+                p = user_prompt.lower()
+                mentions_duration_explicitly = any(k in p for k in ["hour", "hours", "duration", "שעה", "שעות"])
+                if not mentions_duration_explicitly:
+                    original_duration = None
+                    proposed_duration = None
             
             # Try to find invitation if request_id not provided
             invitation_id = None
@@ -149,7 +161,7 @@ class RequestHandler:
                     else:
                         raise HTTPException(status_code=404, detail="Request not found")
             else:
-                # Try to find invitation or change request by group_name or course_number
+                # Try to find invitation or change request by group_name / course_number / course_name
                 # #region agent log
                 import json
                 try:
@@ -159,8 +171,8 @@ class RequestHandler:
                     logger.warning(f"⚠️ Could not write log: {log_err}")
                 # #endregion
                 
-                if group_name or course_number:
-                    logger.info(f"🔍 Searching for invitation or change request by group_name={group_name}, course_number={course_number}")
+                if group_name or course_number or course_name:
+                    logger.info(f"🔍 Searching for invitation or change request by group_name={group_name}, course_number={course_number}, course_name={course_name}")
                     
                     # #region agent log
                     try:
@@ -391,16 +403,26 @@ class RequestHandler:
                             raise HTTPException(status_code=404, detail=f"No pending invitation found for group '{group_name}'. The group may not exist yet or the invitation may have already been processed.")
                         
                         # Find groups matching the criteria (existing groups)
-                        group_query = client.table("study_groups").select("id, group_name, course_id, course_name")
-                        if group_name:
-                            group_query = group_query.ilike("group_name", f"%{group_name}%")
-                        if course_number:
-                            group_query = group_query.eq("course_id", course_number)
-                        if course_name:
-                            # Also filter by course_name if provided
-                            group_query = group_query.ilike("course_name", f"%{course_name}%")
+                        # FIRST: Get all groups the user is a member of
+                        user_groups_result = client.table("group_members").select("group_id").eq("user_id", user_id).eq("status", "approved").execute()
+                        user_group_ids = [g["group_id"] for g in (user_groups_result.data or [])]
                         
-                        groups_result = group_query.execute()
+                        if not user_group_ids:
+                            # Create empty result object
+                            from types import SimpleNamespace
+                            groups_result = SimpleNamespace(data=[])
+                        else:
+                            # THEN: Filter by criteria within user's groups
+                            group_query = client.table("study_groups").select("id, group_name, course_id, course_name").in_("id", user_group_ids)
+                            if group_name:
+                                group_query = group_query.ilike("group_name", f"%{group_name}%")
+                            if course_number:
+                                group_query = group_query.eq("course_id", course_number)
+                            if course_name:
+                                # Also filter by course_name if provided
+                                group_query = group_query.ilike("course_name", f"%{course_name}%")
+                            
+                            groups_result = group_query.execute()
                         
                         # #region agent log
                         try:
