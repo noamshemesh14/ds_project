@@ -67,6 +67,31 @@ class RequestHandler:
             if not action:
                 raise HTTPException(status_code=400, detail="action is required (accept/approve/reject/decline)")
             
+            # Normalize parameter names from LLM
+            # LLM might return original_day_of_week/original_start_time or new_day_of_week/new_start_time
+            # Convert them to day_of_week/start_time if not already set
+            if day_of_week is None and 'original_day_of_week' in kwargs:
+                day_of_week = kwargs.get('original_day_of_week')
+                logger.info(f"📝 Converted original_day_of_week={day_of_week} to day_of_week")
+            if day_of_week is None and 'new_day_of_week' in kwargs:
+                day_of_week = kwargs.get('new_day_of_week')
+                logger.info(f"📝 Converted new_day_of_week={day_of_week} to day_of_week")
+            
+            if start_time is None and 'original_start_time' in kwargs:
+                start_time = kwargs.get('original_start_time')
+                logger.info(f"📝 Converted original_start_time={start_time} to start_time")
+            if start_time is None and 'new_start_time' in kwargs:
+                start_time = kwargs.get('new_start_time')
+                logger.info(f"📝 Converted new_start_time={start_time} to start_time")
+            
+            # Also handle proposed_day_of_week/proposed_start_time if needed
+            if day_of_week is None and 'proposed_day_of_week' in kwargs:
+                day_of_week = kwargs.get('proposed_day_of_week')
+                logger.info(f"📝 Converted proposed_day_of_week={day_of_week} to day_of_week")
+            if start_time is None and 'proposed_start_time' in kwargs:
+                start_time = kwargs.get('proposed_start_time')
+                logger.info(f"📝 Converted proposed_start_time={start_time} to start_time")
+            
             # Normalize action
             action_lower = action.lower().strip()
             is_approve = action_lower in ["accept", "approve", "אישור", "אשר"]
@@ -457,18 +482,47 @@ class RequestHandler:
                                 
                                 all_change_requests = change_req_search.order("created_at", desc=True).limit(20).execute()
                                 
+                                logger.info(f"   📊 Found {len(all_change_requests.data or [])} pending change requests for groups {matching_group_ids}")
+                                if all_change_requests.data:
+                                    for req in all_change_requests.data:
+                                        logger.info(f"      Request {req.get('id')}: type={req.get('request_type')}, "
+                                                    f"original_day={req.get('original_day_of_week')}, original_start={req.get('original_start_time')}, "
+                                                    f"proposed_day={req.get('proposed_day_of_week')}, proposed_start={req.get('proposed_start_time')}, "
+                                                    f"status={req.get('status')}, week_start={req.get('week_start')}")
+                                else:
+                                    logger.warning(f"   ⚠️ No pending change requests found for groups {matching_group_ids}")
+                                    # Try to find ANY requests (not just pending) to see what exists
+                                    any_req_search = client.table("group_meeting_change_requests").select("id, status, original_day_of_week, original_start_time, proposed_day_of_week, proposed_start_time, week_start").in_("group_id", matching_group_ids).order("created_at", desc=True).limit(5).execute()
+                                    if any_req_search.data:
+                                        logger.info(f"   📋 Found {len(any_req_search.data)} total requests (any status):")
+                                        for req in any_req_search.data:
+                                            logger.info(f"      Request {req.get('id')}: status={req.get('status')}, "
+                                                        f"original_day={req.get('original_day_of_week')}, original_start={req.get('original_start_time')}, "
+                                                        f"proposed_day={req.get('proposed_day_of_week')}, proposed_start={req.get('proposed_start_time')}, "
+                                                        f"week_start={req.get('week_start')}")
+                                
                                 # Filter by available parameters
                                 matching_requests = []
+                                logger.info(f"   🔍 Filtering by day_of_week={day_of_week}, start_time={start_time}, time_of_day={time_of_day}")
                                 for req in (all_change_requests.data or []):
+                                    req_id = req.get("id")
+                                    logger.info(f"      🔍 Checking request {req_id}")
                                     score = 0
                                     
                                     # Score by day_of_week match
-                                    req_day = req.get("proposed_day_of_week") or req.get("original_day_of_week")
+                                    # For move requests, check BOTH original_day_of_week AND proposed_day_of_week
+                                    # User might refer to either the old or new day
+                                    req_proposed_day = req.get("proposed_day_of_week")
+                                    req_original_day = req.get("original_day_of_week")
                                     if day_of_week is not None:
-                                        if req_day == day_of_week:
+                                        # Match if EITHER proposed OR original day matches
+                                        logger.info(f"         Day check: req_proposed_day={req_proposed_day}, req_original_day={req_original_day}, search_day={day_of_week}")
+                                        if req_proposed_day == day_of_week or req_original_day == day_of_week:
                                             score += 10
+                                            logger.info(f"         ✅ Day matches! Score: {score}")
                                         else:
-                                            continue  # Skip if day doesn't match
+                                            logger.info(f"         ❌ Day doesn't match - skipping request {req_id}")
+                                            continue  # Skip if day doesn't match either
                                     
                                     # Score by start_time match
                                     # For move requests, check proposed_start_time (the new time)
@@ -479,19 +533,25 @@ class RequestHandler:
                                     
                                     if start_time:
                                         start_time_normalized = start_time[:5] if len(start_time) > 5 else start_time
+                                        logger.info(f"         Time check: search_time={start_time} (normalized={start_time_normalized})")
                                         
-                                        # For move requests, the start_time should match proposed_start_time
+                                        # For move requests, check BOTH original_start_time AND proposed_start_time
+                                        # User might refer to either the old or new time
                                         # For resize requests, it could match either
                                         if req_type == "move":
-                                            # Move: check proposed_start_time
-                                            if req_proposed_start:
-                                                req_start_normalized = req_proposed_start[:5] if len(req_proposed_start) > 5 else req_proposed_start
-                                                if req_start_normalized == start_time_normalized:
-                                                    score += 10
-                                                else:
-                                                    continue  # Skip if time doesn't match
+                                            # Move: check BOTH proposed_start_time AND original_start_time
+                                            req_proposed_normalized = req_proposed_start[:5] if req_proposed_start and len(req_proposed_start) > 5 else req_proposed_start
+                                            req_original_normalized = req_original_start[:5] if req_original_start and len(req_original_start) > 5 else req_original_start
+                                            logger.info(f"         Move request: req_proposed_start={req_proposed_start} (normalized={req_proposed_normalized}), req_original_start={req_original_start} (normalized={req_original_normalized})")
+                                            
+                                            # Match if EITHER proposed OR original matches
+                                            if (req_proposed_normalized and req_proposed_normalized == start_time_normalized) or \
+                                               (req_original_normalized and req_original_normalized == start_time_normalized):
+                                                score += 10
+                                                logger.info(f"         ✅ Time matches! Score: {score}")
                                             else:
-                                                continue  # No proposed_start_time for move request
+                                                logger.info(f"         ❌ Time doesn't match - skipping request {req_id}")
+                                                continue  # Skip if time doesn't match either
                                         else:
                                             # Resize or other: check both proposed and original
                                             req_start_normalized = None
@@ -526,8 +586,10 @@ class RequestHandler:
                                     if request_type and req.get("request_type") == request_type:
                                         score += 3
                                     
+                                    logger.info(f"         ✅ Request {req_id} passed all filters! Final score: {score}")
                                     matching_requests.append((score, req))
                                 
+                                logger.info(f"   📊 After filtering: {len(matching_requests)} matching requests found")
                                 if matching_requests:
                                     # Sort by score and take the best match
                                     matching_requests.sort(key=lambda x: x[0], reverse=True)
@@ -664,6 +726,15 @@ class RequestHandler:
                             # Get ALL requests first (including non-pending) to see what's there
                             all_requests = change_req_query.order("created_at", desc=True).limit(10).execute()
                             
+                            logger.info(f"   📊 Found {len(all_requests.data or [])} total change requests for group {group_id} (any status)")
+                            if all_requests.data:
+                                for req in all_requests.data:
+                                    logger.info(f"      Request {req.get('id')}: status={req.get('status')}, "
+                                                f"type={req.get('request_type')}, "
+                                                f"original_day={req.get('original_day_of_week')}, original_start={req.get('original_start_time')}, "
+                                                f"proposed_day={req.get('proposed_day_of_week')}, proposed_start={req.get('proposed_start_time')}, "
+                                                f"week_start={req.get('week_start')}")
+                            
                             # #region agent log
                             try:
                                 with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
@@ -672,6 +743,7 @@ class RequestHandler:
                             # #endregion
                             
                             # Now filter by pending status
+                            logger.info(f"   🔍 Filtering to only pending requests...")
                             change_req_query = change_req_query.eq("status", "pending")
                             
                             # Use date/week_start if provided
@@ -719,6 +791,17 @@ class RequestHandler:
                             
                             change_req_result = change_req_query.order("created_at", desc=True).execute()
                             
+                            logger.info(f"   📊 Found {len(change_req_result.data or [])} pending change requests after status filter")
+                            if change_req_result.data:
+                                for req in change_req_result.data:
+                                    logger.info(f"      Pending request {req.get('id')}: "
+                                                f"type={req.get('request_type')}, "
+                                                f"original_day={req.get('original_day_of_week')}, original_start={req.get('original_start_time')}, "
+                                                f"proposed_day={req.get('proposed_day_of_week')}, proposed_start={req.get('proposed_start_time')}, "
+                                                f"week_start={req.get('week_start')}")
+                            else:
+                                logger.warning(f"   ⚠️ No pending requests found! Check if requests exist with different status.")
+                            
                             # #region agent log
                             try:
                                 with open(r'c:\DS\AcademicPlanner\ds_project\.cursor\debug.log', 'a', encoding='utf-8') as f:
@@ -727,18 +810,27 @@ class RequestHandler:
                             # #endregion
                             
                             # Filter by day_of_week if provided
+                            # For move requests, check BOTH original_day_of_week AND proposed_day_of_week
                             if day_of_week is not None and change_req_result.data:
                                 filtered_by_day = []
+                                logger.info(f"   🔍 Filtering by day_of_week={day_of_week}")
                                 for req in change_req_result.data:
-                                    req_day = req.get("proposed_day_of_week") or req.get("original_day_of_week")
-                                    if req_day == day_of_week:
+                                    req_proposed_day = req.get("proposed_day_of_week")
+                                    req_original_day = req.get("original_day_of_week")
+                                    logger.info(f"      Request {req.get('id')}: proposed_day={req_proposed_day}, original_day={req_original_day}")
+                                    # Match if EITHER proposed OR original day matches
+                                    if req_proposed_day == day_of_week or req_original_day == day_of_week:
                                         filtered_by_day.append(req)
+                                        logger.info(f"         ✅ Day matches!")
+                                    else:
+                                        logger.info(f"         ❌ Day doesn't match - skipping")
                                 
                                 if filtered_by_day:
                                     change_req_result.data = filtered_by_day
-                                    logger.info(f"   Filtered to {len(filtered_by_day)} requests matching day_of_week={day_of_week}")
+                                    logger.info(f"   ✅ Filtered to {len(filtered_by_day)} requests matching day_of_week={day_of_week}")
                                 else:
                                     change_req_result.data = []
+                                    logger.warning(f"   ⚠️ No requests match day_of_week={day_of_week}")
                             
                             # Filter by start_time if provided (exact match or close)
                             if start_time and change_req_result.data:
@@ -748,7 +840,9 @@ class RequestHandler:
                                 if len(start_time) > 5 and start_time[5] == ':':
                                     normalized_start_time = start_time[:5]  # Take only HH:MM
                                 
+                                logger.info(f"   🔍 Filtering by start_time={start_time} (normalized={normalized_start_time})")
                                 for req in change_req_result.data:
+                                    req_id = req.get("id")
                                     proposed_start = req.get("proposed_start_time", "")
                                     original_start = req.get("original_start_time", "")
                                     
@@ -756,9 +850,14 @@ class RequestHandler:
                                     normalized_proposed = proposed_start[:5] if proposed_start and len(proposed_start) > 5 and proposed_start[5] == ':' else proposed_start
                                     normalized_original = original_start[:5] if original_start and len(original_start) > 5 and original_start[5] == ':' else original_start
                                     
+                                    logger.info(f"      Request {req_id}: proposed_start={proposed_start} (normalized={normalized_proposed}), original_start={original_start} (normalized={normalized_original})")
+                                    
                                     # Check if start_time matches either proposed or original (normalized)
                                     if normalized_proposed == normalized_start_time or normalized_original == normalized_start_time:
                                         filtered_by_time.append(req)
+                                        logger.info(f"         ✅ Time matches!")
+                                    else:
+                                        logger.info(f"         ❌ Time doesn't match - skipping")
                                 
                                 # #region agent log
                                 try:
@@ -769,9 +868,10 @@ class RequestHandler:
                                 
                                 if filtered_by_time:
                                     change_req_result.data = filtered_by_time
-                                    logger.info(f"   Filtered to {len(filtered_by_time)} requests matching start_time={start_time}")
+                                    logger.info(f"   ✅ Filtered to {len(filtered_by_time)} requests matching start_time={start_time}")
                                 else:
                                     change_req_result.data = []
+                                    logger.warning(f"   ⚠️ No requests match start_time={start_time}")
                             
                             # Filter by time_of_day if provided
                             if time_of_day and change_req_result.data:
@@ -906,6 +1006,11 @@ class RequestHandler:
                                 break
                     
                     if not invitation_id and not change_request_id:
+                        logger.error(f"❌ No invitation or change request found!")
+                        logger.error(f"   Search parameters: group_name={group_name}, course_number={course_number}, "
+                                    f"day_of_week={day_of_week}, start_time={start_time}, week_start={week_start}, date={date}")
+                        logger.error(f"   invitation_id={invitation_id}, change_request_id={change_request_id}")
+                        
                         # Build detailed error message in English
                         error_details = []
                         if group_name:

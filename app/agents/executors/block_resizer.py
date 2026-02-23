@@ -350,11 +350,15 @@ class BlockResizer:
             # Check for conflicts if increasing duration
             if duration_diff > 0:
                 # Calculate new end time
-                start_idx = time_slots.index(original_start) if original_start in time_slots else 0
-                new_end_idx = start_idx + new_duration
-                new_end_time = time_slots[new_end_idx] if new_end_idx < len(time_slots) else "21:00"
-                
                 new_start_minutes = _time_to_minutes(original_start)
+                if original_start in time_slots:
+                    start_idx = time_slots.index(original_start)
+                    new_end_idx = start_idx + new_duration
+                    new_end_time = time_slots[new_end_idx] if new_end_idx < len(time_slots) else _minutes_to_time(new_start_minutes + (new_duration * 60))
+                else:
+                    # Manual calculation when original_start is beyond time_slots
+                    new_end_time = _minutes_to_time(new_start_minutes + (new_duration * 60))
+                
                 new_end_minutes = _time_to_minutes(new_end_time)
                 
                 # Check conflicts with constraints
@@ -422,12 +426,34 @@ class BlockResizer:
                 logger.info(f"✅ Deleted {len(consecutive_blocks)} old blocks")
             
             # Create new blocks
-            start_idx = time_slots.index(original_start) if original_start in time_slots else 0
             new_blocks = []
-            for i in range(new_duration):
-                if start_idx + i < len(time_slots):
-                    new_time = time_slots[start_idx + i]
-                    new_end = time_slots[start_idx + i + 1] if (start_idx + i + 1) < len(time_slots) else "21:00"
+            if original_start in time_slots:
+                # Use time_slots approach
+                start_idx = time_slots.index(original_start)
+                for i in range(new_duration):
+                    if start_idx + i < len(time_slots):
+                        new_time = time_slots[start_idx + i]
+                        new_end = time_slots[start_idx + i + 1] if (start_idx + i + 1) < len(time_slots) else "21:00"
+                        new_blocks.append({
+                            "plan_id": plan_id,
+                            "user_id": user_id,
+                            "course_number": course_number,
+                            "course_name": course_name,
+                            "work_type": work_type,
+                            "day_of_week": original_day,
+                            "start_time": new_time,
+                            "end_time": new_end,
+                            "source": "manual"
+                        })
+            else:
+                # Manual time calculation (when original_start is beyond time_slots, e.g., 21:00, 22:00)
+                logger.info(f"⚠️ original_start {original_start} not in time_slots, using manual calculation")
+                start_minutes = _time_to_minutes(original_start)
+                for i in range(new_duration):
+                    block_start_minutes = start_minutes + (i * 60)
+                    block_end_minutes = block_start_minutes + 60
+                    new_time = _minutes_to_time(block_start_minutes)
+                    new_end = _minutes_to_time(block_end_minutes)
                     new_blocks.append({
                         "plan_id": plan_id,
                         "user_id": user_id,
