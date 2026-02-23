@@ -1,0 +1,86 @@
+# SemesterOS Agent Architecture – Description for Diagram Generation
+
+Use this description to generate an architecture diagram (e.g. PNG) with another LLM or tool. Keep all **module names** exactly as written; they must match the system's step logging (e.g. /api/execute steps) and code.
+
+---
+
+## System name
+**SemesterOS Agent** (academic schedule and study-planning agent)
+
+---
+
+## High-level flow
+1. **User** sends a natural-language prompt (e.g. "Show my schedule for the week starting 15/02/2026", "Add a one-time constraint for a wedding on 15/03/2026").
+2. The **supervisor** receives the prompt, uses an **LLM** to choose one executor and extract parameters, and optionally falls back to pattern matching if the LLM fails.
+3. Exactly **one executor** runs per request and returns a response (message, status, etc.).
+
+So: **User prompt → supervisor (LLM routing) → one of 12 executors**.
+
+Separately, the **Weekly Planner** (system agent) runs on a schedule or via API; it uses the LLM heavily to generate and refine weekly plans (group and personal blocks) and is a core part of the system.
+
+---
+
+## Node types and names
+
+### Type: SUPERVISOR (single node)
+- **Module name (exact):** `supervisor`
+- **Title:** Supervisor
+- **Goal:** Route each user prompt to the correct executor and extract parameters. Produces a "reasoning" explanation for the chosen executor.
+- **Uses:** LLM (OpenAI/LLMod) for routing and parameter extraction; fallback pattern matching when LLM is unavailable.
+- **Connection:** Receives from "User prompt"; sends to exactly one of the 12 executors per request (conceptually: one arrow from supervisor to each executor, but only one executor is invoked per call).
+
+---
+
+### Type: EXECUTOR (12 nodes)
+
+Use these **exact** names in the diagram; they appear in logs and API steps.
+
+| Module name (exact)      | Title (short)      | Goal | Uses |
+|--------------------------|--------------------|------|------|
+| `schedule_retriever`     | Schedule Retriever | Get the user's weekly schedule (semester, personal, group blocks and constraints) for a given week. | Supabase (weekly_plans, weekly_plan_blocks, constraints, weekly_constraints) |
+| `rag_chat`               | RAG Chat           | Answer academic/informational questions using retrieval over academy docs and an LLM. | Embedding API, Pinecone, LLM |
+| `group_manager`          | Group Manager      | Create study groups and invite members by email (course-based). | Supabase (groups, invitations, courses) |
+| `notification_retriever` | Notification Retriever | Return the user's unread notifications. | Supabase (notifications) |
+| `notification_cleaner`   | Notification Cleaner  | Mark notifications as read or delete them. | Supabase (notifications) |
+| `request_handler`        | Request Handler    | Accept or reject group invitations and group change requests. | Supabase (invitations, change_requests) |
+| `preference_updater`     | Preference Updater | Update user study preferences from natural language; persist raw text and LLM-generated summary. | Supabase (user_profiles), LLM for summary |
+| `block_mover`            | Block Mover        | Move a study block to another day/time; can trigger preference extraction from the prompt. | Supabase (weekly_plan_blocks), optional LLM for preferences |
+| `block_resizer`          | Block Resizer      | Change block duration (and optionally start time); for group blocks may create a change request. | Supabase (weekly_plan_blocks, change_requests), optional LLM |
+| `block_creator`          | Block Creator      | Create new study blocks (personal or group) and add them to the weekly plan. | Supabase (weekly_plans, weekly_plan_blocks) |
+| `constraint_manager`     | Constraint Manager | Add or delete constraints (permanent or one-time), e.g. "Wedding", "Training". | Supabase (constraints, weekly_constraints) |
+| `courses_retriever`      | Courses Retriever  | Return the list of courses the user is taking this semester. | Supabase (courses) |
+
+---
+
+### Type: SYSTEM AGENT – Weekly Planner (important, heavy LLM use)
+
+- **Module / component name:** Weekly Planner (Global Scheduler Agent)
+- **Title:** Weekly Planner
+- **Goal:** Generate and maintain weekly study plans for all users (or a single user). Cleans up existing plans for the target week, then builds new plans from courses, constraints, and group memberships. Places group study blocks using an LLM to respect preferences and common free slots; places personal blocks and refines the schedule with an LLM. Synchronizes group_plan_blocks and weekly_plan_blocks across group members so everyone sees the same group blocks.
+- **Uses:** LLM (OpenAI/LLMod) heavily: (1) `_plan_group_blocks_with_llm` to decide when/where to place group study blocks; (2) `_refine_schedule_with_llm` to propose personal and group blocks and refine the schedule. Supabase: weekly_plans, weekly_plan_blocks, group_plan_blocks, constraints, weekly_constraints, courses, study_groups, group_members, group_preferences.
+- **Triggered by:** Not from the User → supervisor → executor flow. Triggered by: POST /api/weekly-plan/generate (with week_start), POST /api/weekly-plan/run-immediately, POST /api/weekly-plan/trigger-now, or a scheduled cron job (APScheduler). Can run for all users (global agent) or for a single user.
+- **Connection for diagram:** Draw as a separate node (e.g. "Weekly Planner" or "Global Scheduler Agent") that is invoked by "Schedule / API trigger" or "POST /api/weekly-plan/generate", not by the supervisor. Optionally show an edge from "System / Scheduler" to "Weekly Planner", and edges from "Weekly Planner" to "LLM" and "Supabase".
+
+---
+
+## Connections for the diagram
+
+- **User / User prompt** → **supervisor**  
+  (single arrow: all requests go to the supervisor first.)
+
+- **supervisor** → **each of the 12 executors**  
+  (either: one arrow from supervisor to each executor, labeled as "routes to" or "invokes"; or a single "fan-out" to a box that contains the 12 executor names. Only one executor runs per request.)
+
+- Executors do **not** call each other; they are independent. No arrows between executors.
+
+---
+
+## Summary for diagram layout
+
+- **1 supervisor** node: title "supervisor", subtitle "(LLM routing + reasoning)".
+- **12 executor** nodes with exact names: `schedule_retriever`, `rag_chat`, `group_manager`, `notification_retriever`, `notification_cleaner`, `request_handler`, `preference_updater`, `block_mover`, `block_resizer`, `block_creator`, `constraint_manager`, `courses_retriever`.
+- **1 system agent** node: **Weekly Planner** (title "Weekly Planner" or "Global Scheduler Agent", subtitle "heavy LLM use"). Important component; not invoked by the supervisor; triggered by schedule or POST /api/weekly-plan/generate.
+- **Input:** one "User prompt" (or "POST /api/execute") node; optionally a "Schedule / API" or "System trigger" node for the Weekly Planner.
+- **Edges:** User prompt → supervisor; supervisor → each executor (or supervisor → "Executors" group containing the 12). Schedule/API trigger → Weekly Planner; Weekly Planner → LLM; Weekly Planner → Supabase (optional).
+
+Keep all names exactly as in the table and in the "Module name (exact)" column so they match the system's steps and documentation.
