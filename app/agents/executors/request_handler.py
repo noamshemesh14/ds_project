@@ -1620,9 +1620,25 @@ class RequestHandler:
                         for apply_attempt in range(3):
                             try:
                                 await _apply_group_change_request(change_request_id, client, change_request, group_id, member_ids, requester_id)
+                                
+                                # Build detailed message using actual values from the change request (not LLM params)
+                                day_names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+                                original_day = day_names[change_request.get("original_day_of_week", 0)] if change_request.get("original_day_of_week") is not None else "Unknown"
+                                original_time = change_request.get("original_start_time", "")[:5] if change_request.get("original_start_time") else "Unknown"
+                                original_duration = change_request.get("original_duration_hours", 0)
+                                
+                                if change_request.get("request_type") == "resize":
+                                    proposed_duration = change_request.get("proposed_duration_hours", 0)
+                                    logger.info(f"📊 Resize request details from DB: original={original_duration}h, proposed={proposed_duration}h")
+                                    message = f"All members approved! Change has been applied.\n\nResize request: {original_day} {original_time} ({original_duration}h) → ({proposed_duration}h)"
+                                else:  # move
+                                    proposed_day = day_names[change_request.get("proposed_day_of_week", 0)] if change_request.get("proposed_day_of_week") is not None else "Unknown"
+                                    proposed_time = change_request.get("proposed_start_time", "")[:5] if change_request.get("proposed_start_time") else "Unknown"
+                                    message = f"All members approved! Change has been applied.\n\nMove request: {original_day} {original_time} ({original_duration}h) → {proposed_day} {proposed_time} ({original_duration}h)"
+                                
                                 return {
                                     "status": "success",
-                                    "message": "All members approved! Change has been applied.",
+                                    "message": message,
                                     "applied": True
                                 }
                             except Exception as apply_err:
@@ -1649,9 +1665,24 @@ class RequestHandler:
                         except Exception as notif_err:
                             logger.warning(f"Could not update notification: {notif_err}")
                         
+                        # Build detailed message using actual values from the change request (not LLM params)
+                        day_names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+                        original_day = day_names[change_request.get("original_day_of_week", 0)] if change_request.get("original_day_of_week") is not None else "Unknown"
+                        original_time = change_request.get("original_start_time", "")[:5] if change_request.get("original_start_time") else "Unknown"
+                        original_duration = change_request.get("original_duration_hours", 0)
+                        
+                        if change_request.get("request_type") == "resize":
+                            proposed_duration = change_request.get("proposed_duration_hours", 0)
+                            logger.info(f"📊 Resize request details from DB: original={original_duration}h, proposed={proposed_duration}h")
+                            detail_msg = f"{original_day} {original_time} ({original_duration}h) → ({proposed_duration}h)"
+                        else:  # move
+                            proposed_day = day_names[change_request.get("proposed_day_of_week", 0)] if change_request.get("proposed_day_of_week") is not None else "Unknown"
+                            proposed_time = change_request.get("proposed_start_time", "")[:5] if change_request.get("proposed_start_time") else "Unknown"
+                            detail_msg = f"{original_day} {original_time} ({original_duration}h) → {proposed_day} {proposed_time} ({original_duration}h)"
+                        
                         return {
                             "status": "success",
-                            "message": f"Your approval recorded. Waiting for other members ({approved_count}/{total_needed} approved).",
+                            "message": f"Your approval recorded. Waiting for other members ({approved_count}/{total_needed} approved).\n\nRequest: {detail_msg}",
                             "applied": False,
                             "approved_count": approved_count,
                             "total_needed": total_needed
