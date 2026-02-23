@@ -1583,6 +1583,172 @@ def _minutes_to_time(minutes: int) -> str:
     return f"{hour:02d}:{minute:02d}"
 
 
+def _norm_hhmm(t):
+    """Normalize time strings like '13:00:00' -> '13:00'."""
+    if not t:
+        return None
+    t = str(t).strip()
+    if len(t) >= 5 and ":" in t:
+        return t[:5]
+    return t
+
+
+def _overlaps(a_start: str, a_end: str, b_start: str, b_end: str) -> bool:
+    """True iff [a_start, a_end) overlaps [b_start, b_end) (times are HH:MM / HH:MM:SS)."""
+    a_s = _time_to_minutes(a_start)
+    a_e = _time_to_minutes(a_end)
+    b_s = _time_to_minutes(b_start)
+    b_e = _time_to_minutes(b_end)
+    return a_s < b_e and a_e > b_s
+
+
+def _group_change_request_target_window(change_request: dict):
+    """
+    Returns (day_of_week, start_time_hhmm, end_time_hhmm) for the *proposed* final block window.
+    Handles both resize and move style requests (and "add new block" which is a move with no original).
+    """
+    request_type = (change_request.get("request_type") or "move").lower()
+
+    proposed_day = change_request.get("proposed_day_of_week")
+    proposed_start = _norm_hhmm(change_request.get("proposed_start_time"))
+    proposed_end = _norm_hhmm(change_request.get("proposed_end_time"))
+    proposed_duration = change_request.get("proposed_duration_hours")
+
+    original_day = change_request.get("original_day_of_week")
+    original_start = _norm_hhmm(change_request.get("original_start_time"))
+    original_duration = change_request.get("original_duration_hours") or 0
+
+    if request_type == "resize":
+        actual_day = original_day if original_day is not None else proposed_day
+        actual_start = proposed_start if (proposed_start and proposed_start != original_start) else (original_start or proposed_start)
+        duration = int(proposed_duration or original_duration or 1)
+        if actual_start and proposed_end:
+            actual_end = proposed_end
+        elif actual_start:
+            actual_end = _minutes_to_time(_time_to_minutes(actual_start) + duration * 60)
+        else:
+            actual_end = None
+        return actual_day, actual_start, actual_end
+
+    # Default: move-like (including new block creation)
+    day = proposed_day
+    start = proposed_start
+    duration = int(proposed_duration or original_duration or 1)
+    if start and proposed_end:
+        end = proposed_end
+    elif start:
+        end = _minutes_to_time(_time_to_minutes(start) + duration * 60)
+    else:
+        end = None
+    return day, start, end
+
+
+def _get_group_change_conflicts_for_user(
+    client,
+    user_id: str,
+    week_start: str,
+    *,
+    day_of_week: int,
+    start_time: str,
+    end_time: str,
+    course_number=None,
+    exclusion_ranges=None,
+):
+    """
+    Returns a list of human-readable conflict reasons for this user/time-window.
+    Checks permanent constraints (`constraints`), weekly constraints (`weekly_constraints`), and existing plan blocks.
+
+    exclusion_ranges: list of (day_of_week, start_time_hhmm, end_time_hhmm) used to ignore same-course group blocks
+                     that are being edited/replaced.
+    """
+    conflicts = []
+    exclusion_ranges = exclusion_ranges or []
+
+    # 1) Weekly constraints
+    try:
+        wc_res = (
+            client.table("weekly_constraints")
+            .select("id, title, description, days, start_time, end_time")
+            .eq("user_id", user_id)
+            .eq("week_start", week_start)
+            .execute()
+        )
+        for c in (wc_res.data or []):
+            for d in _parse_days(c.get("days")):
+                if int(d) != int(day_of_week):
+                    continue
+                if _overlaps(start_time, end_time, c.get("start_time"), c.get("end_time")):
+                    title = c.get("title") or "Weekly constraint"
+                    conflicts.append(f"Weekly constraint: {title} ({_norm_hhmm(c.get('start_time'))}-{_norm_hhmm(c.get('end_time'))})")
+                    break
+    except Exception as e:
+        # If we can't verify constraints, we should not apply a change that might overwrite them.
+        conflicts.append(f"Could not verify weekly constraints (db error): {e}")
+
+    # 2) Permanent constraints
+    try:
+        pc_res = (
+            client.table("constraints")
+            .select("id, title, description, days, start_time, end_time")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        for c in (pc_res.data or []):
+            for d in _parse_days(c.get("days")):
+                if int(d) != int(day_of_week):
+                    continue
+                if _overlaps(start_time, end_time, c.get("start_time"), c.get("end_time")):
+                    title = c.get("title") or "Permanent constraint"
+                    conflicts.append(f"Permanent constraint: {title} ({_norm_hhmm(c.get('start_time'))}-{_norm_hhmm(c.get('end_time'))})")
+                    break
+    except Exception as e:
+        conflicts.append(f"Could not verify permanent constraints (db error): {e}")
+
+    # 3) Existing blocks in the user's weekly plan
+    try:
+        plan_res = (
+            client.table("weekly_plans")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("week_start", week_start)
+            .limit(1)
+            .execute()
+        )
+        if plan_res.data:
+            plan_id = plan_res.data[0]["id"]
+            blocks_res = (
+                client.table("weekly_plan_blocks")
+                .select("id, day_of_week, start_time, end_time, work_type, course_number, course_name, source")
+                .eq("plan_id", plan_id)
+                .eq("day_of_week", day_of_week)
+                .execute()
+            )
+            for b in (blocks_res.data or []):
+                b_start = b.get("start_time")
+                b_end = b.get("end_time")
+                if not b_start or not b_end:
+                    continue
+
+                # Exclude same-course group blocks that are being replaced/moved/resized
+                if course_number and (b.get("work_type") == "group") and (str(b.get("course_number")) == str(course_number)):
+                    skip = False
+                    for ex_day, ex_start, ex_end in exclusion_ranges:
+                        if int(ex_day) == int(day_of_week) and _overlaps(b_start, b_end, ex_start, ex_end):
+                            skip = True
+                            break
+                    if skip:
+                        continue
+
+                if _overlaps(start_time, end_time, b_start, b_end):
+                    wt = b.get("work_type") or "block"
+                    cn = b.get("course_number") or b.get("course_name") or ""
+                    conflicts.append(f"Existing {wt} block: {cn} ({_norm_hhmm(b_start)}-{_norm_hhmm(b_end)})")
+    except Exception as e:
+        conflicts.append(f"Could not verify existing blocks (db error): {e}")
+
+    return conflicts
+
+
 def _build_time_slots(start_hour: int = 8, end_hour: int = 20, slot_minutes: int = 60):
     slots = []
     for hour in range(start_hour, end_hour + 1):
@@ -7595,6 +7761,67 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
     group_info = client.table("study_groups").select("course_id, course_name").eq("id", group_id).limit(1).execute()
     course_number = group_info.data[0].get("course_id") if group_info.data else None
     course_name = group_info.data[0].get("course_name") if group_info.data else None
+
+    # -------------------------------
+    # HARD VALIDATION (no overwrites)
+    # -------------------------------
+    # Before applying ANY group change, ensure it does not conflict with ANY member's
+    # permanent constraints, weekly constraints, or existing blocks.
+    try:
+        target_day, target_start, target_end = _group_change_request_target_window(change_request)
+
+        if target_day is None or not target_start or not target_end:
+            raise HTTPException(status_code=400, detail="Invalid change request: missing proposed day/time")
+
+        # Exclude same-course group blocks that are being edited/replaced (prevents self-overlap false positives)
+        exclusion_ranges = []
+        if original_day is not None and original_start and int(original_duration or 0) > 0:
+            original_start_hhmm = _norm_hhmm(original_start)
+            original_end_hhmm = _norm_hhmm(change_request.get("original_end_time")) or _minutes_to_time(
+                _time_to_minutes(original_start_hhmm) + int(original_duration) * 60
+            )
+            exclusion_ranges.append((int(original_day), original_start_hhmm, original_end_hhmm))
+
+        if proposed_day is not None and proposed_start:
+            proposed_start_hhmm = _norm_hhmm(proposed_start)
+            proposed_end_hhmm = _norm_hhmm(change_request.get("proposed_end_time")) or _norm_hhmm(target_end)
+            if proposed_end_hhmm:
+                exclusion_ranges.append((int(proposed_day), proposed_start_hhmm, proposed_end_hhmm))
+
+        for mid in (member_ids or []):
+            member_conflicts = _get_group_change_conflicts_for_user(
+                client,
+                mid,
+                week_start,
+                day_of_week=int(target_day),
+                start_time=target_start,
+                end_time=target_end,
+                course_number=course_number,
+                exclusion_ranges=exclusion_ranges,
+            )
+            if member_conflicts:
+                # Reject globally (for everyone) and stop.
+                client.table("group_meeting_change_requests").update({
+                    "status": "rejected",
+                    "resolved_at": datetime.now().isoformat()
+                }).eq("id", request_id).execute()
+                detail = (
+                    "Group change request rejected because it conflicts with constraints/blocks.\n"
+                    f"Conflicting member: {mid}\n"
+                    "Conflicts:\n- " + "\n- ".join(member_conflicts)
+                )
+                logging.warning(f"❌ Rejecting request {request_id} due to conflicts for member {mid}: {member_conflicts}")
+                raise HTTPException(status_code=400, detail=detail)
+    except HTTPException:
+        raise
+    except Exception as validate_err:
+        # Fail closed: if we can't validate, do not apply.
+        client.table("group_meeting_change_requests").update({
+            "status": "rejected",
+            "resolved_at": datetime.now().isoformat()
+        }).eq("id", request_id).execute()
+        logging.warning(f"❌ Rejecting request {request_id}: validation error {validate_err}")
+        raise HTTPException(status_code=400, detail=f"Group change request rejected: could not validate conflicts ({validate_err})")
     
     if request_type == "resize" and proposed_duration:
         # Handle resize: update duration of group blocks

@@ -1555,6 +1555,115 @@ class RequestHandler:
                 
                 if is_approve:
                     logger.info(f"✅ Approving change request {change_request_id}")
+
+                    # HARD VALIDATION: approving is only allowed if the change is legal for the approving user.
+                    # If it conflicts with ANY constraint/block for this user, we auto-reject the request for everyone.
+                    try:
+                        from datetime import datetime, timedelta
+                        from app.main import (
+                            _group_change_request_target_window,
+                            _get_group_change_conflicts_for_user,
+                            _norm_hhmm,
+                            _time_to_minutes,
+                            _minutes_to_time,
+                        )
+
+                        # Determine week_start for conflict checks
+                        week_start = change_request.get("week_start")
+                        if not week_start and date:
+                            try:
+                                date_normalized = date.replace("/", "-")
+                                date_obj = None
+                                for fmt in ["%Y-%m-%d", "%d-%m-%Y", "%d-%m-%y"]:
+                                    try:
+                                        date_obj = datetime.strptime(date_normalized, fmt)
+                                        break
+                                    except ValueError:
+                                        continue
+                                if date_obj:
+                                    days_since_sunday = (date_obj.weekday() + 1) % 7
+                                    sunday = date_obj - timedelta(days=days_since_sunday)
+                                    week_start = sunday.strftime("%Y-%m-%d")
+                                    change_request["week_start"] = week_start
+                            except Exception as date_err:
+                                logger.warning(f"⚠️ Could not calculate week_start for validation from date {date}: {date_err}")
+
+                        if not week_start:
+                            today = datetime.now()
+                            days_since_sunday = (today.weekday() + 1) % 7
+                            week_start = (today - timedelta(days=days_since_sunday)).strftime("%Y-%m-%d")
+                            change_request["week_start"] = week_start
+
+                        target_day, target_start, target_end = _group_change_request_target_window(change_request)
+                        if target_day is None or not target_start or not target_end:
+                            raise HTTPException(status_code=400, detail="Invalid change request: missing proposed day/time")
+
+                        # Get course_number (course_id) for same-course exclusions in block checks
+                        group_info = client.table("study_groups").select("course_id").eq("id", group_id).limit(1).execute()
+                        course_number = group_info.data[0].get("course_id") if group_info.data else None
+
+                        # Build exclusion ranges for the same course (ignore the group's own blocks being edited)
+                        exclusion_ranges = []
+                        original_day = change_request.get("original_day_of_week")
+                        original_start = change_request.get("original_start_time")
+                        original_duration = change_request.get("original_duration_hours", 0) or 0
+                        if original_day is not None and original_start and int(original_duration) > 0:
+                            o_start = _norm_hhmm(original_start)
+                            o_end = _norm_hhmm(change_request.get("original_end_time")) or _minutes_to_time(_time_to_minutes(o_start) + int(original_duration) * 60)
+                            exclusion_ranges.append((int(original_day), o_start, o_end))
+
+                        proposed_day = change_request.get("proposed_day_of_week")
+                        proposed_start = change_request.get("proposed_start_time")
+                        if proposed_day is not None and proposed_start:
+                            p_start = _norm_hhmm(proposed_start)
+                            p_end = _norm_hhmm(change_request.get("proposed_end_time")) or _norm_hhmm(target_end)
+                            if p_end:
+                                exclusion_ranges.append((int(proposed_day), p_start, p_end))
+
+                        conflicts = _get_group_change_conflicts_for_user(
+                            client,
+                            user_id,
+                            week_start,
+                            day_of_week=int(target_day),
+                            start_time=target_start,
+                            end_time=target_end,
+                            course_number=course_number,
+                            exclusion_ranges=exclusion_ranges,
+                        )
+
+                        if conflicts:
+                            # Auto-reject for everyone
+                            client.table("group_meeting_change_requests").update({
+                                "status": "rejected",
+                                "resolved_at": "NOW()"
+                            }).eq("id", change_request_id).execute()
+
+                            # Record this as a rejection by the user (so audit/traces are consistent)
+                            try:
+                                client.table("group_change_approvals").insert({
+                                    "request_id": change_request_id,
+                                    "user_id": user_id,
+                                    "approved": False
+                                }).execute()
+                            except Exception:
+                                client.table("group_change_approvals").update({
+                                    "approved": False,
+                                    "responded_at": "NOW()"
+                                }).eq("request_id", change_request_id).eq("user_id", user_id).execute()
+
+                            conflict_msg = "Cannot approve this change: it conflicts with your constraints/blocks, so the request was rejected for everyone.\n\nConflicts:\n- " + "\n- ".join(conflicts)
+                            logger.warning(f"❌ Auto-rejected request {change_request_id} due to conflicts for approver {user_id}: {conflicts}")
+                            raise HTTPException(status_code=400, detail=conflict_msg)
+                    except HTTPException:
+                        raise
+                    except Exception as validate_err:
+                        # Fail closed
+                        client.table("group_meeting_change_requests").update({
+                            "status": "rejected",
+                            "resolved_at": "NOW()"
+                        }).eq("id", change_request_id).execute()
+                        logger.warning(f"❌ Auto-rejected request {change_request_id}: validation error {validate_err}")
+                        raise HTTPException(status_code=400, detail=f"Cannot approve this change: could not validate conflicts ({validate_err}). Request was rejected for everyone.")
                     
                     # Record the approval first
                     try:
