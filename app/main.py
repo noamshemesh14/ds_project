@@ -1729,15 +1729,26 @@ def _get_group_change_conflicts_for_user(
                 if not b_start or not b_end:
                     continue
 
-                # Exclude same-course group blocks that are being replaced/moved/resized
-                if course_number and (b.get("work_type") == "group") and (str(b.get("course_number")) == str(course_number)):
-                    skip = False
+                # Exclude the group's own blocks that are being replaced/moved/resized (prevents self-conflict).
+                # In some datasets, course_number can be missing/NULL on group blocks; in that case we still
+                # exclude "group" blocks that overlap the exclusion window(s) to avoid false conflicts.
+                if (b.get("work_type") == "group") and exclusion_ranges:
+                    overlaps_exclusion = False
                     for ex_day, ex_start, ex_end in exclusion_ranges:
                         if int(ex_day) == int(day_of_week) and _overlaps(b_start, b_end, ex_start, ex_end):
-                            skip = True
+                            overlaps_exclusion = True
                             break
-                    if skip:
-                        continue
+
+                    if overlaps_exclusion:
+                        b_course = b.get("course_number")
+                        # If course_number is known, exclude only matching course (or NULL, which we treat as legacy/missing)
+                        if course_number:
+                            if b_course is None or str(b_course) == str(course_number):
+                                continue
+                        else:
+                            # No course_number available -> fail-safe to prevent self-conflict for group changes
+                            # (exclusion window is derived from the request's original/proposed range).
+                            continue
 
                 if _overlaps(start_time, end_time, b_start, b_end):
                     wt = b.get("work_type") or "block"
@@ -1745,6 +1756,29 @@ def _get_group_change_conflicts_for_user(
                     conflicts.append(f"Existing {wt} block: {cn} ({_norm_hhmm(b_start)}-{_norm_hhmm(b_end)})")
     except Exception as e:
         conflicts.append(f"Could not verify existing blocks (db error): {e}")
+
+    # 4) Semester schedule items (fixed blocks that must never be overwritten)
+    # These are not stored in constraints/weekly_constraints, and may not exist in weekly_plan_blocks.
+    try:
+        sem_res = (
+            client.table("semester_schedule_items")
+            .select("id, course_name, type, days, start_time, end_time")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        for item in (sem_res.data or []):
+            for d in _parse_days(item.get("days")):
+                if int(d) != int(day_of_week):
+                    continue
+                it_start = item.get("start_time")
+                it_end = item.get("end_time")
+                if it_start and it_end and _overlaps(start_time, end_time, it_start, it_end):
+                    cname = item.get("course_name") or "Semester item"
+                    itype = item.get("type") or "class"
+                    conflicts.append(f"Semester schedule ({itype}): {cname} ({_norm_hhmm(it_start)}-{_norm_hhmm(it_end)})")
+                    break
+    except Exception as e:
+        conflicts.append(f"Could not verify semester schedule items (db error): {e}")
 
     return conflicts
 
@@ -8472,9 +8506,9 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
                     if original_day == proposed_day and proposed_start_minutes is not None and proposed_end_minutes is not None:
                         overlaps_new = block_start_minutes < proposed_end_minutes and block_end_minutes > proposed_start_minutes
                         logging.info(f"      Same day move - overlaps new location? {overlaps_new}")
-                        if overlaps_new:
-                            logging.info(f"      ⏭️ Skipping block {block['id']} - overlaps new location")
-                            continue
+                        # IMPORTANT: even if the new location overlaps the original (e.g., 15-17 -> 16-18),
+                        # we must delete the original blocks fully and then recreate at the new window.
+                        # Skipping here can lead to partial moves.
                     
                     if overlaps_original:
                         logging.info(f"      ✅ Will delete block {block['id']}")
@@ -8594,8 +8628,9 @@ async def _apply_group_change_request(request_id: str, client, change_request: d
                             
                             if original_day == proposed_day and proposed_start_minutes is not None and proposed_end_minutes is not None:
                                 overlaps_new = block_start_minutes < proposed_end_minutes and block_end_minutes > proposed_start_minutes
-                                if overlaps_new:
-                                    continue
+                            # IMPORTANT: even if the new location overlaps the original (e.g., 15-17 -> 16-18),
+                            # we must delete the original blocks fully and then recreate at the new window.
+                            # Skipping here can lead to partial moves.
                             
                             if overlaps_original:
                                 blocks_to_delete.append(block["id"])
