@@ -11826,7 +11826,6 @@ Specialized Executors (routed by Supervisor):
         "prompt_template": {
             "template": [
                 "show me my schedule [for the week starting DATE]",
-                "[QUESTION]",
                 "create study group for course COURSE_NUMBER named GROUP_NAME and invite EMAIL",
                 "show my notifications",
                 "clear my notifications",
@@ -11836,8 +11835,7 @@ Specialized Executors (routed by Supervisor):
                 "create [a] [new] [personal/group] block [in course COURSE] on [DAY] from [START_TIME] to [END_TIME]",
                 "add [a] [new] preference [to] [PREFERENCE_TEXT]",
                 "add [a/an] [one-time/permanent] constraint [for TITLE] on [DAY] from [START_TIME] to [END_TIME]",
-                "return the full list of my courses",
-                "generate weekly plans [for all users] [for the week starting DATE]"
+                "return the full list of my courses"
             ]
         },
         "prompt_examples": [
