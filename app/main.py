@@ -7008,12 +7008,14 @@ async def resize_schedule_block(
         existing = client.table("weekly_plan_blocks").select("id, start_time").eq("plan_id", plan_id).eq("course_number", course_number).eq("day_of_week", day_of_week).eq("work_type", "personal").execute()
         
         # Find consecutive blocks starting from start_time
-        time_slots = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
-        start_idx = time_slots.index(start_time) if start_time in time_slots else 0
+        time_slots = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00", "22:00", "23:00"]
+        start_time_norm = _norm_hhmm(start_time) or start_time
+        start_idx = time_slots.index(start_time_norm) if start_time_norm in time_slots else 0
         
         blocks_to_delete = []
         for block in (existing.data or []):
-            block_idx = time_slots.index(block["start_time"]) if block["start_time"] in time_slots else -1
+            block_start_norm = _norm_hhmm(block["start_time"]) if block.get("start_time") else None
+            block_idx = time_slots.index(block_start_norm) if block_start_norm and block_start_norm in time_slots else -1
             if block_idx >= start_idx and block_idx < start_idx + old_duration:
                 blocks_to_delete.append(block["id"])
         
@@ -7023,7 +7025,7 @@ async def resize_schedule_block(
         # Calculate the time range that the new blocks would occupy
         new_start_time_obj = time_slots[start_idx] if start_idx < len(time_slots) else None
         new_end_idx = start_idx + new_duration
-        new_end_time_obj = time_slots[new_end_idx] if new_end_idx < len(time_slots) else "21:00"
+        new_end_time_obj = time_slots[new_end_idx] if new_end_idx < len(time_slots) else "23:00"
         
         new_start_minutes = _time_to_minutes(new_start_time_obj) if new_start_time_obj else 0
         new_end_minutes = _time_to_minutes(new_end_time_obj) if new_end_time_obj else 0
@@ -7129,7 +7131,7 @@ async def resize_schedule_block(
         for i in range(new_duration):
             new_time = time_slots[start_idx + i] if (start_idx + i) < len(time_slots) else None
             if new_time:
-                new_end = time_slots[start_idx + i + 1] if (start_idx + i + 1) < len(time_slots) else "21:00"
+                new_end = time_slots[start_idx + i + 1] if (start_idx + i + 1) < len(time_slots) else "23:00"
                 client.table("weekly_plan_blocks").insert({
                     "plan_id": plan_id,
                     "user_id": user_id,
