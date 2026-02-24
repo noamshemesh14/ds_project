@@ -11773,7 +11773,7 @@ async def get_team_info():
         "team_name": "נטע, מעין ונועם",
         "students": [
             {"name": "Neta Silam", "email": "neta.silam@campus.technion.ac.il"},
-            {"name": "Mayyan Galamidi", "email": "mgalamidi@campus.technion.ac.il"},
+            {"name": "Maayan Galamidi", "email": "mgalamidi@campus.technion.ac.il"},
             {"name": "Noam Shemesh", "email": "noam.shemesh@campus.technion.ac.il"},
         ],
     }
