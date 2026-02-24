@@ -537,8 +537,8 @@ class BlockMover:
             logger.info(f"✅ No conflicts detected - proceeding with move")
             
             # Update all consecutive blocks
-            # Calculate time slots for the new location (extend to 22:00 to support evening hours)
-            time_slots = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00", "22:00"]
+            # Calculate time slots for the new location (all 24 hours)
+            time_slots = ["00:00", "01:00", "02:00", "03:00", "04:00", "05:00", "06:00", "07:00", "08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00", "22:00", "23:00"]
             
             # Find the closest time slot to new_start_time
             if new_start_time in time_slots:

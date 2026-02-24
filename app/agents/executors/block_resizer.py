@@ -315,7 +315,7 @@ class BlockResizer:
             logger.info(f"📦 Resizing personal block: {original_duration}h -> {new_duration}h")
             
             plan_id = block["plan_id"]
-            time_slots = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
+            time_slots = ["00:00", "01:00", "02:00", "03:00", "04:00", "05:00", "06:00", "07:00", "08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00", "22:00", "23:00"]
             
             # Find all consecutive blocks for the same course and work_type starting from original_start
             all_blocks_for_resize = client.table("weekly_plan_blocks").select("id, start_time, end_time").eq("plan_id", plan_id).eq("course_number", course_number).eq("work_type", work_type).eq("day_of_week", original_day).order("start_time").execute()
