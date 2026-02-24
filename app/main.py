@@ -11826,6 +11826,7 @@ Specialized Executors (routed by Supervisor):
         "prompt_template": {
             "template": [
                 "show me my schedule [for the week starting DATE]",
+                "give me information about [QUESTION]",
                 "create study group for course COURSE_NUMBER named GROUP_NAME and invite EMAIL",
                 "show my notifications",
                 "clear my notifications",
