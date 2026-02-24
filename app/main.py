@@ -11792,142 +11792,567 @@ async def get_agent_info():
         },
         "prompt_examples": [
             {
-                "prompt": "Show my schedule for the week starting 15/02/2026",
-                "full_response": "Your weekly schedule (2026-02-15):\n\nSunday: (none)\nMonday: 08:00-10:00 | Lecture (10403) - Semester; 14:00-16:00 | Training (Constraint)\nTuesday: 10:00-12:00 | Tutorial (10403) - Semester; 14:00-16:00 | Introduction to CS (10403) - Personal\nWednesday: ...\n(Full week with semester, personal, and constraint blocks.)",
+                "prompt": "show me my schedule for the week starting 22/02/2026",
+                "full_response": "Week starting: 2026-02-22\n============================================================\n\nראשון:\n  08:00-09:00 | אימון (אילוץ)\n  09:00-10:00 | מערכות הפעלה (10407) - Personal\n  12:00-15:00 | מערכות הפעלה (10407) - Personal\n  20:00-21:00 | מערכות הפעלה (10407) - Personal\n\nשני:\n  08:00-09:00 | אימון (אילוץ)\n  09:00-10:00 | מערכות הפעלה (10407) - Personal\n  13:00-15:00 | מערכות הפעלה (10407) - Personal\n  16:00-17:00 | מערכות הפעלה (10407) - Personal\n  17:00-18:00 | נושאים נבחרים בהנדסת נתונים (10413) - Personal\n  18:00-19:00 | dance class (אילוץ)\n  19:00-21:00 | volunteering (אילוץ)\n\nשלישי:\n  08:00-11:00 | מערכות נבונות אינטראקטיביות (10411) - Group\n  11:00-12:00 | נושאים נבחרים בהנדסת נתונים (10413) - Personal\n  16:00-21:00 | נושאים נבחרים בהנדסת נתונים (10413) - Personal\n\nרביעי:\n  12:00-13:00 | מערכות נבונות אינטראקטיביות (10411) - Group\n  13:00-15:00 | נושאים נבחרים בהנדסת נתונים (10413) - Personal\n  15:00-18:00 | מעבדה באיסוף וניהול נתונים (10412) - Group\n  18:00-21:00 | רשתות מחשבים (10406) - Personal\n\nחמישי:\n  08:00-10:00 | רשתות מחשבים (10406) - Personal\n  10:00-11:00 | מערכות נבונות אינטראקטיביות (10411) - Personal\n  12:00-13:00 | מערכות נבונות אינטראקטיביות (10411) - Personal\n  16:00-19:00 | מערכות נבונות אינטראקטיביות (10411) - Personal\n  20:00-22:00 | מעבדה באיסוף וניהול נתונים (10412) - Personal\n\nשישי:\n  08:00-09:00 | מעבדה באיסוף וניהול נתונים (10412) - Personal\n  09:00-12:00 | רשתות מחשבים (10406) - Group\n  14:00-16:00 | מערכות הפעלה (10407) - Personal\n  17:00-19:00 | רשתות מחשבים (10406) - Personal\n\nשבת:\n  10:00-13:00 | מערכות הפעלה (10407) - Group\n  20:00-21:00 | tennis practice (אילוץ)",
                 "steps": [
                     {
                         "module": "supervisor",
                         "prompt": {
-                            "user_prompt": "Show my schedule for the week starting 15/02/2026",
+                            "user_prompt": "show me my schedule for the week starting 22/02/2026",
                             "routing_type": "llm"
                         },
                         "response": {
                             "executor": "schedule_retriever",
-                            "params": {"date": "2026-02-15"},
-                            "reasoning": "User asked to show their schedule for the week starting 15/02/2026. schedule_retriever returns weekly plan blocks and constraints for the given week."
+                            "params": {"date": "2026-02-22"},
+                            "reasoning": "User asked to see their schedule for the week starting 22/02/2026 — use schedule_retriever and provide the normalized week-start date as the date parameter."
                         }
                     },
                     {
                         "module": "schedule_retriever",
                         "prompt": {
-                            "user_prompt": "Show my schedule for the week starting 15/02/2026",
-                            "date": "2026-02-15"
+                            "user_prompt": "show me my schedule for the week starting 22/02/2026",
+                            "date": "2026-02-22"
                         },
                         "response": {
                             "status": "success",
-                            "week_start": "2026-02-15",
-                            "schedule_display": "Your weekly schedule (2026-02-15):\n\nSunday: ...\nMonday: ...",
-                            "total_blocks": 12
+                            "week_start": "2026-02-22",
+                            "schedule_display": "Week starting: 2026-02-22\n============================================================\n\nראשון: ...\nשני: ...\n(Full week with personal, group, and constraint blocks.)",
+                            "total_blocks": 29
                         }
                     }
                 ]
             },
             {
-                "prompt": "Add a one-time constraint for a wedding on 15/03/2026 from 20:00 to 23:00",
-                "full_response": "One-time constraint 'Wedding' added for 15/03/2026 (Sunday) from 20:00 to 23:00. It appears in your weekly constraints for that week.",
+                "prompt": "אילו זכויות יש למשרתי המילואים?",
+                "full_response": "From the Technion rules in the provided material, the main rights and procedures that apply to students who serve in the reserves are:\n\n- Scholarship extension for reserve service\n  - A student who served in reserve duty for more than 30 days (cumulative) while receiving a scholarship may receive an extension of the scholarship from the \"Miluim\" (reserve) fund.\n  - Single-day reserve duties are not counted toward the 30‑day threshold.\n  - The extension is proportional to the number of days served, up to a maximum of three months.\n  - Scholarships/extensions are not automatic — decisions are made on a case‑by‑case basis.\n\n- Application procedure and documentation\n  - Requests for a Miluim scholarship extension must be submitted to the scholarships office of the graduate school using the scholarship‑duration‑extension form and must be marked as a Miluim scholarship request.\n  - The request must include an official \"active reserve service\" certificate from the IDF reserves website detailing the reserve days performed during the scholarship period. (The rules also refer to an officer's confirmation of reserve days where relevant.)\n  - The request should be submitted about two months before the scholarship quota for the degree expires.\n\n- Absences from the Technion\n  - Any absence/leave (from the Technion) of less than two weeks (14 days) requires prior approval from the student's supervisor, from the relevant certification/teaching center (for teaching assistants), and from the unit's graduate‑degrees committee.\n  - Any absence of two weeks (14 days) or more requires prior approval from the supervisor, the certification/teaching center (for TAs), the unit graduate committee and the dean of the graduate school, and appropriate documentation of the reserve service.\n\n- Students studying undergraduate and graduate degrees in parallel\n  - A student studying concurrently for a first (bachelor) and a graduate degree who served more than 30 days must submit proof of eligibility for the bachelor's degree and the final approved grade transcript by the deadline specified in the acceptance letter; otherwise the graduate training may be stopped.\n\nIf you need help with the specific forms, deadlines, or which office to contact at your school, contact the graduate school's scholarships office or your unit's graduate secretary — the document states these offices handle Miluim scholarship extension requests.",
                 "steps": [
                     {
                         "module": "supervisor",
                         "prompt": {
-                            "user_prompt": "Add a one-time constraint for a wedding on 15/03/2026 from 20:00 to 23:00",
+                            "user_prompt": "אילו זכויות יש למשרתי המילואים?",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "rag_chat",
+                            "params": {
+                                "question": "אילו זכויות יש למשרתי המילואים?",
+                                "query": "אילו זכויות יש למשרתי המילואים?"
+                            },
+                            "reasoning": "שאלה מידעית על זכויות משרתי המילואים — מתאימה ל-rag_chat שמטפל בשאלות מידע ונהלים אקדמיים"
+                        }
+                    },
+                    {
+                        "module": "rag_chat",
+                        "prompt": {
+                            "user_prompt": "אילו זכויות יש למשרתי המילואים?",
+                            "query": "אילו זכויות יש למשרתי המילואים?"
+                        },
+                        "response": {
+                            "status": "success",
+                            "response": "From the Technion rules in the provided material, the main rights and procedures that apply to students who serve in the reserves are:\n\n- Scholarship extension for reserve service\n  - A student who served in reserve duty for more than 30 days (cumulative) while receiving a scholarship may receive an extension of the scholarship from the \"Miluim\" (reserve) fund.\n  - Single-day reserve duties are not counted toward the 30‑day threshold.\n  - The extension is proportional to the number of days served, up to a maximum of three months.\n  - Scholarships/extensions are not automatic — decisions are made on a case‑by‑case basis.\n\n- Application procedure and documentation\n  - Requests for a Miluim scholarship extension must be submitted to the scholarships office of the graduate school using the scholarship‑duration‑extension form and must be marked as a Miluim scholarship request.\n  - The request must include an official \"active reserve service\" certificate from the IDF reserves website detailing the reserve days performed during the scholarship period. (The rules also refer to an officer's confirmation of reserve days where relevant.)\n  - The request should be submitted about two months before the scholarship quota for the degree expires.\n\n- Absences from the Technion\n  - Any absence/leave (from the Technion) of less than two weeks (14 days) requires prior approval from the student's supervisor, from the relevant certification/teaching center (for teaching assistants), and from the unit's graduate‑degrees committee.\n  - Any absence of two weeks (14 days) or more requires prior approval from the supervisor, the certification/teaching center (for TAs), the unit graduate committee and the dean of the graduate school, and appropriate documentation of the reserve service.\n\n- Students studying undergraduate and graduate degrees in parallel\n  - A student studying concurrently for a first (bachelor) and a graduate degree who served more than 30 days must submit proof of eligibility for the bachelor's degree and the final approved grade transcript by the deadline specified in the acceptance letter; otherwise the graduate training may be stopped.\n\nIf you need help with the specific forms, deadlines, or which office to contact at your school, contact the graduate school's scholarships office or your unit's graduate secretary — the document states these offices handle Miluim scholarship extension requests.",
+                            "context_used": True
+                        }
+                    }
+                ]
+            },
+            {
+                "prompt": "create study group for course 10406 named רשתות מחשבים Study Group and invite noam.shemesh@campus.technion.ac.il",
+                "full_response": None,
+                "steps": [
+                    {
+                        "module": "supervisor",
+                        "prompt": {
+                            "user_prompt": "create study group for course 10406 named רשתות מחשבים Study Group and invite noam.shemesh@campus.technion.ac.il",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "group_manager",
+                            "params": {
+                                "course_number": "10406",
+                                "group_name": "רשתות מחשבים Study Group",
+                                "invite_emails": ["noam.shemesh@campus.technion.ac.il"],
+                                "course_name": None,
+                                "description": None
+                            },
+                            "reasoning": "User asked to create a study group and provided a course number, group name, and an invitee email — this maps to the group_manager executor which requires those parameters."
+                        }
+                    },
+                    {
+                        "module": "group_manager",
+                        "prompt": {
+                            "user_prompt": "create study group for course 10406 named רשתות מחשבים Study Group and invite noam.shemesh@campus.technion.ac.il",
+                            "course_number": "10406",
+                            "group_name": "רשתות מחשבים Study Group",
+                            "invite_emails": ["noam.shemesh@campus.technion.ac.il"],
+                            "course_name": None,
+                            "description": None
+                        },
+                        "response": {
+                            "error": "You already have a group for this course: networking_group. You can only create one group per course."
+                        }
+                    }
+                ]
+            },
+            {
+                "prompt": "show my notifications",
+                "full_response": "Found 47 unread notification(s):\n\n1. Change request rejected: group_2\n   The request to move meeting to שבת 11:00:00 was rejected due to a schedule conflict with one of the members.\n   (2026-02-24 00:02)\n\n2. Change approved: networking_group\n   All group members approved the change. משך המפגש updated.\n   (2026-02-23 23:20)\n\n...\n\n47. Meeting change rejected: קבוצת לימוד - רשתות מחשבים\n   נועם שמש rejected the request to change the meeting time.\n   (2026-02-11 20:10)\n\n",
+                "steps": [
+                    {
+                        "module": "supervisor",
+                        "prompt": {
+                            "user_prompt": "show my notifications",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "notification_retriever",
+                            "params": {},
+                            "reasoning": "The user asked to see their notifications, which matches the notification_retriever executor; no additional parameters are required."
+                        }
+                    },
+                    {
+                        "module": "notification_retriever",
+                        "prompt": {
+                            "user_prompt": "show my notifications"
+                        },
+                        "response": {
+                            "status": "success",
+                            "message": "Found 47 unread notification(s):\n\n1. Change request rejected: group_2\n   ...\n47. Meeting change rejected: קבוצת לימוד - רשתות מחשבים\n   ...\n\n"
+                        }
+                    }
+                ]
+            },
+            {
+                "prompt": "clear my notifications",
+                "full_response": "Marked 47 notification(s) as read",
+                "steps": [
+                    {
+                        "module": "supervisor",
+                        "prompt": {
+                            "user_prompt": "clear my notifications",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "notification_cleaner",
+                            "params": {"notification_id": None},
+                            "reasoning": "User asked to clear their notifications; use notification_cleaner. No specific notification ID was provided, so clear all/pending notifications."
+                        }
+                    },
+                    {
+                        "module": "notification_cleaner",
+                        "prompt": {
+                            "user_prompt": "clear my notifications",
+                            "notification_id": None
+                        },
+                        "response": {
+                            "status": "success",
+                            "message": "Marked 47 notification(s) as read",
+                            "marked_count": 47
+                        }
+                    }
+                ]
+            },
+            {
+                "prompt": "approve request to move a meeting in course רשתות מחשבים on friday",
+                "full_response": "All members approved! Change has been applied.\n\nMove request: Friday 09:00 (3h) → Friday 10:00 (3h)",
+                "steps": [
+                    {
+                        "module": "supervisor",
+                        "prompt": {
+                            "user_prompt": "approve request to move a meeting in course רשתות מחשבים on friday",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "request_handler",
+                            "params": {
+                                "action": "accept",
+                                "course_name": "רשתות מחשבים",
+                                "day_of_week": 5,
+                                "request_type": "move"
+                            },
+                            "reasoning": "This is an approval of a change request (moving a meeting), so request_handler is appropriate. Extracted course name and Friday → day_of_week=5."
+                        }
+                    },
+                    {
+                        "module": "request_handler",
+                        "prompt": {
+                            "user_prompt": "approve request to move a meeting in course רשתות מחשבים on friday",
+                            "action": "accept",
+                            "course_name": "רשתות מחשבים",
+                            "day_of_week": 5,
+                            "request_type": "move"
+                        },
+                        "response": {
+                            "status": "success",
+                            "message": "All members approved! Change has been applied.\n\nMove request: Friday 09:00 (3h) → Friday 10:00 (3h)",
+                            "applied": True
+                        }
+                    }
+                ]
+            },
+            {
+                "prompt": "reject request to move a meeting in course רשתות מחשבים on friday",
+                "full_response": "Change request rejected",
+                "steps": [
+                    {
+                        "module": "supervisor",
+                        "prompt": {
+                            "user_prompt": "reject request to move a meeting in course רשתות מחשבים on friday",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "request_handler",
+                            "params": {
+                                "action": "reject",
+                                "course_name": "רשתות מחשבים",
+                                "day_of_week": 5,
+                                "request_type": "move"
+                            },
+                            "reasoning": "This is a request to reject a change (moving a meeting) related to a course, so request_handler is appropriate. Extracted course name and the day (Friday→5)."
+                        }
+                    },
+                    {
+                        "module": "request_handler",
+                        "prompt": {
+                            "user_prompt": "reject request to move a meeting in course רשתות מחשבים on friday",
+                            "action": "reject",
+                            "course_name": "רשתות מחשבים",
+                            "day_of_week": 5,
+                            "request_type": "move"
+                        },
+                        "response": {
+                            "status": "success",
+                            "message": "Change request rejected"
+                        }
+                    }
+                ]
+            },
+            {
+                "prompt": "move group block in course רשתות מחשבים on friday 10:00 to friday at 09:00",
+                "full_response": "Change request created. Waiting for approval from all members.",
+                "steps": [
+                    {
+                        "module": "supervisor",
+                        "prompt": {
+                            "user_prompt": "move group block in course רשתות מחשבים on friday 10:00 to friday at 09:00",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "block_mover",
+                            "params": {
+                                "course_name": "רשתות מחשבים",
+                                "original_day": 5,
+                                "original_start_time": "10:00",
+                                "new_day": 5,
+                                "new_start_time": "09:00",
+                                "work_type": "group"
+                            },
+                            "reasoning": "User requests to move an existing group block for course 'רשתות מחשבים' from Friday 10:00 to Friday 09:00 — block_mover is appropriate. Extracted course name, day (Friday→5), original and new start times, work_type=group."
+                        }
+                    },
+                    {
+                        "module": "block_mover",
+                        "prompt": {
+                            "user_prompt": "move group block in course רשתות מחשבים on friday 10:00 to friday at 09:00",
+                            "course_name": "רשתות מחשבים",
+                            "original_day": 5,
+                            "original_start_time": "10:00",
+                            "new_day": 5,
+                            "new_start_time": "09:00",
+                            "work_type": "group"
+                        },
+                        "response": {
+                            "status": "success",
+                            "message": "Change request created. Waiting for approval from all members.",
+                            "request_id": "7c7fd6de-8144-4cc7-b494-833cf709733c",
+                            "members_to_approve": 1,
+                            "has_conflicts": False
+                        }
+                    }
+                ]
+            },
+            {
+                "prompt": "resize group block in course רשתות מחשבים on friday 9:00 from 3 hours to 2 hours",
+                "full_response": "Change request created. Waiting for approval from all members.",
+                "steps": [
+                    {
+                        "module": "supervisor",
+                        "prompt": {
+                            "user_prompt": "resize group block in course רשתות מחשבים on friday 9:00 from 3 hours to 2 hours",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "block_resizer",
+                            "params": {
+                                "course_name": "רשתות מחשבים",
+                                "day_of_week": 5,
+                                "start_time": "09:00",
+                                "new_duration": 2,
+                                "original_duration": 3,
+                                "work_type": "group"
+                            },
+                            "reasoning": "User asks to change the duration of an existing group block (from 3h to 2h) for course רשתות מחשבים on Friday at 9:00 — block_resizer is appropriate. Extracted course name, day, start time, original and new durations, work_type=group."
+                        }
+                    },
+                    {
+                        "module": "block_resizer",
+                        "prompt": {
+                            "user_prompt": "resize group block in course רשתות מחשבים on friday 9:00 from 3 hours to 2 hours",
+                            "course_name": "רשתות מחשבים",
+                            "day_of_week": 5,
+                            "start_time": "09:00",
+                            "new_duration": 2,
+                            "work_type": "group"
+                        },
+                        "response": {
+                            "status": "success",
+                            "message": "Change request created. Waiting for approval from all members.",
+                            "request_id": "613961fa-f3fe-432f-966d-b8ee3cd3dbe1",
+                            "members_to_approve": 1,
+                            "has_conflicts": False
+                        }
+                    }
+                ]
+            },
+            {
+                "prompt": "resize personal block in course רשתות מחשבים on wednesday 18:00-21:00 to wednesday 18:00-22:00",
+                "full_response": "Block resized successfully from 3h to 4h",
+                "steps": [
+                    {
+                        "module": "supervisor",
+                        "prompt": {
+                            "user_prompt": "resize personal block in course רשתות מחשבים on wednesday 18:00-21:00 to wednesday 18:00-22:00",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "block_resizer",
+                            "params": {
+                                "block_id": None,
+                                "course_name": "רשתות מחשבים",
+                                "day_of_week": 3,
+                                "start_time": "18:00",
+                                "new_start_time": "18:00",
+                                "new_duration": 4,
+                                "week_start": None,
+                                "work_type": "personal",
+                                "user_prompt": "resize personal block in course רשתות מחשבים on wednesday 18:00-21:00 to wednesday 18:00-22:00"
+                            },
+                            "reasoning": "User requests to change an existing personal block's duration (18:00-21:00 → 18:00-22:00) for course 'רשתות מחשבים' on Wednesday — this is a resize operation, so block_resizer is appropriate. Extracted day, times, course, work type, and new duration."
+                        }
+                    },
+                    {
+                        "module": "block_resizer",
+                        "prompt": {
+                            "user_prompt": "resize personal block in course רשתות מחשבים on wednesday 18:00-21:00 to wednesday 18:00-22:00",
+                            "block_id": None,
+                            "course_name": "רשתות מחשבים",
+                            "day_of_week": 3,
+                            "start_time": "18:00",
+                            "new_start_time": "18:00",
+                            "new_duration": 4,
+                            "week_start": None,
+                            "work_type": "personal"
+                        },
+                        "response": {
+                            "status": "success",
+                            "message": "Block resized successfully from 3h to 4h",
+                            "original_duration": 3,
+                            "new_duration": 4,
+                            "duration_change": 1,
+                            "work_type": "personal",
+                            "preferences_updated": True,
+                            "personal_hours_per_week": 7.79
+                        }
+                    }
+                ]
+            },
+            {
+                "prompt": "create a new group block in course רשתות מחשבים on saturday from 15:00 to 17:00",
+                "full_response": "Change request created. Waiting for approval from all members.",
+                "steps": [
+                    {
+                        "module": "supervisor",
+                        "prompt": {
+                            "user_prompt": "create a new group block in course רשתות מחשבים on saturday from 15:00 to 17:00",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "block_creator",
+                            "params": {
+                                "course_name": "רשתות מחשבים",
+                                "day_of_week": 6,
+                                "start_time": "15:00",
+                                "duration": 2,
+                                "work_type": "group"
+                            },
+                            "reasoning": "User asks to create a new group block for course 'רשתות מחשבים' on Saturday from 15:00 to 17:00 (2 hours). block_creator handles new blocks; for work_type group it creates a change request for the group."
+                        }
+                    },
+                    {
+                        "module": "block_creator",
+                        "prompt": {
+                            "user_prompt": "create a new group block in course רשתות מחשבים on saturday from 15:00 to 17:00",
+                            "course_name": "רשתות מחשבים",
+                            "day_of_week": 6,
+                            "start_time": "15:00",
+                            "duration": 2,
+                            "work_type": "group"
+                        },
+                        "response": {
+                            "status": "success",
+                            "message": "Change request created. Waiting for approval from all members.",
+                            "request_id": "a1b2c3d4-example-uuid",
+                            "members_to_approve": 1,
+                            "has_conflicts": False
+                        }
+                    }
+                ]
+            },
+            {
+                "prompt": "add a new preference to have more breaks between blocks",
+                "full_response": "Preferences updated successfully",
+                "steps": [
+                    {
+                        "module": "supervisor",
+                        "prompt": {
+                            "user_prompt": "add a new preference to have more breaks between blocks",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "preference_updater",
+                            "params": {
+                                "preferences_text": "have more breaks between blocks",
+                                "user_prompt": "add a new preference to have more breaks between blocks"
+                            },
+                            "reasoning": "The user is asking to update their study preferences (more breaks between blocks), so the preference_updater should handle this and needs the user's preference text/user prompt."
+                        }
+                    },
+                    {
+                        "module": "preference_updater",
+                        "prompt": {
+                            "user_prompt": "add a new preference to have more breaks between blocks",
+                            "preferences_text": "have more breaks between blocks"
+                        },
+                        "response": {
+                            "status": "success",
+                            "message": "Preferences updated successfully",
+                            "preferences_length": 332,
+                            "summary_generated": True,
+                            "was_appended": True
+                        }
+                    }
+                ]
+            },
+            {
+                "prompt": "add a one-time constraint for a dental check-up on friday from 20:00 to 21:00",
+                "full_response": "One-time constraint created successfully",
+                "steps": [
+                    {
+                        "module": "supervisor",
+                        "prompt": {
+                            "user_prompt": "add a one-time constraint for a dental check-up on friday from 20:00 to 21:00",
                             "routing_type": "llm"
                         },
                         "response": {
                             "executor": "constraint_manager",
                             "params": {
                                 "action": "add",
-                                "title": "Wedding",
-                                "date": "2026-03-15",
+                                "title": "dental check-up",
                                 "start_time": "20:00",
-                                "end_time": "23:00",
-                                "is_permanent": False
+                                "end_time": "21:00",
+                                "day_of_week": 5,
+                                "days": [5],
+                                "is_permanent": False,
+                                "date": None,
+                                "week_start": None,
+                                "description": None
                             },
-                            "reasoning": "User asked to add a one-time constraint for a wedding on a specific date and time. constraint_manager handles adding weekly (one-time) constraints."
+                            "reasoning": "This is a request to add a one-time calendar constraint (a dental check-up) on a specific day/time, so constraint_manager (add action) is appropriate. Extracted day=Friday (5), start/end times, and marked as non-recurring."
                         }
                     },
                     {
                         "module": "constraint_manager",
                         "prompt": {
-                            "user_prompt": "Add a one-time constraint for a wedding on 15/03/2026 from 20:00 to 23:00",
+                            "user_prompt": "add a one-time constraint for a dental check-up on friday from 20:00 to 21:00",
                             "action": "add",
-                            "title": "Wedding",
+                            "title": "dental check-up",
                             "start_time": "20:00",
-                            "end_time": "23:00",
-                            "week_start": "2026-03-15",
-                            "days": [0]
+                            "end_time": "21:00",
+                            "day_of_week": 5,
+                            "days": [5],
+                            "is_permanent": False,
+                            "date": None,
+                            "week_start": None,
+                            "description": None
                         },
                         "response": {
                             "status": "success",
-                            "message": "One-time constraint 'Wedding' added for 15/03/2026 (Sunday) from 20:00 to 23:00."
-                        }
-                    }
-                ]
-            },
-            {
-                "prompt": "Add 2 personal hours for Introduction to Computer Science on Tuesday after 14:00",
-                "full_response": "Added 2 personal hours for 'Introduction to Computer Science' on Tuesday from 14:00. They appear in your weekly schedule.",
-                "steps": [
-                    {
-                        "module": "supervisor",
-                        "prompt": {
-                            "user_prompt": "Add 2 personal hours for Introduction to Computer Science on Tuesday after 14:00",
-                            "routing_type": "llm"
-                        },
-                        "response": {
-                            "executor": "block_creator",
-                            "params": {
-                                "course_name": "Introduction to Computer Science",
-                                "day_of_week": 2,
-                                "start_time": "14:00",
-                                "duration": 2,
-                                "work_type": "personal"
+                            "message": "One-time constraint created successfully",
+                            "constraint": {
+                                "title": "dental check-up",
+                                "week_start": "2026-02-22",
+                                "days": "[5]",
+                                "start_time": "20:00",
+                                "end_time": "21:00",
+                                "is_hard": True
                             },
-                            "reasoning": "User asked to add 2 personal study hours for a course on Tuesday after 14:00. block_creator creates new study blocks."
-                        }
-                    },
-                    {
-                        "module": "block_creator",
-                        "prompt": {
-                            "user_prompt": "Add 2 personal hours for Introduction to Computer Science on Tuesday after 14:00",
-                            "course_name": "Introduction to Computer Science",
-                            "day_of_week": 2,
-                            "start_time": "14:00",
-                            "duration": 2,
-                            "work_type": "personal"
-                        },
-                        "response": {
-                            "status": "success",
-                            "message": "Added 2 personal hours for 'Introduction to Computer Science' on Tuesday from 14:00. They appear in your weekly schedule.",
-                            "blocks_created": 2
+                            "warning": None,
+                            "has_schedule_conflicts": False
                         }
                     }
                 ]
             },
             {
-                "prompt": "When am I free on Wednesday?",
-                "full_response": "On Wednesday you have free slots at: 08:00-10:00, 12:00-14:00, 16:00-18:00 (based on your current blocks and constraints).",
+                "prompt": "return the full list of my courses",
+                "full_response": "Found 5 course(s) (15 credit points total):\n\n1. 10406 - רשתות מחשבים\n   (3 credit points)\n\n2. 10407 - מערכות הפעלה\n   (4 credit points)\n\n3. 10411 - מערכות נבונות אינטראקטיביות\n   (3 credit points)\n\n4. 10412 - מעבדה באיסוף וניהול נתונים\n   (2 credit points)\n\n5. 10413 - נושאים נבחרים בהנדסת נתונים\n   (3 credit points)\n\n",
                 "steps": [
                     {
                         "module": "supervisor",
                         "prompt": {
-                            "user_prompt": "When am I free on Wednesday?",
+                            "user_prompt": "return the full list of my courses",
                             "routing_type": "llm"
                         },
                         "response": {
-                            "executor": "schedule_retriever",
+                            "executor": "courses_retriever",
                             "params": {},
-                            "reasoning": "User asked for free slots on Wednesday. schedule_retriever returns the full schedule; free slots can be derived from the schedule display."
+                            "reasoning": "User asked to get the full list of their courses this semester — this maps directly to the courses_retriever executor, which requires no parameters."
                         }
                     },
                     {
-                        "module": "schedule_retriever",
+                        "module": "courses_retriever",
                         "prompt": {
-                            "user_prompt": "When am I free on Wednesday?"
+                            "user_prompt": "return the full list of my courses"
                         },
                         "response": {
                             "status": "success",
-                            "schedule_display": "...",
-                            "message": "On Wednesday you have free slots at: 08:00-10:00, 12:00-14:00, 16:00-18:00 (based on your current blocks and constraints)."
+                            "message": "Found 5 course(s) (15 credit points total):\n\n1. 10406 - רשתות מחשבים\n   (3 credit points)\n\n2. 10407 - מערכות הפעלה\n   (4 credit points)\n\n3. 10411 - מערכות נבונות אינטראקטיביות\n   (3 credit points)\n\n4. 10412 - מעבדה באיסוף וניהול נתונים\n   (2 credit points)\n\n5. 10413 - נושאים נבחרים בהנדסת נתונים\n   (3 credit points)\n\n",
+                            "courses": [
+                                {"course_number": "10406", "course_name": "רשתות מחשבים", "credit_points": 3},
+                                {"course_number": "10407", "course_name": "מערכות הפעלה", "credit_points": 4},
+                                {"course_number": "10411", "course_name": "מערכות נבונות אינטראקטיביות", "credit_points": 3},
+                                {"course_number": "10412", "course_name": "מעבדה באיסוף וניהול נתונים", "credit_points": 2},
+                                {"course_number": "10413", "course_name": "נושאים נבחרים בהנדסת נתונים", "credit_points": 3}
+                            ],
+                            "count": 5,
+                            "total_credit_points": 15
+                        }
+                    }
+                ]
+            },
+            {
+                "prompt": "generate weekly plans for all users for the week starting 2026-04-05",
+                "full_response": "Weekly plans generated for all users (week_start=2026-04-05)",
+                "cmd_example": "curl -X POST \"https://ds-project-499p.onrender.com/api/system/weekly-plan/generate?week_start=2026-04-05\"",
+                "steps": [
+                    {
+                        "module": "system_api",
+                        "prompt": {
+                            "endpoint": "/api/system/weekly-plan/generate",
+                            "week_start": "2026-04-05"
+                        },
+                        "response": {
+                            "status": "success",
+                            "message": "Weekly plans generated for all users (week_start=2026-04-05)",
+                            "week_start": "2026-04-05"
                         }
                     }
                 ]
