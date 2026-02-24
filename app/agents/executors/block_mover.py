@@ -348,7 +348,48 @@ class BlockMover:
                     new_start_minutes = _time_to_minutes(new_start_time)
                     new_end_time = _minutes_to_time(new_start_minutes + duration_minutes)
                 
-                conflict_reasons = self._check_conflicts(client, user_id, week_start, new_day, new_start_time, new_end_time, [block_id_actual], course_number)
+                # CRITICAL FIX: Find all consecutive group blocks for the same group/course/day
+                # This ensures we exclude them from conflict check (like we do for personal blocks)
+                all_group_blocks_result = client.table("group_plan_blocks").select("id, start_time, end_time").eq("group_id", group_id).eq("week_start", week_start).eq("course_number", course_number).eq("day_of_week", original_day).order("start_time").execute()
+                
+                consecutive_group_blocks = []
+                starting_block = None
+                for b in (all_group_blocks_result.data or []):
+                    if b.get("start_time") == original_start:
+                        starting_block = b
+                        consecutive_group_blocks.append(b)
+                        break
+                
+                if starting_block:
+                    current_end_time = starting_block.get("end_time")
+                    for b in (all_group_blocks_result.data or []):
+                        if b.get("id") == starting_block.get("id"):
+                            continue
+                        block_start = b.get("start_time")
+                        if block_start == current_end_time:
+                            consecutive_group_blocks.append(b)
+                            current_end_time = b.get("end_time")
+                        elif _time_to_minutes(block_start) > _time_to_minutes(current_end_time):
+                            break
+                
+                # Find corresponding weekly_plan_blocks for these group blocks to exclude from conflict check
+                blocks_to_exclude = [block_id_actual]  # Start with the original block
+                if consecutive_group_blocks:
+                    user_plan = client.table("weekly_plans").select("id").eq("user_id", user_id).eq("week_start", week_start).limit(1).execute()
+                    if user_plan.data:
+                        plan_id = user_plan.data[0]["id"]
+                        for gb in consecutive_group_blocks:
+                            gb_start = gb.get("start_time")
+                            gb_end = gb.get("end_time")
+                            matching_blocks = client.table("weekly_plan_blocks").select("id").eq("plan_id", plan_id).eq("user_id", user_id).eq("work_type", "group").eq("course_number", course_number).eq("day_of_week", original_day).eq("start_time", gb_start).eq("end_time", gb_end).execute()
+                            for mb in (matching_blocks.data or []):
+                                mb_id = mb.get("id")
+                                if mb_id and mb_id not in blocks_to_exclude:
+                                    blocks_to_exclude.append(mb_id)
+                
+                logger.info(f"📋 Found {len(consecutive_group_blocks)} consecutive group block(s), excluding {len(blocks_to_exclude)} weekly_plan_blocks from conflict check")
+                
+                conflict_reasons = self._check_conflicts(client, user_id, week_start, new_day, new_start_time, new_end_time, blocks_to_exclude, course_number, group_id=group_id)
                 
                 # If there are real conflicts (not same course), reject the request
                 if conflict_reasons:
@@ -603,13 +644,15 @@ class BlockMover:
         new_start_time: str,
         new_end_time: str,
         blocks_to_exclude: Optional[list] = None,
-        course_number: Optional[str] = None
+        course_number: Optional[str] = None,
+        group_id: Optional[str] = None
     ) -> list:
         """Check for conflicts with constraints and other blocks
         
         Args:
             blocks_to_exclude: List of block IDs to exclude from conflict check (blocks being moved). Can also be a single block_id string.
             course_number: Course number of the block being moved. Blocks of the same course are ignored (not considered conflicts).
+            group_id: Group ID of the block being moved. Blocks from the same group are ignored (not considered conflicts).
         """
         # Normalize blocks_to_exclude to a list
         if blocks_to_exclude is None:
@@ -688,6 +731,16 @@ class BlockMover:
                         logger.info(f"🔍 Skipping block {block_id} - it's being moved (in blocks_to_exclude: {blocks_to_exclude_str})")
                         continue
                     
+                    # CRITICAL FIX: For group blocks, skip blocks from the same group
+                    # This allows moving a group block to an overlapping time (e.g., 11:00-12:00 -> 12:00-13:00)
+                    # when there's already a group block at 12:00-13:00 from the same group
+                    if existing_block.get("work_type") == "group" and group_id:
+                        # Check if this block belongs to the same group by checking group_plan_blocks
+                        block_group_check = client.table("group_plan_blocks").select("group_id").eq("week_start", week_start).eq("day_of_week", new_day).eq("start_time", existing_block.get("start_time")).eq("course_number", existing_block.get("course_number")).limit(1).execute()
+                        if block_group_check.data and block_group_check.data[0].get("group_id") == group_id:
+                            logger.info(f"🔍 Skipping group block {block_id} - same group (group_id: {group_id})")
+                            continue
+                    
                     # DO NOT skip blocks of the same course - we need to check ALL blocks for conflicts
                     # Even if it's the same course, if there's another block at the new location, it's a conflict
                     # The only blocks we skip are the ones being moved (already handled above)
@@ -723,6 +776,12 @@ class BlockMover:
                 logger.info(f"🔍 Checking {len(group_blocks.data or [])} group blocks on day {new_day} for conflicts with {new_start_time}-{new_end_time}")
                 
                 for group_block in (group_blocks.data or []):
+                    # CRITICAL FIX: Skip blocks from the same group
+                    # This allows moving a group block to an overlapping time when there's already a group block at that time from the same group
+                    if group_id and group_block.get("group_id") == group_id:
+                        logger.info(f"🔍 Skipping group block from same group (group_id: {group_id})")
+                        continue
+                    
                     # DO NOT skip blocks of the same course - we need to check ALL blocks for conflicts
                     # Even if it's the same course, if there's another block at the new location, it's a conflict
                     group_course_number = group_block.get("course_number")
@@ -730,7 +789,7 @@ class BlockMover:
                     g_start = _time_to_minutes(group_block.get("start_time", "00:00"))
                     g_end = _time_to_minutes(group_block.get("end_time", "00:00"))
                     
-                    logger.info(f"🔍 Checking group block: {group_block.get('start_time')}-{group_block.get('end_time')} (course_number: {group_course_number})")
+                    logger.info(f"🔍 Checking group block: {group_block.get('start_time')}-{group_block.get('end_time')} (course_number: {group_course_number}, group_id: {group_block.get('group_id')})")
                     
                     # Check for time overlap
                     if new_start_minutes < g_end and new_end_minutes > g_start:
