@@ -11785,10 +11785,60 @@ async def get_agent_info():
     Steps in examples match the structure returned by POST /api/execute (module, prompt, response).
     """
     return {
-        "description": "Schedule and study-planning agent. Helps with courses, constraints, weekly plan, and group scheduling. Routes user requests to specialized executors (e.g. add block, move block, query schedule, RAG chat). Uses LLM for routing (with reasoning), RAG for academic Q&A, and LLM for preference summarization.",
-        "purpose": "Allow students to manage their semester/weekly schedule via natural language: add or move study blocks, ask about free slots, view schedule and constraints, and coordinate with study groups. Also answers academic/informational questions via RAG.",
+        "description": """Academic Planner is a comprehensive study schedule management system that helps students organize their weekly study time, coordinate with study groups, and manage academic constraints. The system uses LLM for intelligent task routing, preference understanding, and automated schedule generation.
+
+Weekly Planner: The system includes an automated weekly planning component that generates optimized study schedules for users. The planner operates in two phases: first, it plans group study blocks globally, finding common free time slots for all group members and synchronizing them across the entire group. This ensures all members have identical group meeting times. Second, it plans personal study blocks for each user individually, using LLM to optimize placement based on user preferences (extracted from natural language), course hour distribution requirements, and remaining available time slots. The planner respects hard constraints (permanent and weekly), semester schedule items, and ensures no conflicts between blocks.
+
+Supervisor: The Supervisor is the main routing component that receives user requests in natural language (English or Hebrew) and uses LLM with reasoning to determine which specialized executor should handle the request. It extracts required parameters from the user's prompt and routes the task to the appropriate executor. Please note that the system is based on Hebrew-language information and documents, so Hebrew prompts are preferred, especially for RAG-based chat queries which retrieve information from Hebrew academic documents.
+
+Specialized Executors (routed by Supervisor):
+1. schedule_retriever: Retrieves and formats weekly schedules including personal blocks, group blocks, and constraints. Merges consecutive blocks and displays schedule in readable format.
+2. block_creator: Creates new study blocks (personal or group) and adds them to the schedule. Validates conflicts with existing blocks and hard constraints. For group blocks, creates change requests requiring approval. Learns and updates the hour distribution (personal/group hours per week) that the user needs for each course.
+3. block_mover: Moves existing study blocks to different days/times. Personal blocks are moved immediately; group blocks require change requests with member approval.
+4. block_resizer: Changes the duration of existing study blocks. Personal blocks are resized immediately; group blocks require change requests with member approval. Learns and updates the hour distribution (personal/group hours per week) that the user needs for each course.
+5. constraint_manager: Manages schedule constraints (permanent or one-time). Adds constraints that block time slots from being used for study blocks.
+6. group_manager: Creates study groups for courses and invites members via email. Validates that invites are sent to registered users enrolled in the course.
+7. preference_updater: Updates user study preferences from natural language input. Appends preferences to existing ones and uses LLM to generate structured summaries.
+8. rag_chat: Answers academic and informational questions using RAG over embedded academic documents. Provides context-aware responses based on retrieved information.
+9. request_handler: Handles approval/rejection of group invitations and group change requests. Finds requests by various criteria and applies changes when all members approve.
+10. courses_retriever: Retrieves and displays all courses the user is enrolled in for the current semester, including course numbers, names, and credit points.
+11. notification_retriever: Retrieves unread notifications for the user, including group invitations, change requests, and other system notifications.
+12. notification_cleaner: Marks all unread notifications as read.""",
+        "purpose": """The Academic Planner system enables students to manage their study schedules through natural language interaction, automated planning, and group coordination. The system's purpose is to reduce the cognitive load of schedule management while ensuring optimal time allocation based on user preferences and course requirements.
+
+Weekly Planner: The purpose of the automated weekly planner is to generate optimal study schedules that balance multiple factors: user preferences (extracted from natural language), course hour distribution requirements (from Supabase), hard constraints, and group coordination needs. The planner uses a two-phase approach: first planning group blocks globally to ensure synchronization across all group members, then planning personal blocks individually for each user. This ensures group meetings are coordinated while personal study time is optimized according to each user's preferences.
+
+Supervisor: The Supervisor's purpose is to act as an intelligent router that understands user intent from natural language and routes requests to the appropriate specialized executor. It uses LLM reasoning to extract parameters and determine the correct executor, making the system accessible through conversational interface rather than requiring specific API calls or structured commands.
+
+Specialized Executors (routed by Supervisor):
+1. schedule_retriever: Provide users with a clear view of their weekly schedule including all blocks and constraints in a formatted, readable display.
+2. block_creator: Allow users to add new study blocks to their schedule for specific courses, days, and times with conflict validation. Learns and updates the hour distribution (personal/group hours per week) that the user needs for each course.
+3. block_mover: Enable users to relocate existing study blocks to different times or days while maintaining schedule integrity and group coordination.
+4. block_resizer: Allow users to adjust the duration of study blocks to better fit their needs and preferences. Learns and updates the hour distribution (personal/group hours per week) that the user needs for each course.
+5. constraint_manager: Enable users to block time slots for non-study activities (work, appointments, etc.) that should not be used for scheduling.
+6. group_manager: Facilitate creation of study groups and coordination with other students for collaborative learning.
+7. preference_updater: Capture and store user study preferences (preferred times, break patterns, etc.) to improve automatic scheduling.
+8. rag_chat: Provide accurate, context-aware answers to academic questions using embedded knowledge base of university rules and procedures.
+9. request_handler: Enable group members to approve or reject group-related requests (invitations, meeting changes) through a coordinated approval process.
+10. courses_retriever: Display the user's current course enrollment for reference and context in other operations.
+11. notification_retriever: Keep users informed about pending group invitations, change requests, and other system events.
+12. notification_cleaner: Allow users to manage their notification inbox by marking items as read.""",
         "prompt_template": {
-            "template": "Ask in English. Examples: 'Show my schedule for the week starting 15/02/2026'; 'Add a one-time constraint for a wedding on 15/03/2026 from 20:00 to 23:00'; 'Add 2 personal hours for Introduction to Computer Science on Tuesday after 14:00'; 'When am I free on Wednesday?'. The agent routes your request (LLM with reasoning) and runs the right executor (schedule, constraints, block_creator, RAG chat, etc.)."
+            "template": [
+                "show me my schedule [for the week starting DATE]",
+                "[QUESTION]",
+                "create study group for course COURSE_NUMBER named GROUP_NAME and invite EMAIL",
+                "show my notifications",
+                "clear my notifications",
+                "[Approve/Reject] request to [move/resize] [a] meeting [in course COURSE] [on DAY]",
+                "move [personal/group] block [in course COURSE] on [ORIGINAL_DAY] [ORIGINAL_TIME] to [NEW_DAY] [at NEW_TIME]",
+                "resize [personal/group] block [in course COURSE] on [DAY] [TIME] from [OLD_DURATION] hours to [NEW_DURATION] hours",
+                "create [a] [new] [personal/group] block [in course COURSE] on [DAY] from [START_TIME] to [END_TIME]",
+                "add [a] [new] preference [to] [PREFERENCE_TEXT]",
+                "add [a/an] [one-time/permanent] constraint [for TITLE] on [DAY] from [START_TIME] to [END_TIME]",
+                "return the full list of my courses",
+                "generate weekly plans [for all users] [for the week starting DATE]"
+            ]
         },
         "prompt_examples": [
             {
