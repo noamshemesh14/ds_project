@@ -11785,7 +11785,7 @@ async def get_agent_info():
     Steps in examples match the structure returned by POST /api/execute (module, prompt, response).
     """
     return {
-        "description": """Academic Planner is a comprehensive study schedule management system that helps students organize their weekly study time, coordinate with study groups, and manage academic constraints. The system uses LLM for intelligent task routing, preference understanding, and automated schedule generation.
+        "description": """SemesterOS is a comprehensive study management system that helps students organize weekly study time, coordinate with study groups, manage academic constraints, and provides RAG-based Q&A over academic documents and procedures (rules, regulations, course info). The system uses LLM for intelligent task routing, preference understanding, and automated schedule generation. A web application is available and is the main platform for using the system (schedule view, notifications, manual editing).
 
 Weekly Planner: The system includes an automated weekly planning component that generates optimized study schedules for users. The planner operates in two phases: first, it plans group study blocks globally, finding common free time slots for all group members and synchronizing them across the entire group. This ensures all members have identical group meeting times. Second, it plans personal study blocks for each user individually, using LLM to optimize placement based on user preferences (extracted from natural language), course hour distribution requirements, and remaining available time slots. The planner respects hard constraints (permanent and weekly), semester schedule items, and ensures no conflicts between blocks.
 
@@ -11803,26 +11803,10 @@ Specialized Executors (routed by Supervisor):
 9. request_handler: Handles approval/rejection of group invitations and group change requests. Finds requests by various criteria and applies changes when all members approve.
 10. courses_retriever: Retrieves and displays all courses the user is enrolled in for the current semester, including course numbers, names, and credit points.
 11. notification_retriever: Retrieves unread notifications for the user, including group invitations, change requests, and other system notifications.
-12. notification_cleaner: Marks all unread notifications as read.""",
-        "purpose": """The Academic Planner system enables students to manage their study schedules through natural language interaction, automated planning, and group coordination. The system's purpose is to reduce the cognitive load of schedule management while ensuring optimal time allocation based on user preferences and course requirements.
+12. notification_cleaner: Marks all unread notifications as read.
 
-Weekly Planner: The purpose of the automated weekly planner is to generate optimal study schedules that balance multiple factors: user preferences (extracted from natural language), course hour distribution requirements (from Supabase), hard constraints, and group coordination needs. The planner uses a two-phase approach: first planning group blocks globally to ensure synchronization across all group members, then planning personal blocks individually for each user. This ensures group meetings are coordinated while personal study time is optimized according to each user's preferences.
-
-Supervisor: The Supervisor's purpose is to act as an intelligent router that understands user intent from natural language and routes requests to the appropriate specialized executor. It uses LLM reasoning to extract parameters and determine the correct executor, making the system accessible through conversational interface rather than requiring specific API calls or structured commands.
-
-Specialized Executors (routed by Supervisor):
-1. schedule_retriever: Provide users with a clear view of their weekly schedule including all blocks and constraints in a formatted, readable display.
-2. block_creator: Allow users to add new study blocks to their schedule for specific courses, days, and times with conflict validation. Learns and updates the hour distribution (personal/group hours per week) that the user needs for each course.
-3. block_mover: Enable users to relocate existing study blocks to different times or days while maintaining schedule integrity and group coordination.
-4. block_resizer: Allow users to adjust the duration of study blocks to better fit their needs and preferences. Learns and updates the hour distribution (personal/group hours per week) that the user needs for each course.
-5. constraint_manager: Enable users to block time slots for non-study activities (work, appointments, etc.) that should not be used for scheduling.
-6. group_manager: Facilitate creation of study groups and coordination with other students for collaborative learning.
-7. preference_updater: Capture and store user study preferences (preferred times, break patterns, etc.) to improve automatic scheduling.
-8. rag_chat: Provide accurate, context-aware answers to academic questions using embedded knowledge base of university rules and procedures.
-9. request_handler: Enable group members to approve or reject group-related requests (invitations, meeting changes) through a coordinated approval process.
-10. courses_retriever: Display the user's current course enrollment for reference and context in other operations.
-11. notification_retriever: Keep users informed about pending group invitations, change requests, and other system events.
-12. notification_cleaner: Allow users to manage their notification inbox by marking items as read.""",
+Authentication: The web application and API use authentication backed by Supabase: users log in with credentials stored in the database and receive a token for authorized requests. In addition, the API supports super-user mode: requests can be sent without a token and are handled as a designated super user, enabling connection and full interaction for simulation and demonstration purposes without login.""",
+        "purpose": """The overarching purpose of the SemesterOS agent system is to help students map, manage, and optimize their time throughout the semester and to get reliable answers about academic documents and procedures. The system reduces the cognitive load of planning and organizing study schedules, coordinates personal and group study time, and saves time by automating schedule generation, preference learning, and routine management tasks. The system also offers a chat that uses RAG over academic documents, so students can get answers and clarify rules, regulations, and course-related information without leaving the system - so students can focus on learning rather than on managing calendars or hunting for official information.""",
         "prompt_template": {
             "template": [
                 "show me my schedule [for the week starting DATE]",
