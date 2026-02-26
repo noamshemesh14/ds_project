@@ -11805,23 +11805,10 @@ Specialized Executors (routed by Supervisor):
 11. notification_retriever: Retrieves unread notifications for the user, including group invitations, change requests, and other system notifications.
 12. notification_cleaner: Marks all unread notifications as read.
 
-Authentication: The web application and API use authentication backed by Supabase: users log in with credentials stored in the database and receive a token for authorized requests. In addition, the API supports super-user mode: requests can be sent without a token and are handled as a designated super user, enabling connection and full interaction for simulation and demonstration purposes without login.""",
+Authentication: The web application and API use authentication backed by Supabase: users log in with credentials stored in the database and receive a token for authorized requests. A token is normally required so that each request is tied to a specific user and their data (schedule, courses, notifications). We also allow connecting without a token (super-user mode) for the minimal UI on the site: visitors can use the simplified interface and try the agent without signing up or logging in, for demos and simulation.""",
         "purpose": """The overarching purpose of the SemesterOS agent system is to help students map, manage, and optimize their time throughout the semester and to get reliable answers about academic documents and procedures. The system reduces the cognitive load of planning and organizing study schedules, coordinates personal and group study time, and saves time by automating schedule generation, preference learning, and routine management tasks. The system also offers a chat that uses RAG over academic documents, so students can get answers and clarify rules, regulations, and course-related information without leaving the system - so students can focus on learning rather than on managing calendars or hunting for official information.""",
         "prompt_template": {
-            "template": [
-                "show me my schedule [for the week starting DATE]",
-                "give me information about [QUESTION]",
-                "create study group for course COURSE_NUMBER named GROUP_NAME and invite EMAIL",
-                "show my notifications",
-                "clear my notifications",
-                "[Approve/Reject] request to [move/resize] [a] meeting [in course COURSE] [on DAY]",
-                "move [personal/group] block [in course COURSE] on [ORIGINAL_DAY] [ORIGINAL_TIME] to [NEW_DAY] [at NEW_TIME]",
-                "resize [personal/group] block [in course COURSE] on [DAY] [TIME] from [OLD_DURATION] hours to [NEW_DURATION] hours",
-                "create [a] [new] [personal/group] block [in course COURSE] on [DAY] from [START_TIME] to [END_TIME]",
-                "add [a] [new] preference [to] [PREFERENCE_TEXT]",
-                "add [a/an] [one-time/permanent] constraint [for TITLE] on [DAY] from [START_TIME] to [END_TIME]",
-                "return the full list of my courses"
-            ]
+            "template": "[action or question] [parameters if needed]"
         },
         "prompt_examples": [
             {
