@@ -18,6 +18,7 @@ from app.agents.executors.block_creator import BlockCreator
 from app.agents.executors.constraint_manager import ConstraintManager
 from app.agents.executors.courses_retriever import CoursesRetriever
 from app.agents.executors.rag_chat import RAGChatExecutor
+from app.agents.executors.weekly_planner import WeeklyPlannerExecutor
 from app.agents.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ class Supervisor:
             "constraint_manager": ConstraintManager(),
             "courses_retriever": CoursesRetriever(),
             "rag_chat": RAGChatExecutor(),
+            "weekly_planner": WeeklyPlannerExecutor(),
         }
         self.module_name = "supervisor"
         self.llm_client = LLMClient()
@@ -253,6 +255,21 @@ class Supervisor:
         Returns (executor_name, executor_params)
         """
         prompt_lower = user_prompt.lower()
+        
+        # Weekly planner patterns (before schedule - "generate weekly plan" vs "show schedule")
+        if any(phrase in prompt_lower for phrase in [
+            "weekly plan", "generate weekly", "run weekly plan", "build weekly",
+            "תכנון שבועי", "תכנון לוז שבועי", "בנה לוז שבועי", "הרץ תכנון שבועי"
+        ]):
+            date_match = re.search(r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})', user_prompt)
+            if date_match:
+                raw = date_match.group(1).replace("/", "-")
+            else:
+                date_match = re.search(r'(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})', user_prompt)
+                raw = f"{date_match.group(1)}/{date_match.group(2)}/{date_match.group(3)}" if date_match else None
+            if raw:
+                return "weekly_planner", {"week_start": raw, "date": raw}
+            return "weekly_planner", {}
         
         # Schedule retriever patterns
         if any(word in prompt_lower for word in ["schedule", "לוז", "מערכת", "show schedule", "הצג לוז"]):

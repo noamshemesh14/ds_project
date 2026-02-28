@@ -11795,18 +11795,19 @@ You can run weekly planning manually (e.g. POST /api/system/weekly-plan/generate
 Supervisor: The Supervisor is the main routing component that receives user requests in natural language (English or Hebrew) and uses LLM with reasoning to determine which specialized executor should handle the request. It extracts required parameters from the user's prompt and routes the task to the appropriate executor. Please note that the system is based on Hebrew-language information and documents, so Hebrew prompts are preferred, especially for RAG-based chat queries which retrieve information from Hebrew academic documents.
 
 Specialized Executors (routed by Supervisor):
-1. schedule_retriever: Retrieves and formats weekly schedules including personal blocks, group blocks, and constraints. Merges consecutive blocks and displays schedule in readable format.
-2. block_creator: Creates new study blocks (personal or group) and adds them to the schedule. Validates conflicts with existing blocks and hard constraints. For group blocks, creates change requests requiring approval. Learns and updates the hour distribution (personal/group hours per week) that the user needs for each course.
-3. block_mover: Moves existing study blocks to different days/times. Personal blocks are moved immediately; group blocks require change requests with member approval.
-4. block_resizer: Changes the duration of existing study blocks. Personal blocks are resized immediately; group blocks require change requests with member approval. Learns and updates the hour distribution (personal/group hours per week) that the user needs for each course.
-5. constraint_manager: Manages schedule constraints (permanent or one-time). Adds constraints that block time slots from being used for study blocks.
-6. group_manager: Creates study groups for courses and invites members via email. Validates that invites are sent to registered users enrolled in the course.
-7. preference_updater: Updates user study preferences from natural language input. Appends preferences to existing ones and uses LLM to generate structured summaries.
-8. rag_chat: Answers academic and informational questions using RAG over embedded academic documents. Provides context-aware responses based on retrieved information.
-9. request_handler: Handles approval/rejection of group invitations and group change requests. Finds requests by various criteria and applies changes when all members approve.
-10. courses_retriever: Retrieves and displays all courses the user is enrolled in for the current semester, including course numbers, names, and credit points.
-11. notification_retriever: Retrieves unread notifications for the user, including group invitations, change requests, and other system notifications.
-12. notification_cleaner: Marks all unread notifications as read.
+1. Weekly Planner: Ideally the Weekly Planner would be a separate, parallel agent (not under the Supervisor) that runs automatically once per week. Due to system constraints (the server cannot be assumed to be up at all times), we also expose it as an executor under the Supervisor so reviewers can run it via POST /api/execute and inspect the steps—including the smart use of the LLM for planning. This executor is allowed only from May onwards (to avoid overwriting schedules that were already generated through the end of April). The planner uses the LLM in two layers: (1) Group blocks: it plans group study blocks globally with the LLM, finding common free time across all group members and synchronizing them so every member has the same group meeting times. (2) Personal blocks: it then plans personal study blocks per user, again using the LLM to place and refine blocks according to user preferences (from natural language), course hour distribution, and remaining free slots, while respecting hard constraints and avoiding conflicts.
+2. schedule_retriever: Retrieves and formats weekly schedules including personal blocks, group blocks, and constraints. Merges consecutive blocks and displays schedule in readable format.
+3. block_creator: Creates new study blocks (personal or group) and adds them to the schedule. Validates conflicts with existing blocks and hard constraints. For group blocks, creates change requests requiring approval. Learns and updates the hour distribution (personal/group hours per week) that the user needs for each course.
+4. block_mover: Moves existing study blocks to different days/times. Personal blocks are moved immediately; group blocks require change requests with member approval.
+5. block_resizer: Changes the duration of existing study blocks. Personal blocks are resized immediately; group blocks require change requests with member approval. Learns and updates the hour distribution (personal/group hours per week) that the user needs for each course.
+6. constraint_manager: Manages schedule constraints (permanent or one-time). Adds constraints that block time slots from being used for study blocks.
+7. group_manager: Creates study groups for courses and invites members via email. Validates that invites are sent to registered users enrolled in the course.
+8. preference_updater: Updates user study preferences from natural language input. Appends preferences to existing ones and uses LLM to generate structured summaries.
+9. rag_chat: Answers academic and informational questions using RAG over embedded academic documents. Provides context-aware responses based on retrieved information.
+10. request_handler: Handles approval/rejection of group invitations and group change requests. Finds requests by various criteria and applies changes when all members approve.
+11. courses_retriever: Retrieves and displays all courses the user is enrolled in for the current semester, including course numbers, names, and credit points.
+12. notification_retriever: Retrieves unread notifications for the user, including group invitations, change requests, and other system notifications.
+13. notification_cleaner: Marks all unread notifications as read.
 
 Authentication: The web application and API use authentication backed by Supabase: users log in with credentials stored in the database and receive a token for authorized requests. A token is normally required so that each request is tied to a specific user and their data (schedule, courses, notifications). We also allow connecting without a token (super-user mode) for the minimal UI on the site: visitors can use the simplified interface and try the agent without signing up or logging in, for demos and simulation.""",
         "purpose": """The overarching purpose of the SemesterOS agent system is to help students map, manage, and optimize their time throughout the semester and to get reliable answers about academic documents and procedures. The system reduces the cognitive load of planning and organizing study schedules, coordinates personal and group study time, and saves time by automating schedule generation, preference learning, and routine management tasks. The system also offers a chat that uses RAG over academic documents, so students can get answers and clarify rules, regulations, and course-related information without leaving the system - so students can focus on learning rather than on managing calendars or hunting for official information.""",
@@ -12414,6 +12415,46 @@ Authentication: The web application and API use authentication backed by Supabas
                             "new_start_time": "14:00",
                             "new_end_time": "15:00",
                             "preferences_updated": True
+                        }
+                    }
+                ]
+            },
+            {
+                "prompt": "run weekly plan for week start at 12/05/2026",
+                "full_response": "Weekly plans generated for all users (week_start=2026-05-10)",
+                "steps": [
+                    {
+                        "module": "supervisor",
+                        "prompt": {
+                            "user_prompt": "run weekly plan for week start at 12/05/2026",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "weekly_planner",
+                            "params": {
+                                "week_start": "2026-05-12"
+                            },
+                            "llm_response": "{\n  \"executor_name\": \"weekly_planner\",\n  \"executor_params\": {\n    \"week_start\": \"2026-05-12\"\n  },\n  \"reasoning\": \"User asked to 'run weekly plan' for a specific week; weekly_planner is the correct executor. Extracted the provided date 12/05/2026 and normalized it to YYYY-MM-DD as the week_start.\"\n}",
+                            "reasoning": "User asked to 'run weekly plan' for a specific week; weekly_planner is the correct executor. Extracted the provided date 12/05/2026 and normalized it to YYYY-MM-DD as the week_start."
+                        }
+                    },
+                    {
+                        "module": "weekly_planner",
+                        "prompt": {
+                            "user_prompt": "run weekly plan for week start at 12/05/2026",
+                            "week_start": "2026-05-12"
+                        },
+                        "response": {
+                            "status": "success",
+                            "message": "Weekly plans generated for all users (week_start=2026-05-10)",
+                            "response": "Weekly plans generated for all users (week_start=2026-05-10)",
+                            "week_start": "2026-05-10",
+                            "planning_steps": [
+                                "Cleanup existing plans and blocks for the week",
+                                "Plan group blocks with LLM (common free slots, sync across members)",
+                                "Plan and refine personal blocks with LLM (preferences, hour distribution)",
+                                "Sync group blocks to all members"
+                            ]
                         }
                     }
                 ]
