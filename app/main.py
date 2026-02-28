@@ -12362,20 +12362,58 @@ Authentication: The web application and API use authentication backed by Supabas
                 ]
             },
             {
-                "prompt": "generate weekly plans for all users for the week starting 2026-04-05",
-                "full_response": "Weekly plans generated for all users (week_start=2026-04-05)",
-                "cmd_example": "curl -X POST \"https://ds-project-499p.onrender.com/api/system/weekly-plan/generate?week_start=2026-04-05\"",
+                "prompt": "move personal block in course מערכות הפעלה on sunday 05/04/26 9:00-10:00 to friday 14:00-15:00 because i need to more time to drive home after training",
+                "full_response": "Block moved successfully to 14:00 on day 5",
                 "steps": [
                     {
-                        "module": "system_api",
+                        "module": "supervisor",
                         "prompt": {
-                            "endpoint": "/api/system/weekly-plan/generate",
-                            "week_start": "2026-04-05"
+                            "user_prompt": "move personal block in course מערכות הפעלה on sunday 05/04/26 9:00-10:00 to friday 14:00-15:00 because i need to more time to drive home after training",
+                            "routing_type": "llm"
+                        },
+                        "response": {
+                            "executor": "block_mover",
+                            "params": {
+                                "block_id": None,
+                                "course_name": "מערכות הפעלה",
+                                "week_start": "2026-04-05",
+                                "original_day": 0,
+                                "original_start_time": "09:00",
+                                "original_end_time": "10:00",
+                                "new_day": 5,
+                                "new_start_time": "14:00",
+                                "new_end_time": "15:00",
+                                "specific_hours": True,
+                                "work_type": "personal",
+                                "user_prompt": "move personal block in course מערכות הפעלה on sunday 05/04/26 9:00-10:00 to friday 14:00-15:00 because i need to more time to drive home after training"
+                            },
+                            "reasoning": "This is a request to move an existing personal study block for the course מערכות הפעלה from a specific date/time to another date/time, so block_mover is the correct executor. Extracted course, original and new day/times, week start (date given), work_type, and included the full user prompt for preference reasoning."
+                        }
+                    },
+                    {
+                        "module": "block_mover",
+                        "prompt": {
+                            "user_prompt": "move personal block in course מערכות הפעלה on sunday 05/04/26 9:00-10:00 to friday 14:00-15:00 because i need to more time to drive home after training",
+                            "block_id": None,
+                            "course_name": "מערכות הפעלה",
+                            "week_start": "2026-04-05",
+                            "original_day": 0,
+                            "original_start_time": "09:00",
+                            "original_end_time": "10:00",
+                            "new_day": 5,
+                            "new_start_time": "14:00",
+                            "new_end_time": "15:00",
+                            "specific_hours": True,
+                            "work_type": "personal"
                         },
                         "response": {
                             "status": "success",
-                            "message": "Weekly plans generated for all users (week_start=2026-04-05)",
-                            "week_start": "2026-04-05"
+                            "message": "Block moved successfully to 14:00 on day 5",
+                            "block_id": "f08b1660-1abf-483c-936a-cc0b547c2d44",
+                            "new_day": 5,
+                            "new_start_time": "14:00",
+                            "new_end_time": "15:00",
+                            "preferences_updated": True
                         }
                     }
                 ]
